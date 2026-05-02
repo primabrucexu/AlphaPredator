@@ -9,6 +9,7 @@ class MarketSummary(BaseModel):
 
 
 class HotSectorItem(BaseModel):
+    trade_date: str
     name: str
     trend_label: str
     heat_score: int

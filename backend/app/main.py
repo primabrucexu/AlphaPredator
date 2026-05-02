@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 
+import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -38,3 +39,11 @@ app.include_router(api_router, prefix='/api')
 @app.get('/')
 def root() -> dict[str, str]:
     return {'name': 'AlphaPredator API', 'version': '0.1.0'}
+
+
+def main() -> None:
+    uvicorn.run('app.main:app', host=settings.app_host, port=settings.app_port, reload=True)
+
+
+if __name__ == '__main__':
+    main()

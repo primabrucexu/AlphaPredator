@@ -81,6 +81,8 @@ export function MarketOverviewPage() {
     );
   }
 
+  const hotSectorTradeDate = data.hot_sectors[0]?.trade_date;
+
   const hotSectorOption = {
     tooltip: { trigger: 'axis' },
     legend: { data: ['热度', '持续天数'] },
@@ -125,7 +127,11 @@ export function MarketOverviewPage() {
 
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={15}>
-          <Card className="page-card chart-card" title="当日热点板块">
+          <Card
+            className="page-card chart-card"
+            title="当日热点板块"
+            extra={hotSectorTradeDate ? <Typography.Text type="secondary">热点日期：{hotSectorTradeDate}</Typography.Text> : undefined}
+          >
             {data.hot_sectors.length > 0 ? (
               <ReactECharts option={hotSectorOption} style={{ height: 320 }} />
             ) : (

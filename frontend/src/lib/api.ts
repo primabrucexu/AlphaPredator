@@ -8,6 +8,7 @@ export interface MarketSummary {
 }
 
 export interface HotSectorItem {
+  trade_date: string;
   name: string;
   trend_label: string;
   heat_score: number;

@@ -87,15 +87,17 @@ class MarketDataService:
             if not stock_rows:
                 return None
 
-            hot_sector_rows = connection.execute(
-                '''
-                SELECT trade_date, name, trend_label, heat_score
-                FROM hot_sector_snapshots
-                WHERE trade_date = ?
-                ORDER BY heat_score DESC, name ASC
-                ''',
-                [latest_trade_date],
-            ).fetchall()
+            hot_sector_rows = self._load_hot_sectors_from_image_pipeline(connection, latest_trade_date)
+            if not hot_sector_rows:
+                hot_sector_rows = connection.execute(
+                    '''
+                    SELECT trade_date, name, trend_label, heat_score
+                    FROM hot_sector_snapshots
+                    WHERE trade_date = ?
+                    ORDER BY heat_score DESC, name ASC
+                    ''',
+                    [latest_trade_date],
+                ).fetchall()
         finally:
             connection.close()
 
@@ -129,6 +131,58 @@ class MarketDataService:
             'hot_sectors': [dict(row) for row in hot_sector_rows],
             'stocks': stocks,
         }
+
+    def _load_hot_sectors_from_image_pipeline(self, connection: Any, trade_date: str) -> list[dict[str, Any]]:
+        preferred_trade_date_row = connection.execute(
+            '''
+            SELECT MAX(trade_date) AS trade_date
+            FROM hot_sector_daily_aggregates
+            WHERE trade_date <= ?
+            ''',
+            [trade_date],
+        ).fetchone()
+        target_trade_date = str(preferred_trade_date_row['trade_date'] or '').strip() if preferred_trade_date_row else ''
+        if not target_trade_date:
+            latest_trade_date_row = connection.execute(
+                'SELECT MAX(trade_date) AS trade_date FROM hot_sector_daily_aggregates'
+            ).fetchone()
+            target_trade_date = str(latest_trade_date_row['trade_date'] or '').strip() if latest_trade_date_row else ''
+        if not target_trade_date:
+            return []
+
+        rows = connection.execute(
+            '''
+            SELECT
+                daily.trade_date,
+                daily.sector_name_canonical AS name,
+                daily.heat_score,
+                recent.days_present_3d,
+                recent.trend_tag
+            FROM hot_sector_daily_aggregates AS daily
+            LEFT JOIN hot_sector_recent_3d AS recent
+              ON recent.trade_date = daily.trade_date
+             AND recent.sector_name_canonical = daily.sector_name_canonical
+            WHERE daily.trade_date = ?
+            ORDER BY daily.rank_today ASC, daily.sector_name_canonical ASC
+            ''',
+            [target_trade_date],
+        ).fetchall()
+        return [
+            {
+                'trade_date': row['trade_date'],
+                'name': row['name'],
+                'trend_label': self._build_trend_label(row['trend_tag'], row['days_present_3d']),
+                'heat_score': row['heat_score'],
+            }
+            for row in rows
+        ]
+
+    def _build_trend_label(self, trend_tag: str | None, days_present_3d: int | None) -> str:
+        if trend_tag == 'persistent' and days_present_3d:
+            return f'持续 {days_present_3d} 日'
+        if trend_tag == 'fading':
+            return '热度回落'
+        return '新晋热点'
 
     def _load_stock_detail_payload_from_sqlite(self, stock_code: str) -> dict[str, Any] | None:
         if not self._sqlite_path.exists():
