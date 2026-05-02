@@ -1,0 +1,15 @@
+[app]
+host = "127.0.0.1"
+port = 8000
+
+[frontend]
+origin = "http://127.0.0.1:5173"
+
+[data]
+sqlite_path = "data/sqlite/alphapredator.db"
+duckdb_path = "data/duckdb/alphapredator.duckdb"
+parquet_dir = "data/parquet"
+market_snapshot_path = "data/parquet/market_snapshot.json"
+daily_bars_parquet_path = "data/parquet/stock_daily_bars.parquet"
+market_data_import_dir = "data/imports/market-data"
+hot_sector_import_dir = "data/imports/hot-sector-images"

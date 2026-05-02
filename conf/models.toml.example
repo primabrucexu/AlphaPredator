@@ -1,0 +1,8 @@
+[screening]
+default_models = ["gpt-4.1", "deepseek-chat"]
+round1_pick_count = 5
+final_candidate_limit = 10
+
+[hot_sector]
+recent_trading_days = 3
+usage_mode = "soft_weight"
