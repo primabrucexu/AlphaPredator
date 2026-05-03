@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 
 from app.modules.market_data.initializer import read_init_status, start_initialization
 from app.modules.market_data.updater import run_daily_update
@@ -31,7 +31,7 @@ def get_init_status() -> InitStatusResponse:
 
 
 @router.post('/update', response_model=UpdateResult)
-def daily_update(background_tasks: BackgroundTasks) -> UpdateResult:
+def daily_update() -> UpdateResult:
     """
     Trigger an incremental update for today's market data.
 

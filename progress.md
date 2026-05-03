@@ -21,7 +21,7 @@
 
 - 当前已完成阶段：**Phase 1、Phase 2、Phase 2.9**
 - 当前应进入阶段：**Phase 3：自然语言到 skill 的工作流**
-- 当前未完成阶段：**Phase 2.9、Phase 3、Phase 4、Phase 5**
+- 当前未完成阶段：**Phase 3、Phase 4、Phase 5**
 - 当前项目判断：
   - 本地市场数据导入链路已可用
   - 热点板块图片解析链路已可用
