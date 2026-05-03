@@ -25,6 +25,11 @@ class Settings:
     market_data_import_dir: Path = DATA_DIR / 'imports' / 'market-data'
     hot_sector_import_dir: Path = DATA_DIR / 'imports' / 'hot-sector-images'
     init_status_dir: Path = DATA_DIR / 'status'
+    # Tushare configuration
+    tushare_token_path: Path = DATA_DIR / 'config' / 'tushare.token'
+    stock_list_path: Path = DATA_DIR / 'config' / 'stock_list.csv'
+    tushare_rate_limit: int = 450  # max requests per minute
+    tushare_history_start: str = '2024-01-01'
 
 
 settings = Settings()
