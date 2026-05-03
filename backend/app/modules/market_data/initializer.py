@@ -350,7 +350,6 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
             _export_parquet(duckdb_path)
         except Exception as exc:  # noqa: BLE001
             logger.warning('Task %s: Parquet export failed (non-fatal): %s', task_id, exc)
-
         logger.info('Task %s: completed successfully', task_id)
 
     except Exception as exc:
