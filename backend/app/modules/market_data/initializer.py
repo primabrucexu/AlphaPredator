@@ -315,8 +315,7 @@ def _write_batch(
 
     _write_csv(
         batch_dir / 'daily_bars.csv',
-        ['stock_code', 'trade_date', 'open_price', 'high_price', 'low_price', 'close_price', 'volume',
-         'turnover_amount_billion'],
+        ['stock_code', 'trade_date', 'open_price', 'high_price', 'low_price', 'close_price', 'volume', 'turnover_amount_billion'],
         [{
             'stock_code': r['stock_code'],
             'trade_date': r['trade_date'],
