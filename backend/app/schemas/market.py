@@ -40,6 +40,8 @@ class DailyBar(BaseModel):
     low_price: float
     close_price: float
     volume: int
+    turnover_amount_billion: float = 0.0
+    turnover_rate: float = 0.0
 
 
 class StockKeyIndicators(BaseModel):
@@ -63,6 +65,8 @@ class StockIndicatorSeries(BaseModel):
     ma20: list[float | None] = Field(default_factory=list)
     ma60: list[float | None] = Field(default_factory=list)
     volume_ma5: list[float | None] = Field(default_factory=list)
+    volume_ma10: list[float | None] = Field(default_factory=list)
+    volume_ma20: list[float | None] = Field(default_factory=list)
     kdj_k: list[float | None] = Field(default_factory=list)
     kdj_d: list[float | None] = Field(default_factory=list)
     kdj_j: list[float | None] = Field(default_factory=list)

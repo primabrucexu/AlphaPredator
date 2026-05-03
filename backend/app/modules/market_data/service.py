@@ -607,7 +607,7 @@ class MarketDataService:
             empty: list[None] = []
             return {
                 'ma5': empty, 'ma10': empty, 'ma20': empty, 'ma60': empty,
-                'volume_ma5': empty,
+                'volume_ma5': empty, 'volume_ma10': empty, 'volume_ma20': empty,
                 'kdj_k': empty, 'kdj_d': empty, 'kdj_j': empty,
                 'macd_dif': empty, 'macd_dea': empty, 'macd_hist': empty,
                 'rsi6': empty, 'rsi12': empty, 'rsi24': empty,
@@ -624,6 +624,8 @@ class MarketDataService:
             'ma20': self._compute_ma_series(closes, 20),
             'ma60': self._compute_ma_series(closes, 60),
             'volume_ma5': self._compute_ma_series(volumes, 5),
+            'volume_ma10': self._compute_ma_series(volumes, 10),
+            'volume_ma20': self._compute_ma_series(volumes, 20),
             'kdj_k': k_vals,
             'kdj_d': d_vals,
             'kdj_j': j_vals,
