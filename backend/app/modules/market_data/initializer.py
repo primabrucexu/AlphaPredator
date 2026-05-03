@@ -1,64 +1,604 @@
 """
-Full-market initializer for Phase 2.9.
+Market data initialization V2.
 
-Coordinates:
-  1. Fetching full A-share spot data from Eastmoney (via data_source.py)
-  2. Fetching historical daily bars for every stock
-  3. Writing the batch CSVs into the import directory
-  4. Calling import_market_data_batch() to persist everything
+Date-driven approach:
+1. Create a task with start_date / end_date (YYYYMMDD format).
+2. For each calendar date in the range (ascending order):
+   a. Check whether it is a Chinese stock-market trading day (via ChnCal).
+   b. Non-trading days -> mark SKIPPED_NON_TRADING, advance progress counter.
+   c. Trading days -> call tushare pro.daily(trade_date=YYYYMMDD), write the
+      result atomically to ``market_daily_quote`` (delete-then-insert in one
+      SQLite transaction), validate row count, then commit.
+3. Update task status and data-range metadata on completion.
 
-Progress is tracked in a JSON status file so the front-end can poll it.
+Key properties:
+- No CSV / file intermediaries; all data flows in-memory -> direct DB write.
+- Single-day atomicity: if write or integrity check fails, the day is rolled
+  back and the whole task is marked FAILED (resumable via reimport-day).
+- One task may be RUNNING at a time (prevented by _task_lock + DB check).
+- Idempotent: reimporting a day deletes existing rows then rewrites them.
 """
 
 from __future__ import annotations
 
-import csv
-import json
 import logging
 import threading
-import time
-from datetime import date
+import uuid
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from app.core.settings import settings
-from app.modules.market_data.data_source import (
-    fetch_daily_bars_by_date,
-    fetch_spot_snapshot,
-    fetch_stock_pool,
-    get_default_history_start,
-)
-from app.modules.market_data.importer import import_market_data_batch
+from app.core.settings import settings  # noqa: F401 (kept for settings reference)
 
 logger = logging.getLogger(__name__)
 
-_lock = threading.Lock()
+_task_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
-# Status helpers
+# Helpers
 # ---------------------------------------------------------------------------
 
 
-def _status_path(status_dir: Path | None) -> Path:
-    target = status_dir or settings.init_status_dir
-    target.mkdir(parents=True, exist_ok=True)
-    return target / 'init_status.json'
+def _now_iso() -> str:
+    return datetime.now(tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
-def read_init_status(status_dir: Path | None = None) -> dict[str, Any]:
-    path = _status_path(status_dir)
-    if not path.exists():
-        return _idle_status()
+def is_trading_day(d: date) -> bool:
+    """Return True if *d* is a Chinese A-share market trading day.
+
+    Uses ChnCal for supported years; falls back to weekday-only check for
+    years outside ChnCal's coverage window.
+    """
     try:
-        return json.loads(path.read_text(encoding='utf-8'))
+        import chncal
+        return chncal.is_tradeday(d)
+    except (NotImplementedError, Exception):
+        # ChnCal does not cover this year; weekday-only approximation.
+        return d.weekday() < 5  # Mon-Fri
+
+
+def _generate_date_list(start_date: str, end_date: str) -> list[str]:
+    """Return all YYYYMMDD dates from *start_date* to *end_date* inclusive (ascending)."""
+    start = datetime.strptime(start_date, '%Y%m%d').date()
+    end = datetime.strptime(end_date, '%Y%m%d').date()
+    result: list[str] = []
+    current = start
+    while current <= end:
+        result.append(current.strftime('%Y%m%d'))
+        current += timedelta(days=1)
+    return result
+
+
+def _connect(sqlite_path: Path | None = None):
+    from app.db.sqlite import connect_sqlite
+    return connect_sqlite(sqlite_path)
+
+
+def _ensure_schema(sqlite_path: Path | None = None) -> None:
+    from app.db.sqlite import ensure_sqlite_schema
+    ensure_sqlite_schema(sqlite_path)
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def create_task(
+    start_date: str,
+    end_date: str,
+    mode: str = 'RANGE',
+    sqlite_path: Path | None = None,
+) -> dict[str, Any]:
+    """Create a new init task record in SQLite and return it as a dict.
+
+    *start_date* / *end_date*: YYYYMMDD format.
+    *mode*: ``'RANGE'`` for a range import; ``'REIMPORT_DAY'`` for a single day.
+    Raises ValueError if the Tushare token is not configured.
+    """
+    _ensure_schema(sqlite_path)
+
+    from app.modules.market_data.data_source import _get_token
+    if not _get_token():
+        raise ValueError(
+            'Tushare token not configured. '
+            'Please set it via the initialization page before starting.'
+        )
+
+    dates = _generate_date_list(start_date, end_date)
+    total_days = len(dates)
+    trading_days = sum(
+        1 for d in dates
+        if is_trading_day(datetime.strptime(d, '%Y%m%d').date())
+    )
+
+    task_id = str(uuid.uuid4())
+    created_at = _now_iso()
+
+    conn = _connect(sqlite_path)
+    try:
+        conn.execute(
+            '''
+            INSERT INTO init_task (
+                task_id, mode, start_date, end_date, status,
+                total_days, processed_days, trading_days, done_trading_days,
+                current_date, error_message, created_at, started_at, finished_at
+            ) VALUES (?, ?, ?, ?, 'PENDING', ?, 0, ?, 0, '', '', ?, '', '')
+            ''',
+            (task_id, mode, start_date, end_date, total_days, trading_days, created_at),
+        )
+        conn.executemany(
+            '''
+            INSERT INTO init_task_day
+                (task_id, trade_date, is_trading_day, status, row_count,
+                 started_at, finished_at, error_message)
+            VALUES (?, ?, ?, 'PENDING', 0, '', '', '')
+            ''',
+            [
+                (
+                    task_id,
+                    d,
+                    1 if is_trading_day(datetime.strptime(d, '%Y%m%d').date()) else 0,
+                )
+                for d in dates
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    task = get_task(task_id, sqlite_path)
+    assert task is not None
+    return task
+
+
+def start_task(task_id: str, sqlite_path: Path | None = None) -> bool:
+    """Start processing a task in a background thread.
+
+    Returns False (without starting) if another task is already RUNNING.
+    """
+    with _task_lock:
+        conn = _connect(sqlite_path)
+        try:
+            row = conn.execute(
+                "SELECT task_id FROM init_task WHERE status = 'RUNNING' LIMIT 1"
+            ).fetchone()
+            if row:
+                return False
+
+            updated = conn.execute(
+                '''
+                UPDATE init_task SET status = 'RUNNING', started_at = ?
+                WHERE task_id = ? AND status IN ('PENDING', 'FAILED')
+                ''',
+                (_now_iso(), task_id),
+            ).rowcount
+            conn.commit()
+        finally:
+            conn.close()
+
+    if not updated:
+        return False
+
+    thread = threading.Thread(
+        target=_run_task,
+        args=(task_id, sqlite_path),
+        daemon=True,
+    )
+    thread.start()
+    return True
+
+
+def get_task(task_id: str, sqlite_path: Path | None = None) -> dict[str, Any] | None:
+    """Return the task record as a dict, or None if not found."""
+    conn = _connect(sqlite_path)
+    try:
+        row = conn.execute(
+            'SELECT * FROM init_task WHERE task_id = ?', (task_id,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_tasks(
+    limit: int = 20,
+    sqlite_path: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Return recent tasks ordered by created_at descending."""
+    _ensure_schema(sqlite_path)
+    conn = _connect(sqlite_path)
+    try:
+        rows = conn.execute(
+            'SELECT * FROM init_task ORDER BY created_at DESC LIMIT ?', (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_task_days(
+    task_id: str,
+    page: int = 1,
+    per_page: int = 50,
+    sqlite_path: Path | None = None,
+) -> dict[str, Any]:
+    """Return paginated day details for a task."""
+    offset = (page - 1) * per_page
+    conn = _connect(sqlite_path)
+    try:
+        total = conn.execute(
+            'SELECT COUNT(*) FROM init_task_day WHERE task_id = ?', (task_id,)
+        ).fetchone()[0]
+        rows = conn.execute(
+            '''
+            SELECT * FROM init_task_day
+            WHERE task_id = ?
+            ORDER BY trade_date ASC
+            LIMIT ? OFFSET ?
+            ''',
+            (task_id, per_page, offset),
+        ).fetchall()
+        return {
+            'task_id': task_id,
+            'total': total,
+            'page': page,
+            'per_page': per_page,
+            'days': [dict(r) for r in rows],
+        }
+    finally:
+        conn.close()
+
+
+def reimport_day(trade_date: str, sqlite_path: Path | None = None) -> dict[str, Any]:
+    """Create and immediately start a REIMPORT_DAY task for *trade_date* (YYYYMMDD).
+
+    If another task is already RUNNING the new task will remain in PENDING state.
+    """
+    task = create_task(trade_date, trade_date, mode='REIMPORT_DAY', sqlite_path=sqlite_path)
+    start_task(task['task_id'], sqlite_path=sqlite_path)
+    return get_task(task['task_id'], sqlite_path) or task
+
+
+def get_overview(sqlite_path: Path | None = None) -> dict[str, Any]:
+    """Return high-level overview: running task, latest finished task, data range."""
+    _ensure_schema(sqlite_path)
+    conn = _connect(sqlite_path)
+    try:
+        running_row = conn.execute(
+            "SELECT * FROM init_task WHERE status = 'RUNNING' ORDER BY started_at DESC LIMIT 1"
+        ).fetchone()
+        latest_row = conn.execute(
+            "SELECT * FROM init_task WHERE status IN ('SUCCESS', 'FAILED') "
+            "ORDER BY finished_at DESC LIMIT 1"
+        ).fetchone()
+        meta_row = conn.execute(
+            "SELECT * FROM data_range_meta WHERE dataset = 'market_daily_quote'"
+        ).fetchone()
+        return {
+            'running_task': dict(running_row) if running_row else None,
+            'latest_task': dict(latest_row) if latest_row else None,
+            'data_range': {
+                'min_trade_date': meta_row['min_trade_date'] if meta_row else None,
+                'max_trade_date': meta_row['max_trade_date'] if meta_row else None,
+                'trading_day_count': meta_row['trading_day_count'] if meta_row else 0,
+            },
+        }
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Background task runner
+# ---------------------------------------------------------------------------
+
+
+def _run_task(task_id: str, sqlite_path: Path | None) -> None:  # noqa: C901
+    """Background thread: process every date in the task's date range."""
+    logger.info('Task %s: started', task_id)
+    try:
+        conn = _connect(sqlite_path)
+        try:
+            task_row = conn.execute(
+                'SELECT * FROM init_task WHERE task_id = ?', (task_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+
+        if not task_row:
+            logger.error('Task %s: not found in DB', task_id)
+            return
+
+        dates = _generate_date_list(task_row['start_date'], task_row['end_date'])
+
+        for date_str in dates:
+            d = datetime.strptime(date_str, '%Y%m%d').date()
+            trading = is_trading_day(d)
+
+            # Update current_date and day status
+            conn = _connect(sqlite_path)
+            try:
+                conn.execute(
+                    'UPDATE init_task SET current_date = ? WHERE task_id = ?',
+                    (date_str, task_id),
+                )
+                conn.execute(
+                    '''UPDATE init_task_day SET started_at = ?, status = ?
+                       WHERE task_id = ? AND trade_date = ?''',
+                    (
+                        _now_iso(),
+                        'FETCHING' if trading else 'SKIPPED_NON_TRADING',
+                        task_id,
+                        date_str,
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            if not trading:
+                conn = _connect(sqlite_path)
+                try:
+                    conn.execute(
+                        '''UPDATE init_task_day SET finished_at = ?
+                           WHERE task_id = ? AND trade_date = ?''',
+                        (_now_iso(), task_id, date_str),
+                    )
+                    conn.execute(
+                        'UPDATE init_task SET processed_days = processed_days + 1 WHERE task_id = ?',
+                        (task_id,),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+                continue
+
+            # Trading day: fetch data
+            try:
+                rows = _fetch_daily_raw(date_str)
+            except Exception as exc:
+                logger.exception('Task %s: fetch failed for %s: %s', task_id, date_str, exc)
+                _mark_day_failed(task_id, date_str, str(exc), sqlite_path)
+                _mark_task_failed(task_id, f'Fetch failed on {date_str}: {exc}', sqlite_path)
+                return
+
+            # Trading day: write
+            conn = _connect(sqlite_path)
+            try:
+                conn.execute(
+                    '''UPDATE init_task_day SET status = 'WRITING'
+                       WHERE task_id = ? AND trade_date = ?''',
+                    (task_id, date_str),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            try:
+                _atomic_write_day(date_str, rows, sqlite_path)
+            except Exception as exc:
+                logger.exception('Task %s: write failed for %s: %s', task_id, date_str, exc)
+                _mark_day_failed(task_id, date_str, str(exc), sqlite_path)
+                _mark_task_failed(task_id, f'Write failed on {date_str}: {exc}', sqlite_path)
+                return
+
+            # Day succeeded
+            conn = _connect(sqlite_path)
+            try:
+                conn.execute(
+                    '''UPDATE init_task_day
+                       SET status = 'SUCCESS', finished_at = ?, row_count = ?
+                       WHERE task_id = ? AND trade_date = ?''',
+                    (_now_iso(), len(rows), task_id, date_str),
+                )
+                conn.execute(
+                    '''UPDATE init_task
+                       SET processed_days = processed_days + 1,
+                           done_trading_days = done_trading_days + 1
+                       WHERE task_id = ?''',
+                    (task_id,),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            logger.debug('Task %s: %s done (%d rows)', task_id, date_str, len(rows))
+
+        # All dates processed
+        conn = _connect(sqlite_path)
+        try:
+            conn.execute(
+                '''UPDATE init_task
+                   SET status = 'SUCCESS', finished_at = ?, current_date = ''
+                   WHERE task_id = ?''',
+                (_now_iso(), task_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        _update_data_range_meta(sqlite_path)
+        logger.info('Task %s: completed successfully', task_id)
+
+    except Exception as exc:
+        logger.exception('Task %s: unexpected error: %s', task_id, exc)
+        _mark_task_failed(task_id, str(exc), sqlite_path)
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _fetch_daily_raw(date_str: str) -> list[dict[str, Any]]:
+    """Fetch full-market daily quote from Tushare for *date_str* (YYYYMMDD).
+
+    Returns a list of row dicts matching the ``market_daily_quote`` columns.
+    """
+    from app.modules.market_data.data_source import _get_tushare_api, _rate_limited_call
+
+    pro = _get_tushare_api()
+    df = _rate_limited_call(pro.daily, trade_date=date_str)
+    if df is None or df.empty:
+        return []
+
+    updated_at = _now_iso()
+    rows: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        try:
+            rows.append({
+                'trade_date': date_str,
+                'ts_code': str(row['ts_code']),
+                'open': float(row.get('open') or 0),
+                'high': float(row.get('high') or 0),
+                'low': float(row.get('low') or 0),
+                'close': float(row.get('close') or 0),
+                'pre_close': float(row.get('pre_close') or 0),
+                'change': float(row.get('change') or 0),
+                'pct_chg': float(row.get('pct_chg') or 0),
+                'vol': float(row.get('vol') or 0),
+                'amount': float(row.get('amount') or 0),
+                'updated_at': updated_at,
+            })
+        except (ValueError, TypeError):
+            continue
+    return rows
+
+
+def _atomic_write_day(
+    date_str: str,
+    rows: list[dict[str, Any]],
+    sqlite_path: Path | None,
+) -> None:
+    """Delete existing rows for *date_str* then insert *rows* in one transaction.
+
+    Rolls back and raises if the post-write row count does not match.
+    """
+    conn = _connect(sqlite_path)
+    try:
+        conn.execute('DELETE FROM market_daily_quote WHERE trade_date = ?', (date_str,))
+        if rows:
+            conn.executemany(
+                '''INSERT INTO market_daily_quote
+                   (trade_date, ts_code, open, high, low, close,
+                    pre_close, change, pct_chg, vol, amount, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                [
+                    (
+                        r['trade_date'], r['ts_code'],
+                        r['open'], r['high'], r['low'], r['close'],
+                        r['pre_close'], r['change'], r['pct_chg'],
+                        r['vol'], r['amount'], r['updated_at'],
+                    )
+                    for r in rows
+                ],
+            )
+            written = conn.execute(
+                'SELECT COUNT(*) FROM market_daily_quote WHERE trade_date = ?', (date_str,)
+            ).fetchone()[0]
+            if written != len(rows):
+                conn.rollback()
+                raise RuntimeError(
+                    f'Integrity check failed for {date_str}: '
+                    f'expected {len(rows)} rows, got {written}'
+                )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _mark_day_failed(
+    task_id: str,
+    date_str: str,
+    error_message: str,
+    sqlite_path: Path | None,
+) -> None:
+    conn = _connect(sqlite_path)
+    try:
+        conn.execute(
+            '''UPDATE init_task_day
+               SET status = 'FAILED', finished_at = ?, error_message = ?
+               WHERE task_id = ? AND trade_date = ?''',
+            (_now_iso(), error_message, task_id, date_str),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _mark_task_failed(
+    task_id: str,
+    error_message: str,
+    sqlite_path: Path | None,
+) -> None:
+    conn = _connect(sqlite_path)
+    try:
+        conn.execute(
+            '''UPDATE init_task
+               SET status = 'FAILED', finished_at = ?, error_message = ?
+               WHERE task_id = ?''',
+            (_now_iso(), error_message, task_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _update_data_range_meta(sqlite_path: Path | None) -> None:
+    """Refresh data_range_meta from the current market_daily_quote contents."""
+    conn = _connect(sqlite_path)
+    try:
+        row = conn.execute(
+            '''SELECT MIN(trade_date) AS min_td,
+                      MAX(trade_date) AS max_td,
+                      COUNT(DISTINCT trade_date) AS cnt
+               FROM market_daily_quote'''
+        ).fetchone()
+        if row and row['min_td']:
+            conn.execute(
+                '''INSERT OR REPLACE INTO data_range_meta
+                   (dataset, min_trade_date, max_trade_date, trading_day_count, updated_at)
+                   VALUES ('market_daily_quote', ?, ?, ?, ?)''',
+                (row['min_td'], row['max_td'], row['cnt'], _now_iso()),
+            )
+            conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Legacy compatibility shim (supports old /status endpoint)
+# ---------------------------------------------------------------------------
+
+
+def read_init_status(status_dir: Any = None) -> dict[str, Any]:  # noqa: ARG001
+    """Return current init state in the legacy format (reads from SQLite)."""
+    try:
+        overview = get_overview()
+        task = overview.get('running_task') or overview.get('latest_task')
+        if not task:
+            return _idle_status()
+        status_map = {
+            'PENDING': 'idle',
+            'RUNNING': 'running',
+            'SUCCESS': 'done',
+            'FAILED': 'error',
+        }
+        return {
+            'status': status_map.get(task['status'], 'idle'),
+            'trade_date': task.get('current_date', ''),
+            'total_stocks': task.get('total_days', 0),
+            'processed_stocks': task.get('processed_days', 0),
+            'started_at': task.get('started_at', ''),
+            'finished_at': task.get('finished_at', ''),
+            'error_message': task.get('error_message', ''),
+        }
     except Exception:  # noqa: BLE001
         return _idle_status()
-
-
-def _write_status(status: dict[str, Any], status_dir: Path | None = None) -> None:
-    path = _status_path(status_dir)
-    path.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding='utf-8')
 
 
 def _idle_status() -> dict[str, Any]:
@@ -71,325 +611,3 @@ def _idle_status() -> dict[str, Any]:
         'finished_at': '',
         'error_message': '',
     }
-
-
-# ---------------------------------------------------------------------------
-# Core initializer
-# ---------------------------------------------------------------------------
-
-
-def start_initialization(
-    *,
-    history_days: int = 60,
-    market_filters: list[str] | None = None,
-    sqlite_path: Path | None = None,
-    duckdb_path: Path | None = None,
-    daily_bars_parquet_path: Path | None = None,
-    market_snapshot_path: Path | None = None,
-    status_dir: Path | None = None,
-    batch_dir_override: Path | None = None,
-) -> bool:
-    """
-    Attempt to start a full market initialization in a background thread.
-
-    Returns True if the task was started, False if one is already running.
-    Raises ValueError if the Tushare token or stock list is not configured.
-
-    Note: *history_days* is used as a fallback only when
-    ``settings.tushare_history_start`` is not configured.  In the default setup
-    the fixed start date ``settings.tushare_history_start`` (``2024-01-01``)
-    takes precedence and *history_days* has no effect.
-    """
-    from app.modules.market_data.data_source import _get_token, load_stock_universe
-
-    # Precondition: token must be configured
-    if not _get_token():
-        raise ValueError(
-            'Tushare token not configured. '
-            'Please set it via the initialization page before starting.'
-        )
-
-    # Precondition: stock universe CSV must be uploaded
-    try:
-        load_stock_universe()
-    except FileNotFoundError as exc:
-        raise ValueError(str(exc)) from exc
-
-    with _lock:
-        current = read_init_status(status_dir)
-        if current.get('status') == 'running':
-            return False
-
-        _write_status(
-            {
-                'status': 'running',
-                'trade_date': '',
-                'total_stocks': 0,
-                'processed_stocks': 0,
-                'started_at': _now_iso(),
-                'finished_at': '',
-                'error_message': '',
-            },
-            status_dir,
-        )
-
-    thread = threading.Thread(
-        target=_run_initialization,
-        kwargs={
-            'history_days': history_days,
-            'market_filters': market_filters,
-            'sqlite_path': sqlite_path,
-            'duckdb_path': duckdb_path,
-            'daily_bars_parquet_path': daily_bars_parquet_path,
-            'market_snapshot_path': market_snapshot_path,
-            'status_dir': status_dir,
-            'batch_dir_override': batch_dir_override,
-        },
-        daemon=True,
-    )
-    thread.start()
-    return True
-
-
-def _run_initialization(
-    *,
-    history_days: int,
-    market_filters: list[str] | None,
-    sqlite_path: Path | None,
-    duckdb_path: Path | None,
-    daily_bars_parquet_path: Path | None,
-    market_snapshot_path: Path | None,
-    status_dir: Path | None,
-    batch_dir_override: Path | None,
-) -> None:
-    try:
-        trade_date = date.today().strftime('%Y-%m-%d')
-        # Use the configured history start date, falling back to the history_days approximation
-        start_date = settings.tushare_history_start or get_default_history_start(history_days)
-        end_date = trade_date
-
-        # ---- Step 1: fetch spot snapshot ----
-        logger.info('Initialization: fetching spot snapshot …')
-        snapshot_rows = fetch_spot_snapshot(trade_date, market_filters=market_filters)
-        stock_pool = fetch_stock_pool(snapshot_rows, market_filters=market_filters)
-
-        # ---- Step 2: enumerate trade dates and fetch bars per date ----
-        trade_dates = _get_date_range(start_date, end_date)
-        total = len(trade_dates)
-        logger.info(
-            'Initialization: fetching historical bars for %d calendar days (%s – %s) …',
-            total,
-            start_date,
-            end_date,
-        )
-        _write_status(
-            {
-                'status': 'running',
-                'trade_date': trade_date,
-                'total_stocks': total,
-                'processed_stocks': 0,
-                'started_at': read_init_status(status_dir).get('started_at', _now_iso()),
-                'finished_at': '',
-                'error_message': '',
-            },
-            status_dir,
-        )
-
-        all_bars: list[dict[str, Any]] = []
-        for idx, td in enumerate(trade_dates):
-            bars = fetch_daily_bars_by_date(td, market_filters=market_filters)
-            all_bars.extend(bars)
-            if (idx + 1) % 10 == 0 or idx + 1 == total:
-                _write_status(
-                    {
-                        'status': 'running',
-                        'trade_date': trade_date,
-                        'total_stocks': total,
-                        'processed_stocks': idx + 1,
-                        'started_at': read_init_status(status_dir).get('started_at', _now_iso()),
-                        'finished_at': '',
-                        'error_message': '',
-                    },
-                    status_dir,
-                )
-
-        # If today's snapshot is empty (e.g., non-trading day), derive snapshots from latest bars.
-        if not snapshot_rows:
-            snapshot_rows = _derive_snapshots_from_bars(all_bars, stock_pool)
-
-        if not snapshot_rows:
-            raise ValueError(
-                'No snapshot rows available after fetching data. '
-                'Please confirm selected market filters and date range contain trading data.'
-            )
-
-        # ---- Step 3: write batch CSVs ----
-        batch_dir = batch_dir_override or (settings.market_data_import_dir / f'tushare-{trade_date}')
-        _write_batch(
-            batch_dir=batch_dir,
-            stock_pool=stock_pool,
-            daily_snapshots=snapshot_rows,
-            daily_bars=all_bars,
-        )
-
-        # ---- Step 4: import ----
-        logger.info('Initialization: importing batch from %s …', batch_dir)
-        import_market_data_batch(
-            batch_dir,
-            sqlite_path=sqlite_path,
-            duckdb_path=duckdb_path,
-            daily_bars_parquet_path=daily_bars_parquet_path,
-            market_snapshot_path=market_snapshot_path,
-        )
-
-        _write_status(
-            {
-                'status': 'done',
-                'trade_date': trade_date,
-                'total_stocks': total,
-                'processed_stocks': total,
-                'started_at': read_init_status(status_dir).get('started_at', _now_iso()),
-                'finished_at': _now_iso(),
-                'error_message': '',
-            },
-            status_dir,
-        )
-        logger.info('Initialization complete: %d date(s) processed, trade_date=%s', total, trade_date)
-
-    except Exception as exc:  # noqa: BLE001
-        logger.exception('Initialization failed: %s', exc)
-        prev = read_init_status(status_dir)
-        _write_status(
-            {
-                'status': 'error',
-                'trade_date': prev.get('trade_date', ''),
-                'total_stocks': prev.get('total_stocks', 0),
-                'processed_stocks': prev.get('processed_stocks', 0),
-                'started_at': prev.get('started_at', ''),
-                'finished_at': _now_iso(),
-                'error_message': str(exc),
-            },
-            status_dir,
-        )
-
-
-# ---------------------------------------------------------------------------
-# Batch writer helpers
-# ---------------------------------------------------------------------------
-
-
-def _write_batch(
-    *,
-    batch_dir: Path,
-    stock_pool: list[dict[str, Any]],
-    daily_snapshots: list[dict[str, Any]],
-    daily_bars: list[dict[str, Any]],
-) -> None:
-    batch_dir.mkdir(parents=True, exist_ok=True)
-
-    _write_csv(
-        batch_dir / 'stock_pool.csv',
-        ['stock_code', 'stock_name', 'sectors', 'ai_quick_summary'],
-        [{
-            'stock_code': r['stock_code'],
-            'stock_name': r['stock_name'],
-            'sectors': r.get('sectors', ''),
-            'ai_quick_summary': r.get('ai_quick_summary', ''),
-        } for r in stock_pool],
-    )
-
-    _write_csv(
-        batch_dir / 'daily_stock_snapshots.csv',
-        ['trade_date', 'stock_code', 'current_price', 'change_amount', 'change_pct',
-         'turnover_amount_billion', 'turnover_rate'],
-        [{
-            'trade_date': r['trade_date'],
-            'stock_code': r['stock_code'],
-            'current_price': r['current_price'],
-            'change_amount': r['change_amount'],
-            'change_pct': r['change_pct'],
-            'turnover_amount_billion': r['turnover_amount_billion'],
-            'turnover_rate': r['turnover_rate'],
-        } for r in daily_snapshots],
-    )
-
-    _write_csv(
-        batch_dir / 'daily_bars.csv',
-        ['stock_code', 'trade_date', 'open_price', 'high_price', 'low_price', 'close_price', 'volume', 'turnover_amount_billion'],
-        [{
-            'stock_code': r['stock_code'],
-            'trade_date': r['trade_date'],
-            'open_price': r['open_price'],
-            'high_price': r['high_price'],
-            'low_price': r['low_price'],
-            'close_price': r['close_price'],
-            'volume': r['volume'],
-            'turnover_amount_billion': r.get('turnover_amount_billion', 0.0),
-        } for r in daily_bars],
-    )
-
-
-def _write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
-    with path.open('w', encoding='utf-8', newline='') as fh:
-        writer = csv.DictWriter(fh, fieldnames=fieldnames, extrasaction='ignore')
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def _get_date_range(start_date: str, end_date: str) -> list[str]:
-    """Return all calendar dates from start_date to end_date inclusive (ISO format)."""
-    from datetime import datetime, timedelta
-
-    start = datetime.strptime(start_date, '%Y-%m-%d').date()
-    end = datetime.strptime(end_date, '%Y-%m-%d').date()
-    result: list[str] = []
-    current = start
-    while current <= end:
-        result.append(current.strftime('%Y-%m-%d'))
-        current += timedelta(days=1)
-    return result
-
-
-def _now_iso() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-
-
-def _derive_snapshots_from_bars(
-    daily_bars: list[dict[str, Any]],
-    stock_pool: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Build one snapshot row per stock from the latest available daily bar."""
-    if not daily_bars:
-        return []
-
-    name_by_code = {row['stock_code']: row.get('stock_name', '') for row in stock_pool}
-    bars_by_code: dict[str, list[dict[str, Any]]] = {}
-    for row in daily_bars:
-        bars_by_code.setdefault(row['stock_code'], []).append(row)
-
-    snapshots: list[dict[str, Any]] = []
-    for code, bars in bars_by_code.items():
-        ordered = sorted(bars, key=lambda x: x['trade_date'])
-        latest = ordered[-1]
-        prev_close = float(ordered[-2]['close_price']) if len(ordered) > 1 else float(latest['close_price'])
-        current_price = float(latest['close_price'])
-        change_amount = current_price - prev_close
-        change_pct = 0.0 if prev_close == 0 else (change_amount / prev_close) * 100
-
-        snapshots.append(
-            {
-                'trade_date': latest['trade_date'],
-                'stock_code': code,
-                'stock_name': name_by_code.get(code, ''),
-                'current_price': round(current_price, 4),
-                'change_amount': round(change_amount, 4),
-                'change_pct': round(change_pct, 4),
-                # Not provided by per-stock daily endpoint in current pipeline.
-                'turnover_amount_billion': 0.0,
-                'turnover_rate': 0.0,
-            }
-        )
-
-    return snapshots
-
