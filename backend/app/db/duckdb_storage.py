@@ -46,7 +46,7 @@ def ensure_duckdb_schema(duckdb_path: Path | None = None) -> None:
         connection.close()
 
 if __name__ == '__main__':
-    duck = connect_duckdb(Path("data/duckdb/alphapredator.duckdb"))
+    duck = connect_duckdb(Path("D:\\dev\\AlphaPredator\\data\\duckdb\\alphapredator.duckdb"))
     duck.execute("CALL start_ui();")
     print("duckdb ui启动完成")
     input("按任意键退出...")
