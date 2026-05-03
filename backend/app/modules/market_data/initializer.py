@@ -416,7 +416,7 @@ def _process_trading_day(
     """
     # Fetch
     try:
-        rows = _fetch_daily_raw(date_str)
+        rows = _fetch_daily_raw(date_str, sqlite_path)
     except Exception as exc:
         logger.exception('Task %s: fetch failed for %s: %s', task_id, date_str, exc)
         _mark_day_failed(task_id, date_str, str(exc), sqlite_path)
@@ -467,35 +467,79 @@ def _process_trading_day(
     return True
 
 
-def _fetch_daily_raw(date_str: str) -> list[dict[str, Any]]:
+def _fetch_daily_raw(
+    date_str: str,
+    sqlite_path: Path | None = None,
+) -> list[dict[str, Any]]:
     """Fetch full-market daily quote from Tushare for *date_str* (YYYYMMDD).
 
-    Returns a list of row dicts matching the ``market_daily_quote`` columns.
+    Returns a list of row dicts matching the ``market_daily_quote`` columns,
+    including computed limit-up/down prices and ST flags.
     """
     from app.modules.market_data.data_source import _get_tushare_api, _rate_limited_call
+    from app.modules.market_data.limit_rules import compute_limit_fields
 
     pro = _get_tushare_api()
     df = _rate_limited_call(pro.daily, trade_date=date_str)
     if df is None or df.empty:
         return []
 
+    # Load stock universe metadata (name, list_date) for limit-field enrichment.
+    # Gracefully skip when the stock_universe table is empty or unavailable.
+    name_map: dict[str, str] = {}
+    list_date_map: dict[str, str] = {}
+    try:
+        conn = _connect(sqlite_path)
+        try:
+            univ_rows = conn.execute(
+                'SELECT ts_code, name, list_date FROM stock_universe'
+            ).fetchall()
+            for r in univ_rows:
+                ts = r['ts_code']
+                name_map[ts] = r['name'] or ''
+                list_date_map[ts] = r['list_date'] or ''
+        finally:
+            conn.close()
+    except Exception as _exc:  # noqa: BLE001
+        logger.warning(
+            '_fetch_daily_raw: could not load stock universe for %s, '
+            'limit-field enrichment will be partial: %s',
+            date_str, _exc,
+        )
+
     updated_at = _now_iso()
     rows: list[dict[str, Any]] = []
     for _, row in df.iterrows():
         try:
+            ts_code = str(row['ts_code'])
+            pre_close = float(row.get('pre_close') or 0)
+            close = float(row.get('close') or 0)
+            stock_name = name_map.get(ts_code, '')
+            list_date = list_date_map.get(ts_code) or None
+
+            limit_fields = compute_limit_fields(
+                ts_code=ts_code,
+                trade_date=date_str,
+                pre_close=pre_close,
+                close=close,
+                stock_name=stock_name,
+                list_date=list_date,
+            )
+
             rows.append({
                 'trade_date': date_str,
-                'ts_code': str(row['ts_code']),
+                'ts_code': ts_code,
                 'open': float(row.get('open') or 0),
                 'high': float(row.get('high') or 0),
                 'low': float(row.get('low') or 0),
-                'close': float(row.get('close') or 0),
-                'pre_close': float(row.get('pre_close') or 0),
+                'close': close,
+                'pre_close': pre_close,
                 'change': float(row.get('change') or 0),
                 'pct_chg': float(row.get('pct_chg') or 0),
                 'vol': float(row.get('vol') or 0),
                 'amount': float(row.get('amount') or 0),
                 'updated_at': updated_at,
+                **limit_fields,
             })
         except (ValueError, TypeError):
             continue
@@ -518,14 +562,28 @@ def _atomic_write_day(
             conn.executemany(
                 '''INSERT INTO market_daily_quote
                    (trade_date, ts_code, open, high, low, close,
-                    pre_close, change, pct_chg, vol, amount, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                    pre_close, change, pct_chg, vol, amount, updated_at,
+                    is_st, st_source,
+                    limit_up_price, limit_down_price, limit_pct,
+                    is_limit_up, is_limit_down,
+                    limit_rule, limit_status, limit_rule_version)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 [
                     (
                         r['trade_date'], r['ts_code'],
                         r['open'], r['high'], r['low'], r['close'],
                         r['pre_close'], r['change'], r['pct_chg'],
                         r['vol'], r['amount'], r['updated_at'],
+                        r.get('is_st', 0),
+                        r.get('st_source', ''),
+                        r.get('limit_up_price'),
+                        r.get('limit_down_price'),
+                        r.get('limit_pct'),
+                        r.get('is_limit_up', 0),
+                        r.get('is_limit_down', 0),
+                        r.get('limit_rule', ''),
+                        r.get('limit_status', ''),
+                        r.get('limit_rule_version', ''),
                     )
                     for r in rows
                 ],
