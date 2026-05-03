@@ -83,6 +83,19 @@ export interface UpdateResult {
   bar_count: number;
 }
 
+export interface TokenConfigResponse {
+  is_configured: boolean;
+}
+
+export interface StockListUploadResponse {
+  total_stocks: number;
+  active_stocks: number;
+  boards: Record<string, number>;
+}
+
+export type MarketBoard = '主板' | '创业板' | '科创板';
+export const ALL_MARKET_BOARDS: MarketBoard[] = ['主板', '创业板', '科创板'];
+
 // ---------------------------------------------------------------------------
 // HTTP helpers
 // ---------------------------------------------------------------------------
@@ -121,11 +134,39 @@ export function getInitStatus(): Promise<InitStatusResponse> {
   return fetchJson<InitStatusResponse>('/api/data-init/status');
 }
 
-export function startInit(historyDays: number = 60): Promise<InitStatusResponse> {
-  return postJson<InitStatusResponse>('/api/data-init/start', { history_days: historyDays });
+export function startInit(
+  historyDays: number = 60,
+  marketFilters: MarketBoard[] = ALL_MARKET_BOARDS,
+): Promise<InitStatusResponse> {
+  return postJson<InitStatusResponse>('/api/data-init/start', {
+    history_days: historyDays,
+    market_filters: marketFilters,
+  });
 }
 
 export function triggerDailyUpdate(): Promise<UpdateResult> {
   return postJson<UpdateResult>('/api/data-init/update');
+}
+
+export function getTokenConfig(): Promise<TokenConfigResponse> {
+  return fetchJson<TokenConfigResponse>('/api/data-init/token');
+}
+
+export function saveTokenConfig(token: string): Promise<TokenConfigResponse> {
+  return postJson<TokenConfigResponse>('/api/data-init/token', { token });
+}
+
+export async function uploadStockList(file: File): Promise<StockListUploadResponse> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const response = await fetch(`${API_BASE_URL}/api/data-init/upload-stock-list`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!response.ok) {
+    const responseText = await response.text();
+    throw new Error(responseText || `Request failed: ${response.status}`);
+  }
+  return response.json() as Promise<StockListUploadResponse>;
 }
 

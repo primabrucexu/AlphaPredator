@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -11,11 +15,34 @@ class InitStatusResponse(BaseModel):
     error_message: str = Field('', description='错误信息（仅 error 状态时有值）')
 
 
+MarketBoard = Literal['主板', '创业板', '科创板']
+
+ALL_MARKET_BOARDS: list[MarketBoard] = ['主板', '创业板', '科创板']
+
+
 class StartInitRequest(BaseModel):
-    history_days: int = Field(60, ge=1, le=365, description='历史行情天数（日历天数近似）')
+    history_days: int = Field(60, ge=1, le=3650, description='历史行情天数（日历天数近似）')
+    market_filters: list[MarketBoard] = Field(
+        default_factory=lambda: list(ALL_MARKET_BOARDS),
+        description='市场板块筛选：主板 / 创业板 / 科创板（默认全量）',
+    )
 
 
 class UpdateResult(BaseModel):
     trade_date: str
     stock_count: int
     bar_count: int
+
+
+class TokenConfigResponse(BaseModel):
+    is_configured: bool = Field(..., description='Tushare token 是否已配置')
+
+
+class SaveTokenRequest(BaseModel):
+    token: str = Field(..., min_length=1, description='Tushare API token')
+
+
+class StockListUploadResponse(BaseModel):
+    total_stocks: int = Field(..., description='CSV 中股票总数（含退市）')
+    active_stocks: int = Field(..., description='当前上市股票数（list_status=L）')
+    boards: dict[str, int] = Field(..., description='各板块上市股票数量')

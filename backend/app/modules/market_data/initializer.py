@@ -81,6 +81,7 @@ def _idle_status() -> dict[str, Any]:
 def start_initialization(
     *,
     history_days: int = 60,
+    market_filters: list[str] | None = None,
     sqlite_path: Path | None = None,
     duckdb_path: Path | None = None,
     daily_bars_parquet_path: Path | None = None,
@@ -92,7 +93,28 @@ def start_initialization(
     Attempt to start a full market initialization in a background thread.
 
     Returns True if the task was started, False if one is already running.
+    Raises ValueError if the Tushare token or stock list is not configured.
+
+    Note: *history_days* is used as a fallback only when
+    ``settings.tushare_history_start`` is not configured.  In the default setup
+    the fixed start date ``settings.tushare_history_start`` (``2024-01-01``)
+    takes precedence and *history_days* has no effect.
     """
+    from app.modules.market_data.data_source import _get_token, load_stock_universe
+
+    # Precondition: token must be configured
+    if not _get_token():
+        raise ValueError(
+            'Tushare token not configured. '
+            'Please set it via the initialization page before starting.'
+        )
+
+    # Precondition: stock universe CSV must be uploaded
+    try:
+        load_stock_universe()
+    except FileNotFoundError as exc:
+        raise ValueError(str(exc)) from exc
+
     with _lock:
         current = read_init_status(status_dir)
         if current.get('status') == 'running':
@@ -115,6 +137,7 @@ def start_initialization(
         target=_run_initialization,
         kwargs={
             'history_days': history_days,
+            'market_filters': market_filters,
             'sqlite_path': sqlite_path,
             'duckdb_path': duckdb_path,
             'daily_bars_parquet_path': daily_bars_parquet_path,
@@ -131,6 +154,7 @@ def start_initialization(
 def _run_initialization(
     *,
     history_days: int,
+    market_filters: list[str] | None,
     sqlite_path: Path | None,
     duckdb_path: Path | None,
     daily_bars_parquet_path: Path | None,
@@ -140,12 +164,13 @@ def _run_initialization(
 ) -> None:
     try:
         trade_date = date.today().strftime('%Y-%m-%d')
-        start_date = get_default_history_start(history_days)
+        # Use the configured history start date, falling back to the history_days approximation
+        start_date = settings.tushare_history_start or get_default_history_start(history_days)
         end_date = trade_date
 
         # ---- Step 1: fetch spot snapshot ----
         logger.info('Initialization: fetching spot snapshot …')
-        snapshot_rows = fetch_spot_snapshot(trade_date)
+        snapshot_rows = fetch_spot_snapshot(trade_date, market_filters=market_filters)
         stock_pool = fetch_stock_pool(snapshot_rows)
 
         total = len(stock_pool)
@@ -167,6 +192,7 @@ def _run_initialization(
         all_bars: list[dict[str, Any]] = []
         for idx, stock in enumerate(stock_pool):
             code = stock['stock_code']
+            # Rate limiting is handled inside fetch_daily_bars_for_stock via _rate_limited_call
             bars = fetch_daily_bars_for_stock(code, start_date=start_date, end_date=end_date)
             all_bars.extend(bars)
             if (idx + 1) % 50 == 0 or idx + 1 == total:
@@ -182,10 +208,9 @@ def _run_initialization(
                     },
                     status_dir,
                 )
-            time.sleep(0.05)  # gentle rate-limiting
 
         # ---- Step 3: write batch CSVs ----
-        batch_dir = batch_dir_override or (settings.market_data_import_dir / f'eastmoney-{trade_date}')
+        batch_dir = batch_dir_override or (settings.market_data_import_dir / f'tushare-{trade_date}')
         _write_batch(
             batch_dir=batch_dir,
             stock_pool=stock_pool,
