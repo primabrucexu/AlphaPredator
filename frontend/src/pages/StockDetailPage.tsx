@@ -22,10 +22,11 @@ const KDJ_COLORS = { K: '#f5a623', D: '#7ed321', J: '#cf1322' };
 const MACD_COLORS = { DIF: '#f5a623', DEA: '#7ed321' };
 const RSI_COLORS = { RSI6: '#f5a623', RSI12: '#7ed321', RSI24: '#cf1322' };
 
-// Chart layout constants – used both in buildChartOption and for overlay positioning
+// Chart layout constants – used both in buildChartOption (grid config) and for overlay positioning.
+// GRID_LEFT / GRID_RIGHT inside buildChartOption are derived from these constants as template strings.
 const CHART_HEIGHT = 780;
-const CHART_GRID_LEFT = 70;  // px, must match GRID_LEFT string below
-const CHART_GRID_RIGHT = 80; // px, must match GRID_RIGHT string below
+const CHART_GRID_LEFT = 70;  // px
+const CHART_GRID_RIGHT = 80; // px
 
 // Sub-chart grid top positions (% of CHART_HEIGHT).
 // Order: K-line(0), Volume(1), MACD(2), KDJ(3), RSI(4)
@@ -136,8 +137,16 @@ function VolumeInfoBar({
     <InfoRow
       items={[
         { label: 'VOL', value: fmtVol(bar.volume), color: bar.close_price >= bar.open_price ? UP_COLOR : DOWN_COLOR },
-        { label: '成交额', value: `${(bar.turnover_amount_billion ?? 0).toFixed(2)}亿`, color: '#333' },
-        { label: '换手率', value: `${(bar.turnover_rate ?? 0).toFixed(2)}%`, color: '#333' },
+        {
+          label: '成交额',
+          value: bar.turnover_amount_billion ? `${bar.turnover_amount_billion.toFixed(2)}亿` : '--',
+          color: '#333',
+        },
+        {
+          label: '换手率',
+          value: bar.turnover_rate ? `${bar.turnover_rate.toFixed(2)}%` : '--',
+          color: '#333',
+        },
         { label: 'MA5', value: fmtNum(ind.volume_ma5[idx]), color: MA_COLORS.MA5 },
         { label: 'MA10', value: fmtNum(ind.volume_ma10[idx]), color: MA_COLORS.MA10 },
         { label: 'MA20', value: fmtNum(ind.volume_ma20[idx]), color: MA_COLORS.MA20 },
@@ -257,7 +266,7 @@ function buildChartOption(data: StockDetailResponse) {
   };
 
   // yAxes indices align with grid indices:
-  // 0=K-line, 1=Volume, 2=MACD, 3=KDJ (no min/max), 4=RSI
+  // 0=K-line, 1=Volume, 2=MACD, 3=KDJ (auto-range; fixed 0-100 was removed to prevent J value clipping), 4=RSI
   const yAxes = [
     { ...yAxisBase, gridIndex: 0 },
     {
