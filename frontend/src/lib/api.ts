@@ -37,6 +37,8 @@ export interface DailyBar {
   low_price: number;
   close_price: number;
   volume: number;
+  turnover_amount_billion?: number;
+  turnover_rate?: number;
 }
 
 export interface StockKeyIndicators {
@@ -58,6 +60,8 @@ export interface StockIndicatorSeries {
   ma20: (number | null)[];
   ma60: (number | null)[];
   volume_ma5: (number | null)[];
+  volume_ma10: (number | null)[];
+  volume_ma20: (number | null)[];
   kdj_k: (number | null)[];
   kdj_d: (number | null)[];
   kdj_j: (number | null)[];
