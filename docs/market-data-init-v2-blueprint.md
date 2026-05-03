@@ -119,6 +119,16 @@
 - `pct_chg`
 - `vol`
 - `amount`
+- `is_st`
+- `st_source`
+- `limit_up_price`
+- `limit_down_price`
+- `limit_pct`
+- `is_limit_up`
+- `is_limit_down`
+- `limit_rule`
+- `limit_status`
+- `limit_rule_version`
 - `updated_at`
 
 约束建议：
@@ -179,9 +189,99 @@
 - 易于保证“当日数据全量一致”。
 - 非常适合补数和修复场景。
 
-## 7. API 设计草案（初始化页面）
+## 7. 涨跌停与 ST 规则（初始化内置计算）
 
-### 7.1 查询概览
+### 7.1 规则优先级
+
+按以下顺序判定当日规则：
+
+1. **不限价日优先**：如上市后前 5 个交易日等交易所定义的不限价场景。
+2. **板块默认规则**：非不限价日时，按板块应用涨跌幅比例与取整口径。
+3. **未知规则兜底**：必要字段缺失或无法识别板块时，标记 `limit_status=INVALID`。
+
+板块规则表（V1）：
+
+| 板块 / 股票类型 | 涨跌幅限制 | 取整规则 | 计算公式（涨停价） | 备注 / 特殊说明 |
+| :--- | :--- | :--- | :--- | :--- |
+| **沪/深主板（普通A股）** | ±10% | 四舍五入至“分” | 前收市价 × 1.10 | 上市后前 5 个交易日不设涨跌幅限制 |
+| **创业板 / 科创板** | ±20% | 四舍五入至“分” | 前收市价 × 1.20 | 上市后前 5 个交易日不设涨跌幅限制 |
+| **北京证券交易所（北交所）** | ±30% | 向下取整至“分” | 前收市价 × 1.30 | 上市后前 5 个交易日不设涨跌幅限制 |
+
+
+### 7.2 `limit_pct` 取值规则（V1）
+
+- 主板：`0.10`
+- 创业板：`0.20`
+- 科创板：`0.20`
+- 北交所：`0.30`
+- 不限价日：不计算涨跌停价，`limit_status=NO_LIMIT`
+
+说明：
+
+- 当前版本不因 `is_st` 单独切换 `limit_pct`。
+- `is_st` 作为风险标签字段独立落库，供规则演进与页面展示使用。
+
+### 7.3 涨跌停价计算公式
+
+设：
+
+- `prev_close`：昨收价
+- `limit_pct`：涨跌幅限制比例
+- `tick_size=0.01`
+
+公式：
+
+- `raw_limit_up = prev_close * (1 + limit_pct)`
+- `raw_limit_down = prev_close * (1 - limit_pct)`
+- `limit_up_price = quantize(raw_limit_up, tick_size, rounding_mode)`
+- `limit_down_price = quantize(raw_limit_down, tick_size, rounding_mode)`
+
+实现约束：
+
+- 使用 `Decimal` 计算，避免浮点误差。
+- 主板 / 创业板 / 科创板使用 `ROUND_HALF_UP`。
+- 北交所使用向下取整（`ROUND_FLOOR`）。
+- `limit_down_price` 最低不小于 `0.01`。
+
+### 7.4 `is_st` 识别与来源优先级
+
+`is_st` 以“数据源可信度”优先级解析：
+
+1. 权威风险警示字段（交易所或数据源明确字段）。
+2. 股票导入阶段补全值（如 `stock_universe.is_st`）。
+3. 名称前缀推断（兜底，不建议查询时临时推断）。
+
+名称前缀推断建议仅识别：`ST`、`*ST`、`SST`、`S*ST`。
+
+### 7.5 涨跌停命中判定
+
+- `is_limit_up = (close >= limit_up_price)`
+- `is_limit_down = (close <= limit_down_price)`
+
+说明：
+
+- 不限价日：`is_limit_up=false`、`is_limit_down=false`。
+- 规则无效或数据缺失：`is_limit_up/is_limit_down` 置空或置 `false`，并显式标记 `limit_status=INVALID`。
+
+补充：
+
+- 当 `limit_status=NO_LIMIT` 时，`limit_up_price/limit_down_price` 应为 `null`。
+- 当 `limit_status=INVALID` 时，不做猜测性命中判定。
+
+### 7.6 异常处理约定
+
+- `prev_close` 缺失或 `<=0`：不计算涨跌停价，`limit_status=INVALID`。
+- 无法识别板块/规则：不猜测，`limit_status=INVALID`。
+- 不限价日：`limit_up_price=null`、`limit_down_price=null`、`limit_status=NO_LIMIT`。
+
+### 7.7 与初始化执行的关系
+
+- 交易日数据写入同一单日事务内，先计算 `is_st` 与涨跌停字段，再落库。
+- 只有当日基础行情 + 派生字段全部校验通过，才提交事务并推进到下一天。
+
+## 8. API 设计草案（初始化页面）
+
+### 8.1 查询概览
 
 - `GET /api/init/overview`
 - 返回：
@@ -190,29 +290,29 @@
   - 已入库范围（min/max）
   - 累计交易日数
 
-### 7.2 创建区间初始化任务
+### 8.2 创建区间初始化任务
 
 - `POST /api/init/tasks`
 - 入参：`mode=RANGE`, `start_date`, `end_date`
 - 出参：`task_id`, `status`
 
-### 7.3 查询任务进度
+### 8.3 查询任务进度
 
 - `GET /api/init/tasks/{task_id}`
 - 返回：任务状态、进度百分比、当前日期、成功/跳过/失败统计、错误信息
 
-### 7.4 查询任务日明细
+### 8.4 查询任务日明细
 
 - `GET /api/init/tasks/{task_id}/days`
 - 返回：按日期分页的明细状态（便于定位失败日）
 
-### 7.5 单日重导
+### 8.5 单日重导
 
 - `POST /api/init/reimport-day`
 - 入参：`trade_date`
 - 行为：触发指定交易日覆盖重导
 
-## 8. 实施里程碑
+## 9. 实施里程碑
 
 ### M1（MVP）
 
@@ -236,7 +336,7 @@
 - 任务取消能力
 - 告警通知（任务失败、长时运行）
 
-## 9. 风险与对策
+## 10. 风险与对策
 
 1. **tushare 接口限流/超时**
    - 对策：限速 + 重试退避 + 失败即停 + 断点可重导。
@@ -247,7 +347,7 @@
 4. **重复导入引入脏数据**
    - 对策：主键约束 + 单日覆盖策略 + 导入后行数核验。
 
-## 10. 验收标准
+## 11. 验收标准
 
 满足以下条件视为方案达标：
 
@@ -257,8 +357,9 @@
 4. 单日失败不会污染数据库，修复后可继续或重导。
 5. 初始化页面可实时查看进度与当前已有数据范围。
 6. 全流程无 CSV/文件中转，仅内存处理后直写数据库。
+7. 初始化导入时同步产出 `is_st`、`limit_up_price`、`limit_down_price`、`is_limit_up`、`is_limit_down` 等派生字段。
 
-## 11. 结论
+## 12. 结论
 
 该方案将初始化能力重构为“日期驱动 + 交易日判定 + 单日原子写入 + 幂等重导”的统一链路，满足可观测、可恢复、可重复执行的长期演进要求，并与前端进度展示天然一致。
 
