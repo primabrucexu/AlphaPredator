@@ -7,8 +7,9 @@ dependencies = [
   "akshare>=1.18.0",
   "duckdb>=1.2.1",
   "fastapi>=0.115.11",
+  "onnxruntime>=1.24.0",
   "pydantic>=2.10.6",
-  "rapidocr-onnxruntime>=1.4.4",
+  "rapidocr>=3.8.1",
   "sqlmodel>=0.0.22",
   "uvicorn[standard]>=0.34.0"
 ]

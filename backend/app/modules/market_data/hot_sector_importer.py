@@ -228,22 +228,22 @@ def _parse_trade_date_from_filename(file_path: Path, year: int) -> str:
 @lru_cache(maxsize=1)
 def _get_ocr_engine() -> Any:
     try:
-        from rapidocr_onnxruntime import RapidOCR
+        from rapidocr import RapidOCR
     except ImportError as exc:  # pragma: no cover - exercised in runtime, not in tests
         raise RuntimeError(
-            'rapidocr_onnxruntime is required for hot-sector image parsing. '
+            'rapidocr is required for hot-sector image parsing. '
             'Install backend dependencies before importing hot-sector images.'
         ) from exc
     return RapidOCR()
 
 
 def _run_ocr(file_path: Path) -> list[OCRToken]:
-    result, _ = _get_ocr_engine()(str(file_path))
-    if not result:
+    result = _get_ocr_engine()(str(file_path))
+    if not result or result.boxes is None or result.txts is None or result.scores is None:
         return []
 
     tokens: list[OCRToken] = []
-    for box, text, score in result:
+    for box, text, score in zip(result.boxes, result.txts, result.scores):
         cleaned_text = _normalize_text(text)
         if not cleaned_text:
             continue
