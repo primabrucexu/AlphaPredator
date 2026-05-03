@@ -37,8 +37,8 @@ export interface DailyBar {
   low_price: number;
   close_price: number;
   volume: number;
-  turnover_amount_billion: number;
-  turnover_rate: number;
+  turnover_amount_billion?: number;
+  turnover_rate?: number;
 }
 
 export interface StockKeyIndicators {

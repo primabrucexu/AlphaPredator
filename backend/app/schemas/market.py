@@ -40,8 +40,8 @@ class DailyBar(BaseModel):
     low_price: float
     close_price: float
     volume: int
-    turnover_amount_billion: float = 0.0
-    turnover_rate: float = 0.0
+    turnover_amount_billion: float | None = None
+    turnover_rate: float | None = None
 
 
 class StockKeyIndicators(BaseModel):
