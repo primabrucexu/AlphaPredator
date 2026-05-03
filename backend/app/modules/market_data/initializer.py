@@ -23,12 +23,13 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from app.core.settings import settings  # noqa: F401 (kept for settings reference)
+from app.core.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,14 @@ def _generate_date_list(start_date: str, end_date: str) -> list[str]:
 def _connect(sqlite_path: Path | None = None):
     from app.db.sqlite import connect_sqlite
     return connect_sqlite(sqlite_path)
+
+
+def _connect_duckdb(duckdb_path: Path | None = None):
+    from app.db.duckdb import connect_duckdb, ensure_duckdb_parent, ensure_duckdb_schema
+    target = duckdb_path or settings.duckdb_path
+    ensure_duckdb_parent(target)
+    ensure_duckdb_schema(target)
+    return connect_duckdb(target)
 
 
 def _ensure_schema(sqlite_path: Path | None = None) -> None:
@@ -153,7 +162,7 @@ def create_task(
     return task
 
 
-def start_task(task_id: str, sqlite_path: Path | None = None) -> bool:
+def start_task(task_id: str, sqlite_path: Path | None = None, duckdb_path: Path | None = None) -> bool:
     """Start processing a task in a background thread.
 
     Returns False (without starting) if another task is already RUNNING.
@@ -183,7 +192,7 @@ def start_task(task_id: str, sqlite_path: Path | None = None) -> bool:
 
     thread = threading.Thread(
         target=_run_task,
-        args=(task_id, sqlite_path),
+        args=(task_id, sqlite_path, duckdb_path),
         daemon=True,
     )
     thread.start()
@@ -251,13 +260,13 @@ def get_task_days(
         conn.close()
 
 
-def reimport_day(trade_date: str, sqlite_path: Path | None = None) -> dict[str, Any]:
+def reimport_day(trade_date: str, sqlite_path: Path | None = None, duckdb_path: Path | None = None) -> dict[str, Any]:
     """Create and immediately start a REIMPORT_DAY task for *trade_date* (YYYYMMDD).
 
     If another task is already RUNNING the new task will remain in PENDING state.
     """
     task = create_task(trade_date, trade_date, mode='REIMPORT_DAY', sqlite_path=sqlite_path)
-    start_task(task['task_id'], sqlite_path=sqlite_path)
+    start_task(task['task_id'], sqlite_path=sqlite_path, duckdb_path=duckdb_path)
     return get_task(task['task_id'], sqlite_path) or task
 
 
@@ -294,7 +303,7 @@ def get_overview(sqlite_path: Path | None = None) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _run_task(task_id: str, sqlite_path: Path | None) -> None:
+def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None = None) -> None:
     """Background thread: process every date in the task's date range."""
     logger.info('Task %s: started', task_id)
     try:
@@ -311,10 +320,14 @@ def _run_task(task_id: str, sqlite_path: Path | None) -> None:
             return
 
         dates = _generate_date_list(task_row['start_date'], task_row['end_date'])
+        logger.info(
+            'Task %s: processing %d calendar days (%s → %s)',
+            task_id, len(dates), task_row['start_date'], task_row['end_date'],
+        )
 
         for date_str in dates:
             # Returns False when the task must be aborted due to a fatal error.
-            if not _process_one_day(task_id, date_str, sqlite_path):
+            if not _process_one_day(task_id, date_str, sqlite_path, duckdb_path):
                 return
 
         # All dates processed
@@ -331,6 +344,13 @@ def _run_task(task_id: str, sqlite_path: Path | None) -> None:
             conn.close()
 
         _update_data_range_meta(sqlite_path)
+
+        # Regenerate Parquet from DuckDB so the fallback read path is also up to date.
+        try:
+            _export_parquet(duckdb_path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('Task %s: Parquet export failed (non-fatal): %s', task_id, exc)
+
         logger.info('Task %s: completed successfully', task_id)
 
     except Exception as exc:
@@ -347,6 +367,7 @@ def _process_one_day(
     task_id: str,
     date_str: str,
     sqlite_path: Path | None,
+    duckdb_path: Path | None = None,
 ) -> bool:
     """Process a single calendar date for a running task.
 
@@ -355,6 +376,8 @@ def _process_one_day(
     """
     d = datetime.strptime(date_str, '%Y%m%d').date()
     trading = is_trading_day(d)
+
+    logger.debug('Task %s: %s is_trading_day=%s', task_id, date_str, trading)
 
     # Update current_date and day status
     conn = _connect(sqlite_path)
@@ -380,7 +403,7 @@ def _process_one_day(
     if not trading:
         return _skip_non_trading_day(task_id, date_str, sqlite_path)
 
-    return _process_trading_day(task_id, date_str, sqlite_path)
+    return _process_trading_day(task_id, date_str, sqlite_path, duckdb_path)
 
 
 def _skip_non_trading_day(
@@ -389,6 +412,7 @@ def _skip_non_trading_day(
     sqlite_path: Path | None,
 ) -> bool:
     """Mark a non-trading day as skipped and increment the processed counter."""
+    logger.debug('Task %s: %s skipped (non-trading day)', task_id, date_str)
     conn = _connect(sqlite_path)
     try:
         conn.execute(
@@ -409,12 +433,16 @@ def _process_trading_day(
     task_id: str,
     date_str: str,
     sqlite_path: Path | None,
+    duckdb_path: Path | None = None,
 ) -> bool:
     """Fetch data from Tushare and atomically write it for a single trading day.
 
     Returns True on success, False on any fatal error.
     """
+    t0 = time.monotonic()
+
     # Fetch
+    logger.info('Task %s: fetching %s …', task_id, date_str)
     try:
         rows = _fetch_daily_raw(date_str, sqlite_path)
     except Exception as exc:
@@ -422,6 +450,12 @@ def _process_trading_day(
         _mark_day_failed(task_id, date_str, str(exc), sqlite_path)
         _mark_task_failed(task_id, f'Fetch failed on {date_str}: {exc}', sqlite_path)
         return False
+
+    fetch_elapsed = time.monotonic() - t0
+    logger.info(
+        'Task %s: fetched %s — %d rows in %.1fs',
+        task_id, date_str, len(rows), fetch_elapsed,
+    )
 
     # Mark as WRITING
     conn = _connect(sqlite_path)
@@ -434,14 +468,17 @@ def _process_trading_day(
     finally:
         conn.close()
 
-    # Write atomically
+    # Write atomically (SQLite + DuckDB)
+    t1 = time.monotonic()
     try:
-        _atomic_write_day(date_str, rows, sqlite_path)
+        _atomic_write_day(date_str, rows, sqlite_path, duckdb_path)
     except Exception as exc:
         logger.exception('Task %s: write failed for %s: %s', task_id, date_str, exc)
         _mark_day_failed(task_id, date_str, str(exc), sqlite_path)
         _mark_task_failed(task_id, f'Write failed on {date_str}: {exc}', sqlite_path)
         return False
+
+    write_elapsed = time.monotonic() - t1
 
     # Day succeeded
     conn = _connect(sqlite_path)
@@ -463,7 +500,11 @@ def _process_trading_day(
     finally:
         conn.close()
 
-    logger.debug('Task %s: %s done (%d rows)', task_id, date_str, len(rows))
+    total_elapsed = time.monotonic() - t0
+    logger.info(
+        'Task %s: %s done — %d rows written (fetch=%.1fs write=%.1fs total=%.1fs)',
+        task_id, date_str, len(rows), fetch_elapsed, write_elapsed, total_elapsed,
+    )
     return True
 
 
@@ -550,11 +591,17 @@ def _atomic_write_day(
     date_str: str,
     rows: list[dict[str, Any]],
     sqlite_path: Path | None,
+    duckdb_path: Path | None = None,
 ) -> None:
     """Delete existing rows for *date_str* then insert *rows* in one transaction.
 
-    Rolls back and raises if the post-write row count does not match.
+    Writes to both SQLite (market_daily_quote) and DuckDB (daily_bars) so the
+    detail-page query path is populated after initialization.
+
+    Rolls back SQLite and raises if the post-write row count does not match.
+    DuckDB write failure also raises so the caller can mark the day as FAILED.
     """
+    # --- SQLite write ---
     conn = _connect(sqlite_path)
     try:
         conn.execute('DELETE FROM market_daily_quote WHERE trade_date = ?', (date_str,))
@@ -601,6 +648,75 @@ def _atomic_write_day(
     except Exception:
         conn.rollback()
         raise
+    finally:
+        conn.close()
+
+    # --- DuckDB write (daily_bars for detail-page queries) ---
+    _write_duckdb_day(date_str, rows, duckdb_path)
+
+
+def _write_duckdb_day(
+    date_str: str,
+    rows: list[dict[str, Any]],
+    duckdb_path: Path | None = None,
+) -> None:
+    """Write *rows* for *date_str* into DuckDB's ``daily_bars`` table.
+
+    Maps market_daily_quote columns to the daily_bars schema:
+    - ts_code (e.g. '000001.SZ') → stock_code ('000001')
+    - trade_date 'YYYYMMDD' → 'YYYY-MM-DD'
+    - open/high/low/close → open_price/high_price/low_price/close_price
+    - vol (lots) → volume (integer)
+    - amount (千元) / 1e6 → turnover_amount_billion
+
+    Deletes existing rows for the date before inserting (idempotent).
+    """
+    trade_date_str = f'{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}'
+
+    duckdb_rows = [
+        (
+            str(r['ts_code']).split('.')[0].zfill(6),  # stock_code
+            trade_date_str,
+            float(r['open']),
+            float(r['high']),
+            float(r['low']),
+            float(r['close']),
+            int(float(r['vol'])),
+            round(float(r.get('amount') or 0) / 1e6, 4),
+        )
+        for r in rows
+    ]
+
+    conn = _connect_duckdb(duckdb_path)
+    try:
+        conn.execute('DELETE FROM daily_bars WHERE trade_date = ?', [trade_date_str])
+        if duckdb_rows:
+            conn.executemany(
+                'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                duckdb_rows,
+            )
+        logger.debug(
+            '_write_duckdb_day: %s → %d rows written to daily_bars', date_str, len(duckdb_rows)
+        )
+    finally:
+        conn.close()
+
+
+def _export_parquet(duckdb_path: Path | None = None) -> None:
+    """Re-export all daily_bars rows from DuckDB to the Parquet fallback file."""
+    from app.core.settings import settings as _settings
+    parquet_path = _settings.daily_bars_parquet_path
+    target_duckdb = duckdb_path or _settings.duckdb_path
+
+    conn = _connect_duckdb(target_duckdb)
+    try:
+        parquet_path.unlink(missing_ok=True)
+        parquet_str = str(parquet_path).replace('\\', '/').replace("'", "''")
+        conn.execute(
+            f"COPY (SELECT * FROM daily_bars ORDER BY stock_code, trade_date) "
+            f"TO '{parquet_str}' (FORMAT PARQUET)"
+        )
+        logger.info('_export_parquet: Parquet file regenerated at %s', parquet_path)
     finally:
         conn.close()
 
