@@ -49,6 +49,8 @@ class MarketDataService:
             or self._sample_stock_detail_payload(stock_code)
         )
         daily_bars = self._load_stock_daily_bars(stock_code) or self._sample_daily_bars(stock_code)
+        # Enrich daily bars with per-day turnover data from SQLite snapshots
+        daily_bars = self._enrich_daily_bars_with_turnover(stock_code, daily_bars)
         payload['daily_bars'] = daily_bars
         payload['trade_date'] = payload.get('trade_date') or (daily_bars[-1]['trade_date'] if daily_bars else '')
         payload['key_indicators'] = self._build_key_indicators(daily_bars)
@@ -425,6 +427,48 @@ class MarketDataService:
             return rows
         return self._load_stock_daily_bars_from_parquet(stock_code)
 
+    def _enrich_daily_bars_with_turnover(
+        self, stock_code: str, daily_bars: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Join daily bars with per-day turnover data from SQLite daily_stock_snapshots."""
+        if not daily_bars or not self._sqlite_path.exists():
+            return daily_bars
+
+        connection = connect_sqlite(self._sqlite_path)
+        try:
+            rows = connection.execute(
+                '''
+                SELECT trade_date, turnover_amount_billion, turnover_rate
+                FROM daily_stock_snapshots
+                WHERE stock_code = ?
+                ORDER BY trade_date
+                ''',
+                [stock_code],
+            ).fetchall()
+        finally:
+            connection.close()
+
+        if not rows:
+            return daily_bars
+
+        turnover_map: dict[str, dict[str, float]] = {
+            row['trade_date']: {
+                'turnover_amount_billion': float(row['turnover_amount_billion']),
+                'turnover_rate': float(row['turnover_rate']),
+            }
+            for row in rows
+        }
+
+        enriched = []
+        for bar in daily_bars:
+            bar = dict(bar)
+            td = bar.get('trade_date', '')
+            if td in turnover_map:
+                bar['turnover_amount_billion'] = turnover_map[td]['turnover_amount_billion']
+                bar['turnover_rate'] = turnover_map[td]['turnover_rate']
+            enriched.append(bar)
+        return enriched
+
     def _load_stock_daily_bars_from_duckdb(self, stock_code: str) -> list[dict[str, Any]]:
         if not self._duckdb_path.exists():
             return []
@@ -607,7 +651,7 @@ class MarketDataService:
             empty: list[None] = []
             return {
                 'ma5': empty, 'ma10': empty, 'ma20': empty, 'ma60': empty,
-                'volume_ma5': empty,
+                'volume_ma5': empty, 'volume_ma10': empty, 'volume_ma20': empty,
                 'kdj_k': empty, 'kdj_d': empty, 'kdj_j': empty,
                 'macd_dif': empty, 'macd_dea': empty, 'macd_hist': empty,
                 'rsi6': empty, 'rsi12': empty, 'rsi24': empty,
@@ -624,6 +668,8 @@ class MarketDataService:
             'ma20': self._compute_ma_series(closes, 20),
             'ma60': self._compute_ma_series(closes, 60),
             'volume_ma5': self._compute_ma_series(volumes, 5),
+            'volume_ma10': self._compute_ma_series(volumes, 10),
+            'volume_ma20': self._compute_ma_series(volumes, 20),
             'kdj_k': k_vals,
             'kdj_d': d_vals,
             'kdj_j': j_vals,
@@ -747,27 +793,28 @@ class MarketDataService:
         }
 
     def _sample_daily_bars(self, stock_code: str) -> list[dict[str, Any]]:
+        # Sample turnover values are illustrative approximations proportional to volume.
         sample_bars = {
             '000001': [
-                {'trade_date': '2026-04-24', 'open_price': 10.92, 'high_price': 11.05, 'low_price': 10.86, 'close_price': 10.97, 'volume': 51230000},
-                {'trade_date': '2026-04-25', 'open_price': 10.98, 'high_price': 11.08, 'low_price': 10.91, 'close_price': 11.02, 'volume': 49820000},
-                {'trade_date': '2026-04-28', 'open_price': 11.03, 'high_price': 11.13, 'low_price': 10.95, 'close_price': 11.08, 'volume': 53410000},
-                {'trade_date': '2026-04-29', 'open_price': 11.06, 'high_price': 11.16, 'low_price': 11.01, 'close_price': 11.12, 'volume': 47650000},
-                {'trade_date': '2026-04-30', 'open_price': 11.13, 'high_price': 11.31, 'low_price': 11.08, 'close_price': 11.28, 'volume': 56340000},
+                {'trade_date': '2026-04-24', 'open_price': 10.92, 'high_price': 11.05, 'low_price': 10.86, 'close_price': 10.97, 'volume': 51230000, 'turnover_amount_billion': 5.64, 'turnover_rate': 0.29},
+                {'trade_date': '2026-04-25', 'open_price': 10.98, 'high_price': 11.08, 'low_price': 10.91, 'close_price': 11.02, 'volume': 49820000, 'turnover_amount_billion': 5.49, 'turnover_rate': 0.28},
+                {'trade_date': '2026-04-28', 'open_price': 11.03, 'high_price': 11.13, 'low_price': 10.95, 'close_price': 11.08, 'volume': 53410000, 'turnover_amount_billion': 5.93, 'turnover_rate': 0.30},
+                {'trade_date': '2026-04-29', 'open_price': 11.06, 'high_price': 11.16, 'low_price': 11.01, 'close_price': 11.12, 'volume': 47650000, 'turnover_amount_billion': 5.30, 'turnover_rate': 0.27},
+                {'trade_date': '2026-04-30', 'open_price': 11.13, 'high_price': 11.31, 'low_price': 11.08, 'close_price': 11.28, 'volume': 56340000, 'turnover_amount_billion': 6.23, 'turnover_rate': 0.32},
             ],
             '300308': [
-                {'trade_date': '2026-04-24', 'open_price': 157.6, 'high_price': 160.2, 'low_price': 156.8, 'close_price': 159.4, 'volume': 18320000},
-                {'trade_date': '2026-04-25', 'open_price': 159.8, 'high_price': 162.6, 'low_price': 158.9, 'close_price': 161.7, 'volume': 19180000},
-                {'trade_date': '2026-04-28', 'open_price': 162.1, 'high_price': 164.3, 'low_price': 160.7, 'close_price': 163.5, 'volume': 20540000},
-                {'trade_date': '2026-04-29', 'open_price': 163.8, 'high_price': 166.1, 'low_price': 162.9, 'close_price': 165.4, 'volume': 21490000},
-                {'trade_date': '2026-04-30', 'open_price': 165.9, 'high_price': 168.4, 'low_price': 164.7, 'close_price': 167.53, 'volume': 22860000},
+                {'trade_date': '2026-04-24', 'open_price': 157.6, 'high_price': 160.2, 'low_price': 156.8, 'close_price': 159.4, 'volume': 18320000, 'turnover_amount_billion': 29.15, 'turnover_rate': 1.84},
+                {'trade_date': '2026-04-25', 'open_price': 159.8, 'high_price': 162.6, 'low_price': 158.9, 'close_price': 161.7, 'volume': 19180000, 'turnover_amount_billion': 31.01, 'turnover_rate': 1.93},
+                {'trade_date': '2026-04-28', 'open_price': 162.1, 'high_price': 164.3, 'low_price': 160.7, 'close_price': 163.5, 'volume': 20540000, 'turnover_amount_billion': 33.56, 'turnover_rate': 2.07},
+                {'trade_date': '2026-04-29', 'open_price': 163.8, 'high_price': 166.1, 'low_price': 162.9, 'close_price': 165.4, 'volume': 21490000, 'turnover_amount_billion': 35.53, 'turnover_rate': 2.17},
+                {'trade_date': '2026-04-30', 'open_price': 165.9, 'high_price': 168.4, 'low_price': 164.7, 'close_price': 167.53, 'volume': 22860000, 'turnover_amount_billion': 38.28, 'turnover_rate': 2.30},
             ],
             '601138': [
-                {'trade_date': '2026-04-24', 'open_price': 24.85, 'high_price': 25.14, 'low_price': 24.71, 'close_price': 24.98, 'volume': 72540000},
-                {'trade_date': '2026-04-25', 'open_price': 25.01, 'high_price': 25.33, 'low_price': 24.95, 'close_price': 25.21, 'volume': 74810000},
-                {'trade_date': '2026-04-28', 'open_price': 25.25, 'high_price': 25.64, 'low_price': 25.11, 'close_price': 25.48, 'volume': 78130000},
-                {'trade_date': '2026-04-29', 'open_price': 25.56, 'high_price': 25.92, 'low_price': 25.41, 'close_price': 25.56, 'volume': 76280000},
-                {'trade_date': '2026-04-30', 'open_price': 25.61, 'high_price': 26.28, 'low_price': 25.48, 'close_price': 26.17, 'volume': 80550000},
+                {'trade_date': '2026-04-24', 'open_price': 24.85, 'high_price': 25.14, 'low_price': 24.71, 'close_price': 24.98, 'volume': 72540000, 'turnover_amount_billion': 18.14, 'turnover_rate': 0.73},
+                {'trade_date': '2026-04-25', 'open_price': 25.01, 'high_price': 25.33, 'low_price': 24.95, 'close_price': 25.21, 'volume': 74810000, 'turnover_amount_billion': 18.87, 'turnover_rate': 0.75},
+                {'trade_date': '2026-04-28', 'open_price': 25.25, 'high_price': 25.64, 'low_price': 25.11, 'close_price': 25.48, 'volume': 78130000, 'turnover_amount_billion': 19.89, 'turnover_rate': 0.79},
+                {'trade_date': '2026-04-29', 'open_price': 25.56, 'high_price': 25.92, 'low_price': 25.41, 'close_price': 25.56, 'volume': 76280000, 'turnover_amount_billion': 19.50, 'turnover_rate': 0.77},
+                {'trade_date': '2026-04-30', 'open_price': 25.61, 'high_price': 26.28, 'low_price': 25.48, 'close_price': 26.17, 'volume': 80550000, 'turnover_amount_billion': 21.07, 'turnover_rate': 0.84},
             ],
         }
         return sample_bars.get(stock_code, [])
