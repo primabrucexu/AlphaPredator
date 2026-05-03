@@ -136,6 +136,70 @@ CREATE TABLE IF NOT EXISTS stock_universe (
 CREATE INDEX IF NOT EXISTS idx_stock_universe_symbol ON stock_universe (symbol);
 CREATE INDEX IF NOT EXISTS idx_stock_universe_cnspell ON stock_universe (cnspell);
 CREATE INDEX IF NOT EXISTS idx_stock_universe_market ON stock_universe (market);
+
+-- V2 init tables ----------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS init_task (
+    task_id TEXT PRIMARY KEY,
+    mode TEXT NOT NULL DEFAULT 'RANGE',
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    total_days INTEGER NOT NULL DEFAULT 0,
+    processed_days INTEGER NOT NULL DEFAULT 0,
+    trading_days INTEGER NOT NULL DEFAULT 0,
+    done_trading_days INTEGER NOT NULL DEFAULT 0,
+    current_date TEXT NOT NULL DEFAULT '',
+    error_message TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT '',
+    started_at TEXT NOT NULL DEFAULT '',
+    finished_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_init_task_status ON init_task (status);
+CREATE INDEX IF NOT EXISTS idx_init_task_created ON init_task (created_at);
+
+CREATE TABLE IF NOT EXISTS init_task_day (
+    task_id TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    is_trading_day INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    row_count INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT NOT NULL DEFAULT '',
+    finished_at TEXT NOT NULL DEFAULT '',
+    error_message TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (task_id, trade_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_init_task_day_task ON init_task_day (task_id);
+CREATE INDEX IF NOT EXISTS idx_init_task_day_status ON init_task_day (task_id, status);
+
+CREATE TABLE IF NOT EXISTS market_daily_quote (
+    trade_date TEXT NOT NULL,
+    ts_code TEXT NOT NULL,
+    open REAL NOT NULL DEFAULT 0,
+    high REAL NOT NULL DEFAULT 0,
+    low REAL NOT NULL DEFAULT 0,
+    close REAL NOT NULL DEFAULT 0,
+    pre_close REAL NOT NULL DEFAULT 0,
+    change REAL NOT NULL DEFAULT 0,
+    pct_chg REAL NOT NULL DEFAULT 0,
+    vol REAL NOT NULL DEFAULT 0,
+    amount REAL NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (trade_date, ts_code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_daily_quote_date ON market_daily_quote (trade_date);
+CREATE INDEX IF NOT EXISTS idx_market_daily_quote_code ON market_daily_quote (ts_code);
+
+CREATE TABLE IF NOT EXISTS data_range_meta (
+    dataset TEXT PRIMARY KEY,
+    min_trade_date TEXT NOT NULL DEFAULT '',
+    max_trade_date TEXT NOT NULL DEFAULT '',
+    trading_day_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT ''
+);
 '''
 
 

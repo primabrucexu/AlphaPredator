@@ -95,7 +95,7 @@ export interface StockDetailResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 2.9: Data Initialization
+// Data Initialization (legacy types kept for backward compatibility)
 // ---------------------------------------------------------------------------
 
 export type InitStatus = 'idle' | 'running' | 'done' | 'error';
@@ -131,6 +131,74 @@ export interface StockListUploadResponse {
 
 export type MarketBoard = '主板' | '创业板' | '科创板' | '北交所';
 export const ALL_MARKET_BOARDS: MarketBoard[] = ['主板', '创业板', '科创板', '北交所'];
+
+// ---------------------------------------------------------------------------
+// V2 Init types
+// ---------------------------------------------------------------------------
+
+export type TaskStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED';
+
+export interface TaskResponse {
+  task_id: string;
+  mode: string;
+  start_date: string;
+  end_date: string;
+  status: TaskStatus;
+  total_days: number;
+  processed_days: number;
+  trading_days: number;
+  done_trading_days: number;
+  current_date: string;
+  error_message: string;
+  created_at: string;
+  started_at: string;
+  finished_at: string;
+  progress_percent: number;
+}
+
+export type DayStatus =
+  | 'PENDING'
+  | 'SKIPPED_NON_TRADING'
+  | 'FETCHING'
+  | 'WRITING'
+  | 'SUCCESS'
+  | 'FAILED';
+
+export interface TaskDayItem {
+  task_id: string;
+  trade_date: string;
+  is_trading_day: boolean;
+  status: DayStatus;
+  row_count: number;
+  started_at: string;
+  finished_at: string;
+  error_message: string;
+}
+
+export interface TaskDaysResponse {
+  task_id: string;
+  total: number;
+  page: number;
+  per_page: number;
+  days: TaskDayItem[];
+}
+
+export interface DataRangeInfo {
+  min_trade_date: string | null;
+  max_trade_date: string | null;
+  trading_day_count: number;
+}
+
+export interface InitV2OverviewResponse {
+  running_task: TaskResponse | null;
+  latest_task: TaskResponse | null;
+  data_range: DataRangeInfo;
+  token_configured: boolean;
+  stock_list_uploaded: boolean;
+  stock_list_updated_at: string | null;
+  daily_quote_cutoff_time: string | null;
+  board_counts: Record<string, number>;
+}
 
 // ---------------------------------------------------------------------------
 // HTTP helpers
@@ -170,16 +238,6 @@ export function getInitStatus(): Promise<InitStatusResponse> {
   return fetchJson<InitStatusResponse>('/api/data-init/status');
 }
 
-export function startInit(
-  historyDays: number = 60,
-  marketFilters: MarketBoard[] = ALL_MARKET_BOARDS,
-): Promise<InitStatusResponse> {
-  return postJson<InitStatusResponse>('/api/data-init/start', {
-    history_days: historyDays,
-    market_filters: marketFilters,
-  });
-}
-
 export function triggerDailyUpdate(): Promise<UpdateResult> {
   return postJson<UpdateResult>('/api/data-init/update');
 }
@@ -207,7 +265,45 @@ export async function uploadStockList(file: File): Promise<StockListUploadRespon
 }
 
 // ---------------------------------------------------------------------------
-// Phase 2.10: Stock resolve + Init overview
+// V2 Init API functions
+// ---------------------------------------------------------------------------
+
+export function createInitTask(
+  startDate: string,
+  endDate: string,
+  mode: string = 'RANGE',
+): Promise<TaskResponse> {
+  return postJson<TaskResponse>('/api/data-init/tasks', {
+    start_date: startDate,
+    end_date: endDate,
+    mode,
+  });
+}
+
+export function getInitTask(taskId: string): Promise<TaskResponse> {
+  return fetchJson<TaskResponse>(`/api/data-init/tasks/${taskId}`);
+}
+
+export function getInitTaskDays(
+  taskId: string,
+  page: number = 1,
+  perPage: number = 50,
+): Promise<TaskDaysResponse> {
+  return fetchJson<TaskDaysResponse>(
+    `/api/data-init/tasks/${taskId}/days?page=${page}&per_page=${perPage}`,
+  );
+}
+
+export function reimportDay(tradeDate: string): Promise<TaskResponse> {
+  return postJson<TaskResponse>('/api/data-init/reimport-day', { trade_date: tradeDate });
+}
+
+export function getInitV2Overview(): Promise<InitV2OverviewResponse> {
+  return fetchJson<InitV2OverviewResponse>('/api/data-init/init/overview');
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2.10: Stock resolve + Init overview (legacy)
 // ---------------------------------------------------------------------------
 
 export interface StockCandidate {
