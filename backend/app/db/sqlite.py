@@ -187,6 +187,16 @@ CREATE TABLE IF NOT EXISTS market_daily_quote (
     vol REAL NOT NULL DEFAULT 0,
     amount REAL NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT '',
+    is_st INTEGER NOT NULL DEFAULT 0,
+    st_source TEXT NOT NULL DEFAULT '',
+    limit_up_price REAL,
+    limit_down_price REAL,
+    limit_pct REAL,
+    is_limit_up INTEGER NOT NULL DEFAULT 0,
+    is_limit_down INTEGER NOT NULL DEFAULT 0,
+    limit_rule TEXT NOT NULL DEFAULT '',
+    limit_status TEXT NOT NULL DEFAULT '',
+    limit_rule_version TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (trade_date, ts_code)
 );
 
@@ -221,8 +231,45 @@ def ensure_sqlite_schema(sqlite_path: Path | None = None) -> None:
     try:
         connection.executescript(SCHEMA_SQL)
         connection.commit()
+        _migrate_market_daily_quote(connection)
+        connection.commit()
     finally:
         connection.close()
+
+
+def _migrate_market_daily_quote(connection: sqlite3.Connection) -> None:
+    """Add limit/ST columns to market_daily_quote for existing databases.
+
+    SQLite does not support ``ADD COLUMN IF NOT EXISTS`` before v3.37, so we
+    inspect ``PRAGMA table_info`` and issue individual ``ALTER TABLE`` statements
+    only for genuinely missing columns.
+    """
+    new_columns = [
+        ('is_st',              'INTEGER NOT NULL DEFAULT 0'),
+        ('st_source',          'TEXT NOT NULL DEFAULT ""'),
+        ('limit_up_price',     'REAL'),
+        ('limit_down_price',   'REAL'),
+        ('limit_pct',          'REAL'),
+        ('is_limit_up',        'INTEGER NOT NULL DEFAULT 0'),
+        ('is_limit_down',      'INTEGER NOT NULL DEFAULT 0'),
+        ('limit_rule',         'TEXT NOT NULL DEFAULT ""'),
+        ('limit_status',       'TEXT NOT NULL DEFAULT ""'),
+        ('limit_rule_version', 'TEXT NOT NULL DEFAULT ""'),
+    ]
+    # Whitelist of allowed column names to prevent any accidental SQL injection
+    _allowed_col_names = frozenset(col for col, _ in new_columns)
+
+    existing = {
+        row[1]
+        for row in connection.execute('PRAGMA table_info(market_daily_quote)')
+    }
+    for col_name, col_def in new_columns:
+        if col_name not in existing:
+            if col_name not in _allowed_col_names:
+                raise ValueError(f'Unexpected column name: {col_name!r}')
+            connection.execute(
+                f'ALTER TABLE market_daily_quote ADD COLUMN {col_name} {col_def}'
+            )
 
 
 def get_sqlite_engine(sqlite_path: Path | None = None):

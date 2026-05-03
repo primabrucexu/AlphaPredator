@@ -38,6 +38,10 @@ MOCK_DAILY_ROWS = [
         'pre_close': 11.0, 'change': 0.2, 'pct_chg': 1.82,
         'vol': 50000000.0, 'amount': 560000.0,
         'updated_at': '2026-01-01T00:00:00Z',
+        'is_st': 0, 'st_source': '',
+        'limit_up_price': 12.1, 'limit_down_price': 9.9, 'limit_pct': 0.10,
+        'is_limit_up': 0, 'is_limit_down': 0,
+        'limit_rule': 'MAIN', 'limit_status': 'NORMAL', 'limit_rule_version': 'V1',
     },
     {
         'trade_date': '20240102',
@@ -46,6 +50,10 @@ MOCK_DAILY_ROWS = [
         'pre_close': 35.0, 'change': 0.5, 'pct_chg': 1.43,
         'vol': 20000000.0, 'amount': 710000.0,
         'updated_at': '2026-01-01T00:00:00Z',
+        'is_st': 0, 'st_source': '',
+        'limit_up_price': 38.5, 'limit_down_price': 31.5, 'limit_pct': 0.10,
+        'is_limit_up': 0, 'is_limit_down': 0,
+        'limit_rule': 'MAIN', 'limit_status': 'NORMAL', 'limit_rule_version': 'V1',
     },
 ]
 
@@ -161,6 +169,30 @@ def test_atomic_write_day_inserts_rows(tmp_path: Path) -> None:
     assert count == 2
 
 
+def test_atomic_write_day_persists_limit_fields(tmp_path: Path) -> None:
+    from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
+    sqlite_path = tmp_path / 'test.db'
+    ensure_sqlite_schema(sqlite_path)
+
+    _atomic_write_day('20240102', MOCK_DAILY_ROWS, sqlite_path)
+
+    conn = connect_sqlite(sqlite_path)
+    row = conn.execute(
+        'SELECT * FROM market_daily_quote WHERE trade_date = ? AND ts_code = ?',
+        ('20240102', '000001.SZ'),
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row['limit_status'] == 'NORMAL'
+    assert row['limit_rule'] == 'MAIN'
+    assert row['limit_pct'] == pytest.approx(0.10)
+    assert row['limit_up_price'] == pytest.approx(12.1)
+    assert row['limit_down_price'] == pytest.approx(9.9)
+    assert row['is_limit_up'] == 0
+    assert row['is_limit_down'] == 0
+    assert row['limit_rule_version'] == 'V1'
+
+
 def test_atomic_write_day_is_idempotent(tmp_path: Path) -> None:
     from app.db.sqlite import ensure_sqlite_schema
     sqlite_path = tmp_path / 'test.db'
@@ -224,7 +256,7 @@ def test_start_task_returns_false_when_already_running(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _mock_fetch_daily_raw(date_str: str) -> list[dict[str, Any]]:
+def _mock_fetch_daily_raw(date_str: str, sqlite_path: Any = None) -> list[dict[str, Any]]:
     if date_str == '20240102':
         return list(MOCK_DAILY_ROWS)
     return []
