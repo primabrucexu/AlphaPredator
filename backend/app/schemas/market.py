@@ -49,6 +49,31 @@ class StockKeyIndicators(BaseModel):
     avg_volume_5d: int | None = None
 
 
+class StockTags(BaseModel):
+    industry: list[str] = Field(default_factory=list)
+    concepts: list[str] = Field(default_factory=list)
+    region: list[str] = Field(default_factory=list)
+
+
+class StockIndicatorSeries(BaseModel):
+    """Per-bar indicator series aligned with daily_bars (None where history insufficient)."""
+
+    ma5: list[float | None] = Field(default_factory=list)
+    ma10: list[float | None] = Field(default_factory=list)
+    ma20: list[float | None] = Field(default_factory=list)
+    ma60: list[float | None] = Field(default_factory=list)
+    volume_ma5: list[float | None] = Field(default_factory=list)
+    kdj_k: list[float | None] = Field(default_factory=list)
+    kdj_d: list[float | None] = Field(default_factory=list)
+    kdj_j: list[float | None] = Field(default_factory=list)
+    macd_dif: list[float | None] = Field(default_factory=list)
+    macd_dea: list[float | None] = Field(default_factory=list)
+    macd_hist: list[float | None] = Field(default_factory=list)
+    rsi6: list[float | None] = Field(default_factory=list)
+    rsi12: list[float | None] = Field(default_factory=list)
+    rsi24: list[float | None] = Field(default_factory=list)
+
+
 class StockDetailResponse(BaseModel):
     trade_date: str
     stock_code: str
@@ -56,12 +81,18 @@ class StockDetailResponse(BaseModel):
     current_price: float
     change_amount: float
     change_pct: float
+    open_price: float = 0.0
+    prev_close: float = 0.0
+    high_price: float = 0.0
+    low_price: float = 0.0
     turnover_amount_billion: float
     turnover_rate: float
     sectors: list[str]
+    tags: StockTags = Field(default_factory=StockTags)
     ai_quick_summary: str
     key_indicators: StockKeyIndicators
     daily_bars: list[DailyBar]
+    indicators: StockIndicatorSeries = Field(default_factory=StockIndicatorSeries)
 
 
 # ---------------------------------------------------------------------------

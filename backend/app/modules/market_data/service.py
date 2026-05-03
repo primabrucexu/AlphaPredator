@@ -14,8 +14,10 @@ from app.schemas.market import (
     MarketSummary,
     StockCandidate,
     StockDetailResponse,
+    StockIndicatorSeries,
     StockKeyIndicators,
     StockResolveResponse,
+    StockTags,
 )
 
 
@@ -50,6 +52,21 @@ class MarketDataService:
         payload['daily_bars'] = daily_bars
         payload['trade_date'] = payload.get('trade_date') or (daily_bars[-1]['trade_date'] if daily_bars else '')
         payload['key_indicators'] = self._build_key_indicators(daily_bars)
+        # Derive open/high/low/prev_close from latest daily bar
+        if daily_bars:
+            latest = daily_bars[-1]
+            payload['open_price'] = float(latest['open_price'])
+            payload['high_price'] = float(latest['high_price'])
+            payload['low_price'] = float(latest['low_price'])
+        else:
+            payload.setdefault('open_price', 0.0)
+            payload.setdefault('high_price', 0.0)
+            payload.setdefault('low_price', 0.0)
+        payload['prev_close'] = round(float(payload['current_price']) - float(payload['change_amount']), 2)
+        # Build structured tags (sectors → industry; no concept/region data yet)
+        payload['tags'] = {'industry': list(payload.get('sectors', [])), 'concepts': [], 'region': []}
+        # Compute indicator series
+        payload['indicators'] = self._build_indicator_series(daily_bars)
         return self._build_stock_detail_response(payload)
 
     def resolve_stock(self, query: str) -> StockResolveResponse:
@@ -493,6 +510,131 @@ class MarketDataService:
             return None
         return int(round(sum(values[-window:]) / window))
 
+    # ------------------------------------------------------------------
+    # Indicator series computation
+    # ------------------------------------------------------------------
+
+    def _compute_ma_series(self, values: list[float], window: int) -> list[float | None]:
+        n = len(values)
+        result: list[float | None] = [None] * n
+        for i in range(window - 1, n):
+            result[i] = round(sum(values[i - window + 1 : i + 1]) / window, 2)
+        return result
+
+    def _compute_ema_series(self, values: list[float], span: int) -> list[float]:
+        """Exponential moving average with alpha = 2/(span+1), seeded with first value."""
+        alpha = 2.0 / (span + 1)
+        result = [0.0] * len(values)
+        if not values:
+            return result
+        result[0] = values[0]
+        for i in range(1, len(values)):
+            result[i] = alpha * values[i] + (1 - alpha) * result[i - 1]
+        return result
+
+    def _compute_kdj_series(
+        self,
+        highs: list[float],
+        lows: list[float],
+        closes: list[float],
+        n: int = 9,
+    ) -> tuple[list[float | None], list[float | None], list[float | None]]:
+        """KDJ using Wilder's smoothing (1/3 factor).  Seeds K=D=50."""
+        N = len(closes)
+        k_vals: list[float | None] = [None] * N
+        d_vals: list[float | None] = [None] * N
+        j_vals: list[float | None] = [None] * N
+        prev_k, prev_d = 50.0, 50.0
+        for i in range(n - 1, N):
+            h_n = max(highs[i - n + 1 : i + 1])
+            l_n = min(lows[i - n + 1 : i + 1])
+            rsv = (closes[i] - l_n) / (h_n - l_n) * 100 if h_n != l_n else 50.0
+            k = prev_k * 2 / 3 + rsv / 3
+            d = prev_d * 2 / 3 + k / 3
+            j = 3 * k - 2 * d
+            k_vals[i] = round(k, 2)
+            d_vals[i] = round(d, 2)
+            j_vals[i] = round(j, 2)
+            prev_k, prev_d = k, d
+        return k_vals, d_vals, j_vals
+
+    def _compute_macd_series(
+        self, closes: list[float]
+    ) -> tuple[list[float | None], list[float | None], list[float | None]]:
+        """MACD(12,26,9). EMA seeded from first close."""
+        N = len(closes)
+        dif_vals: list[float | None] = [None] * N
+        dea_vals: list[float | None] = [None] * N
+        hist_vals: list[float | None] = [None] * N
+        if N == 0:
+            return dif_vals, dea_vals, hist_vals
+        ema12 = self._compute_ema_series(closes, 12)
+        ema26 = self._compute_ema_series(closes, 26)
+        dif_raw = [ema12[i] - ema26[i] for i in range(N)]
+        dea_raw = self._compute_ema_series(dif_raw, 9)
+        for i in range(N):
+            dif_vals[i] = round(dif_raw[i], 4)
+            dea_vals[i] = round(dea_raw[i], 4)
+            hist_vals[i] = round((dif_raw[i] - dea_raw[i]) * 2, 4)
+        return dif_vals, dea_vals, hist_vals
+
+    def _compute_rsi_series(self, closes: list[float], n: int) -> list[float | None]:
+        """RSI with Wilder's smoothing.  First valid value at index n."""
+        N = len(closes)
+        result: list[float | None] = [None] * N
+        if N < n + 1:
+            return result
+        changes = [closes[i] - closes[i - 1] for i in range(1, N)]
+        gains = [max(c, 0.0) for c in changes]
+        losses = [max(-c, 0.0) for c in changes]
+        avg_gain = sum(gains[:n]) / n
+        avg_loss = sum(losses[:n]) / n
+
+        def _rsi(gain: float, loss: float) -> float:
+            if loss == 0:
+                return 100.0
+            return round(100 - 100 / (1 + gain / loss), 2)
+
+        result[n] = _rsi(avg_gain, avg_loss)
+        for i in range(n + 1, N):
+            avg_gain = (avg_gain * (n - 1) + gains[i - 1]) / n
+            avg_loss = (avg_loss * (n - 1) + losses[i - 1]) / n
+            result[i] = _rsi(avg_gain, avg_loss)
+        return result
+
+    def _build_indicator_series(self, daily_bars: list[dict[str, Any]]) -> dict[str, Any]:
+        if not daily_bars:
+            empty: list[None] = []
+            return {
+                'ma5': empty, 'ma10': empty, 'ma20': empty, 'ma60': empty,
+                'volume_ma5': empty,
+                'kdj_k': empty, 'kdj_d': empty, 'kdj_j': empty,
+                'macd_dif': empty, 'macd_dea': empty, 'macd_hist': empty,
+                'rsi6': empty, 'rsi12': empty, 'rsi24': empty,
+            }
+        closes = [float(b['close_price']) for b in daily_bars]
+        highs = [float(b['high_price']) for b in daily_bars]
+        lows = [float(b['low_price']) for b in daily_bars]
+        volumes = [float(b['volume']) for b in daily_bars]
+        k_vals, d_vals, j_vals = self._compute_kdj_series(highs, lows, closes)
+        dif_vals, dea_vals, hist_vals = self._compute_macd_series(closes)
+        return {
+            'ma5': self._compute_ma_series(closes, 5),
+            'ma10': self._compute_ma_series(closes, 10),
+            'ma20': self._compute_ma_series(closes, 20),
+            'ma60': self._compute_ma_series(closes, 60),
+            'volume_ma5': self._compute_ma_series(volumes, 5),
+            'kdj_k': k_vals,
+            'kdj_d': d_vals,
+            'kdj_j': j_vals,
+            'macd_dif': dif_vals,
+            'macd_dea': dea_vals,
+            'macd_hist': hist_vals,
+            'rsi6': self._compute_rsi_series(closes, 6),
+            'rsi12': self._compute_rsi_series(closes, 12),
+            'rsi24': self._compute_rsi_series(closes, 24),
+        }
+
     def _build_market_overview_response(self, payload: dict[str, Any]) -> MarketOverviewResponse:
         return MarketOverviewResponse(
             summary=MarketSummary(**payload['summary']),
@@ -519,12 +661,18 @@ class MarketDataService:
             current_price=payload['current_price'],
             change_amount=payload['change_amount'],
             change_pct=payload['change_pct'],
+            open_price=payload.get('open_price', 0.0),
+            prev_close=payload.get('prev_close', 0.0),
+            high_price=payload.get('high_price', 0.0),
+            low_price=payload.get('low_price', 0.0),
             turnover_amount_billion=payload['turnover_amount_billion'],
             turnover_rate=payload['turnover_rate'],
             sectors=payload['sectors'],
+            tags=StockTags(**payload.get('tags', {})),
             ai_quick_summary=payload['ai_quick_summary'],
             key_indicators=StockKeyIndicators(**payload['key_indicators']),
             daily_bars=[DailyBar(**daily_bar) for daily_bar in payload['daily_bars']],
+            indicators=StockIndicatorSeries(**payload.get('indicators', {})),
         )
 
     def _sample_market_overview_payload(self) -> dict[str, Any]:

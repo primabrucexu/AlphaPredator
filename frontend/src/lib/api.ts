@@ -46,6 +46,29 @@ export interface StockKeyIndicators {
   avg_volume_5d: number | null;
 }
 
+export interface StockTags {
+  industry: string[];
+  concepts: string[];
+  region: string[];
+}
+
+export interface StockIndicatorSeries {
+  ma5: (number | null)[];
+  ma10: (number | null)[];
+  ma20: (number | null)[];
+  ma60: (number | null)[];
+  volume_ma5: (number | null)[];
+  kdj_k: (number | null)[];
+  kdj_d: (number | null)[];
+  kdj_j: (number | null)[];
+  macd_dif: (number | null)[];
+  macd_dea: (number | null)[];
+  macd_hist: (number | null)[];
+  rsi6: (number | null)[];
+  rsi12: (number | null)[];
+  rsi24: (number | null)[];
+}
+
 export interface StockDetailResponse {
   trade_date: string;
   stock_code: string;
@@ -53,12 +76,18 @@ export interface StockDetailResponse {
   current_price: number;
   change_amount: number;
   change_pct: number;
+  open_price: number;
+  prev_close: number;
+  high_price: number;
+  low_price: number;
   turnover_amount_billion: number;
   turnover_rate: number;
   sectors: string[];
+  tags: StockTags;
   ai_quick_summary: string;
   key_indicators: StockKeyIndicators;
   daily_bars: DailyBar[];
+  indicators: StockIndicatorSeries;
 }
 
 // ---------------------------------------------------------------------------
