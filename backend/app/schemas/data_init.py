@@ -32,6 +32,9 @@ class UpdateResult(BaseModel):
     trade_date: str
     stock_count: int
     bar_count: int
+    start_trade_date: str = Field('', description='补齐区间起始交易日')
+    end_trade_date: str = Field('', description='补齐区间结束交易日')
+    processed_trade_dates: list[str] = Field(default_factory=list, description='已补齐的交易日列表')
 
 
 class TokenConfigResponse(BaseModel):

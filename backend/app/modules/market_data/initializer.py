@@ -23,7 +23,7 @@ from typing import Any
 
 from app.core.settings import settings
 from app.modules.market_data.data_source import (
-    fetch_daily_bars_for_stock,
+    fetch_daily_bars_by_date,
     fetch_spot_snapshot,
     fetch_stock_pool,
     get_default_history_start,
@@ -173,7 +173,15 @@ def _run_initialization(
         snapshot_rows = fetch_spot_snapshot(trade_date, market_filters=market_filters)
         stock_pool = fetch_stock_pool(snapshot_rows, market_filters=market_filters)
 
-        total = len(stock_pool)
+        # ---- Step 2: enumerate trade dates and fetch bars per date ----
+        trade_dates = _get_date_range(start_date, end_date)
+        total = len(trade_dates)
+        logger.info(
+            'Initialization: fetching historical bars for %d calendar days (%s – %s) …',
+            total,
+            start_date,
+            end_date,
+        )
         _write_status(
             {
                 'status': 'running',
@@ -187,15 +195,11 @@ def _run_initialization(
             status_dir,
         )
 
-        # ---- Step 2: fetch historical bars per stock ----
-        logger.info('Initialization: fetching historical bars for %d stocks …', total)
         all_bars: list[dict[str, Any]] = []
-        for idx, stock in enumerate(stock_pool):
-            code = stock['stock_code']
-            # Rate limiting is handled inside fetch_daily_bars_for_stock via _rate_limited_call
-            bars = fetch_daily_bars_for_stock(code, start_date=start_date, end_date=end_date)
+        for idx, td in enumerate(trade_dates):
+            bars = fetch_daily_bars_by_date(td, market_filters=market_filters)
             all_bars.extend(bars)
-            if (idx + 1) % 50 == 0 or idx + 1 == total:
+            if (idx + 1) % 10 == 0 or idx + 1 == total:
                 _write_status(
                     {
                         'status': 'running',
@@ -250,7 +254,7 @@ def _run_initialization(
             },
             status_dir,
         )
-        logger.info('Initialization complete: %d stocks, trade_date=%s', total, trade_date)
+        logger.info('Initialization complete: %d date(s) processed, trade_date=%s', total, trade_date)
 
     except Exception as exc:  # noqa: BLE001
         logger.exception('Initialization failed: %s', exc)
@@ -311,7 +315,7 @@ def _write_batch(
 
     _write_csv(
         batch_dir / 'daily_bars.csv',
-        ['stock_code', 'trade_date', 'open_price', 'high_price', 'low_price', 'close_price', 'volume'],
+        ['stock_code', 'trade_date', 'open_price', 'high_price', 'low_price', 'close_price', 'volume', 'turnover_amount_billion'],
         [{
             'stock_code': r['stock_code'],
             'trade_date': r['trade_date'],
@@ -320,6 +324,7 @@ def _write_batch(
             'low_price': r['low_price'],
             'close_price': r['close_price'],
             'volume': r['volume'],
+            'turnover_amount_billion': r.get('turnover_amount_billion', 0.0),
         } for r in daily_bars],
     )
 
@@ -329,6 +334,20 @@ def _write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) ->
         writer = csv.DictWriter(fh, fieldnames=fieldnames, extrasaction='ignore')
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _get_date_range(start_date: str, end_date: str) -> list[str]:
+    """Return all calendar dates from start_date to end_date inclusive (ISO format)."""
+    from datetime import datetime, timedelta
+
+    start = datetime.strptime(start_date, '%Y-%m-%d').date()
+    end = datetime.strptime(end_date, '%Y-%m-%d').date()
+    result: list[str] = []
+    current = start
+    while current <= end:
+        result.append(current.strftime('%Y-%m-%d'))
+        current += timedelta(days=1)
+    return result
 
 
 def _now_iso() -> str:

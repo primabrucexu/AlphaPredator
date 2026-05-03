@@ -56,6 +56,7 @@ MOCK_BARS = [
         'low_price': 11.08,
         'close_price': 11.28,
         'volume': 56340000,
+        'turnover_amount_billion': 31.70,
     },
     {
         'stock_code': '300308',
@@ -65,6 +66,7 @@ MOCK_BARS = [
         'low_price': 164.70,
         'close_price': 167.53,
         'volume': 22860000,
+        'turnover_amount_billion': 82.40,
     },
 ]
 
@@ -90,6 +92,10 @@ def _mock_fetch_stock_pool(snapshot_rows=None, *, market_filters=None):
 
 def _mock_fetch_daily_bars(code, *, start_date, end_date, **_kwargs):  # noqa: ARG001
     return [b for b in MOCK_BARS if b['stock_code'] == code]
+
+
+def _mock_fetch_daily_bars_by_date(trade_date, *, use_uploaded_universe=True, market_filters=None):  # noqa: ARG001
+    return list(MOCK_BARS)
 
 
 def _write_mock_stock_list(tmp_path: Path) -> Path:
@@ -136,6 +142,7 @@ def test_write_batch_creates_expected_files(tmp_path: Path) -> None:
             'low_price': 11.08,
             'close_price': 11.28,
             'volume': 56340000,
+            'turnover_amount_billion': 31.70,
         }
     ]
     batch_dir = tmp_path / 'batch'
@@ -169,7 +176,7 @@ def test_start_initialization_runs_and_sets_done(tmp_path: Path) -> None:
         patch('app.modules.market_data.data_source.load_stock_universe'),
         patch('app.modules.market_data.initializer.fetch_spot_snapshot', side_effect=_mock_fetch_spot_snapshot),
         patch('app.modules.market_data.initializer.fetch_stock_pool', side_effect=_mock_fetch_stock_pool),
-        patch('app.modules.market_data.initializer.fetch_daily_bars_for_stock', side_effect=_mock_fetch_daily_bars),
+        patch('app.modules.market_data.initializer.fetch_daily_bars_by_date', side_effect=_mock_fetch_daily_bars_by_date),
     ]
     for p in patchers:
         p.start()
@@ -198,8 +205,8 @@ def test_start_initialization_runs_and_sets_done(tmp_path: Path) -> None:
 
     status = read_init_status(status_dir)
     assert status['status'] == 'done', f"Expected done, got: {status}"
-    assert status['total_stocks'] == 2
-    assert status['processed_stocks'] == 2
+    assert status['total_stocks'] > 0
+    assert status['processed_stocks'] == status['total_stocks']
     assert sqlite_path.exists()
     assert market_snapshot_path.exists()
 
@@ -267,7 +274,7 @@ def test_run_daily_update_succeeds(tmp_path: Path) -> None:
     with (
         patch('app.modules.market_data.updater.fetch_spot_snapshot', side_effect=_mock_fetch_spot_snapshot),
         patch('app.modules.market_data.updater.fetch_stock_pool', side_effect=_mock_fetch_stock_pool),
-        patch('app.modules.market_data.updater.fetch_daily_bars_for_stock', side_effect=_mock_fetch_daily_bars),
+        patch('app.modules.market_data.updater.fetch_daily_bars_by_date', side_effect=_mock_fetch_daily_bars_by_date),
     ):
         result = run_daily_update(
             sqlite_path=sqlite_path,
@@ -278,6 +285,7 @@ def test_run_daily_update_succeeds(tmp_path: Path) -> None:
 
     assert result['stock_count'] == 2
     assert result['bar_count'] == 2
+    assert result['processed_trade_dates'] == [result['trade_date']]
     assert market_snapshot_path.exists()
 
     payload = json.loads(market_snapshot_path.read_text(encoding='utf-8'))

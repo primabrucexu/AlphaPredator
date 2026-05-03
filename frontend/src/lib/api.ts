@@ -114,6 +114,9 @@ export interface UpdateResult {
   trade_date: string;
   stock_count: number;
   bar_count: number;
+  start_trade_date: string;
+  end_trade_date: string;
+  processed_trade_dates: string[];
 }
 
 export interface TokenConfigResponse {

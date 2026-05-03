@@ -18,7 +18,7 @@ from typing import Any
 from app.core.settings import settings
 from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
 from app.modules.market_data.data_source import (
-    fetch_daily_bars_for_stock,
+    fetch_daily_bars_by_date,
     fetch_spot_snapshot,
     fetch_stock_pool,
 )
@@ -70,6 +70,9 @@ def run_daily_update(
         'trade_date': trade_date,
         'stock_count': len(stock_pool),
         'bar_count': len(today_bars),
+        'start_trade_date': trade_date,
+        'end_trade_date': trade_date,
+        'processed_trade_dates': [trade_date],
     }
 
 
@@ -143,18 +146,8 @@ def _fetch_today_bars(
     stock_pool: list[dict[str, Any]],
     trade_date: str,
 ) -> list[dict[str, Any]]:
-    import time
-
-    all_bars: list[dict[str, Any]] = []
-    for stock in stock_pool:
-        bars = fetch_daily_bars_for_stock(
-            stock['stock_code'],
-            start_date=trade_date,
-            end_date=trade_date,
-        )
-        all_bars.extend(bars)
-        time.sleep(0.05)
-    return all_bars
+    """Fetch today's daily bars for all stocks in one bulk API call."""
+    return fetch_daily_bars_by_date(trade_date)
 
 
 def _upsert_duckdb(
@@ -177,7 +170,7 @@ def _upsert_duckdb(
             conn.execute('DELETE FROM daily_bars WHERE trade_date = ?', [td])
 
         conn.executemany(
-            'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
             [
                 (
                     r['stock_code'],
@@ -187,6 +180,7 @@ def _upsert_duckdb(
                     r['low_price'],
                     r['close_price'],
                     r['volume'],
+                    r.get('turnover_amount_billion', 0.0),
                 )
                 for r in today_bars
             ],

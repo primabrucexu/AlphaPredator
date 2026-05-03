@@ -140,6 +140,8 @@ def _read_daily_bars(file_path: Path) -> list[dict[str, Any]]:
             'low_price': float(row['low_price']),
             'close_price': float(row['close_price']),
             'volume': int(row['volume']),
+            # Optional field: 0.0 when missing (backward compat with old CSVs)
+            'turnover_amount_billion': float(row.get('turnover_amount_billion') or 0.0),
         }
         for row in rows
     ]
@@ -278,7 +280,7 @@ def _write_duckdb_data(*, duckdb_path: Path, daily_bars: list[dict[str, Any]], d
         connection.execute('DELETE FROM daily_bars')
         if daily_bars:
             connection.executemany(
-                'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?)',
+                'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
                 [
                     (
                         row['stock_code'],
@@ -288,6 +290,7 @@ def _write_duckdb_data(*, duckdb_path: Path, daily_bars: list[dict[str, Any]], d
                         row['low_price'],
                         row['close_price'],
                         row['volume'],
+                        row.get('turnover_amount_billion', 0.0),
                     )
                     for row in daily_bars
                 ],
