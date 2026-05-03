@@ -100,19 +100,28 @@ async def upload_stock_list(file: UploadFile) -> StockListUploadResponse:
     conn = connect_sqlite()
     try:
         conn.execute('DELETE FROM stock_universe')
-        rows_to_insert = []
-        for _, row in df.iterrows():
-            rows_to_insert.append((
-                str(row.get('ts_code', '') or '').strip(),
-                str(row.get('symbol', '') or '').strip(),
-                str(row.get('name', '') or '').strip(),
-                str(row.get('cnspell', '') or '').strip().upper(),
-                str(row.get('market', '') or '').strip(),
-                str(row.get('list_status', '') or '').strip(),
-                str(row.get('list_date', '') or '').strip(),
-                str(row.get('delist_date', '') or '').strip(),
+        # Build insert rows using vectorised pandas operations for performance
+        fill_cols = {c: '' for c in ['cnspell', 'market', 'list_status', 'list_date', 'delist_date']
+                     if c not in df.columns}
+        for col, default in fill_cols.items():
+            df[col] = default
+        # Normalise cnspell to uppercase
+        df['cnspell'] = df['cnspell'].fillna('').astype(str).str.strip().str.upper()
+        rows_to_insert = [
+            (
+                str(r.ts_code or '').strip(),
+                str(r.symbol or '').strip(),
+                str(r.name or '').strip(),
+                str(r.cnspell or ''),
+                str(r.market or '').strip(),
+                str(r.list_status or '').strip(),
+                str(r.list_date or '').strip(),
+                str(r.delist_date or '').strip(),
                 uploaded_at,
-            ))
+            )
+            for r in df[['ts_code', 'symbol', 'name', 'cnspell', 'market',
+                          'list_status', 'list_date', 'delist_date']].itertuples(index=False)
+        ]
         conn.executemany(
             '''INSERT OR REPLACE INTO stock_universe
                (ts_code, symbol, name, cnspell, market, list_status, list_date, delist_date, uploaded_at)
@@ -245,11 +254,14 @@ def get_init_overview() -> InitOverviewResponse:
             mtime = stock_list_path.stat().st_mtime
             stock_list_updated_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
 
-    # Daily quote cutoff: 15:30 CST (07:30 UTC) on today's date
-    from datetime import timedelta
-    today_utc = datetime.now(timezone.utc).date()
-    cutoff_utc = datetime(today_utc.year, today_utc.month, today_utc.day, 7, 30, tzinfo=timezone.utc)
-    daily_quote_cutoff_time = cutoff_utc.isoformat()
+    # Daily quote cutoff: 15:30 CST on today's date.
+    # CST = UTC+8, so 15:30 CST = 07:30 UTC.  We express the cutoff in local
+    # Shanghai time using a fixed +08:00 offset (China Standard Time has no DST).
+    from zoneinfo import ZoneInfo
+    cst = ZoneInfo('Asia/Shanghai')
+    now_cst = datetime.now(cst)
+    cutoff_cst = now_cst.replace(hour=15, minute=30, second=0, microsecond=0)
+    daily_quote_cutoff_time = cutoff_cst.isoformat()
 
     return InitOverviewResponse(
         init_completed=init_completed,
