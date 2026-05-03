@@ -170,3 +170,37 @@ export async function uploadStockList(file: File): Promise<StockListUploadRespon
   return response.json() as Promise<StockListUploadResponse>;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 2.10: Stock resolve + Init overview
+// ---------------------------------------------------------------------------
+
+export interface StockCandidate {
+  stock_code: string;
+  stock_name: string;
+}
+
+export interface StockResolveResponse {
+  status: 'ok' | 'not_found' | 'ambiguous';
+  stock_code?: string;
+  stock_name?: string;
+  match_type?: 'code' | 'cnspell' | 'cnspell_prefix';
+  message?: string;
+  candidates?: StockCandidate[];
+}
+
+export interface InitOverviewResponse {
+  init_completed: boolean;
+  token_configured: boolean;
+  stock_list_uploaded: boolean;
+  stock_list_updated_at: string | null;
+  daily_quote_cutoff_time: string | null;
+  board_counts: Record<string, number>;
+}
+
+export function resolveStockInput(query: string): Promise<StockResolveResponse> {
+  return fetchJson<StockResolveResponse>(`/api/market/resolve?q=${encodeURIComponent(query)}`);
+}
+
+export function getInitOverview(): Promise<InitOverviewResponse> {
+  return fetchJson<InitOverviewResponse>('/api/data-init/overview');
+}
