@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.settings import settings
-from app.db.duckdb import connect_duckdb, ensure_duckdb_parent, ensure_duckdb_schema
+from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_parent, ensure_duckdb_schema
 from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
 
 

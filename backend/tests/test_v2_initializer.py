@@ -173,7 +173,7 @@ def test_atomic_write_day_inserts_rows(tmp_path: Path) -> None:
 
 def test_atomic_write_day_also_writes_duckdb(tmp_path: Path) -> None:
     """_atomic_write_day must populate DuckDB daily_bars for detail-page queries."""
-    from app.db.duckdb import connect_duckdb, ensure_duckdb_schema
+    from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_schema
     from app.db.sqlite import ensure_sqlite_schema
     sqlite_path = tmp_path / 'test.db'
     duckdb_path = tmp_path / 'test.duckdb'
@@ -202,7 +202,7 @@ def test_atomic_write_day_also_writes_duckdb(tmp_path: Path) -> None:
 
 def test_write_duckdb_day_direct(tmp_path: Path) -> None:
     """_write_duckdb_day correctly maps ts_code → stock_code and date format."""
-    from app.db.duckdb import connect_duckdb, ensure_duckdb_schema
+    from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_schema
     duckdb_path = tmp_path / 'test.duckdb'
     ensure_duckdb_schema(duckdb_path)
 
@@ -223,7 +223,7 @@ def test_write_duckdb_day_direct(tmp_path: Path) -> None:
 
 def test_write_duckdb_day_idempotent(tmp_path: Path) -> None:
     """Writing the same day twice should result in 2 rows, not 4."""
-    from app.db.duckdb import connect_duckdb, ensure_duckdb_schema
+    from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_schema
     duckdb_path = tmp_path / 'test.duckdb'
     ensure_duckdb_schema(duckdb_path)
 
@@ -379,7 +379,7 @@ def test_full_task_run_succeeds(tmp_path: Path) -> None:
     assert count == 2
 
     # Verify data was also written to DuckDB for detail-page queries
-    from app.db.duckdb import connect_duckdb
+    from app.db.duckdb_storage import connect_duckdb
     dconn = connect_duckdb(duckdb_path)
     dcount = dconn.execute(
         "SELECT COUNT(*) FROM daily_bars WHERE trade_date = '2024-01-02'"

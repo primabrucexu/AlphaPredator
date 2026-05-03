@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import api_router
 from app.core.settings import settings
-from app.db.duckdb import ensure_duckdb_parent, ensure_duckdb_schema
+from app.db.duckdb_storage import ensure_duckdb_parent, ensure_duckdb_schema
 from app.db.sqlite import ensure_sqlite_parent, ensure_sqlite_schema
 
 # Ensure the application's own loggers emit at INFO level so task lifecycle

@@ -158,7 +158,7 @@ def _upsert_duckdb(
     if not today_bars:
         return
 
-    from app.db.duckdb import connect_duckdb, ensure_duckdb_parent, ensure_duckdb_schema
+    from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_parent, ensure_duckdb_schema
     ensure_duckdb_parent(duckdb_path, daily_bars_parquet_path.parent)
     ensure_duckdb_schema(duckdb_path)
 

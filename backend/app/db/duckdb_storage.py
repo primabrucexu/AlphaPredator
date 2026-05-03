@@ -4,7 +4,6 @@ import duckdb
 
 from app.core.settings import settings
 
-
 DAILY_BARS_SCHEMA_SQL = '''
 CREATE TABLE IF NOT EXISTS daily_bars (
     stock_code VARCHAR NOT NULL,
@@ -45,3 +44,9 @@ def ensure_duckdb_schema(duckdb_path: Path | None = None) -> None:
             pass  # Column already exists
     finally:
         connection.close()
+
+if __name__ == '__main__':
+    duck = connect_duckdb(Path("data/duckdb/alphapredator.duckdb"))
+    duck.execute("CALL start_ui();")
+    print("duckdb ui启动完成")
+    input("按任意键退出...")

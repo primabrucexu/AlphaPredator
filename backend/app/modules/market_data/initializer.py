@@ -77,7 +77,7 @@ def _connect(sqlite_path: Path | None = None):
 
 
 def _connect_duckdb(duckdb_path: Path | None = None):
-    from app.db.duckdb import connect_duckdb, ensure_duckdb_parent, ensure_duckdb_schema
+    from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_parent, ensure_duckdb_schema
     target = duckdb_path or settings.duckdb_path
     ensure_duckdb_parent(target)
     ensure_duckdb_schema(target)

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.settings import settings
-from app.db.duckdb import connect_duckdb
+from app.db.duckdb_storage import connect_duckdb
 from app.db.sqlite import connect_sqlite
 from app.schemas.market import (
     DailyBar,

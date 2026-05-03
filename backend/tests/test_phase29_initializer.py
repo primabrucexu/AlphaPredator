@@ -102,7 +102,7 @@ def _mock_fetch_daily_bars_by_date(trade_date, *, use_uploaded_universe=True, ma
 
 def test_run_daily_update_succeeds(tmp_path: Path) -> None:
     from app.db.sqlite import ensure_sqlite_schema
-    from app.db.duckdb import ensure_duckdb_parent, ensure_duckdb_schema
+    from app.db.duckdb_storage import ensure_duckdb_parent, ensure_duckdb_schema
     from app.modules.market_data.updater import run_daily_update
 
     sqlite_path = tmp_path / 'sqlite' / 'alphapredator.db'
