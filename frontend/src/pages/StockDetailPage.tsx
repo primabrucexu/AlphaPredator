@@ -6,10 +6,17 @@ import { useParams } from 'react-router-dom';
 import { getStockDetail, type DailyBar, type StockDetailResponse, type StockIndicatorSeries } from '../lib/api';
 
 // ---------------------------------------------------------------------------
-// Constants
+// Color tokens (from docs/kline-limit-color-design.md, light theme)
 // ---------------------------------------------------------------------------
-const UP_COLOR = '#cf1322';
-const DOWN_COLOR = '#14b8a6';
+const UP_COLOR = '#E64B4B';          // up_normal fill
+const UP_BORDER_COLOR = '#C62828';   // up_normal border
+const DOWN_COLOR = '#2FA164';        // down_normal fill
+const DOWN_BORDER_COLOR = '#1E7A4C'; // down_normal border
+// Limit colors (P1: requires is_limit_up/is_limit_down fields from backend)
+// const UP_LIMIT_COLOR = '#8E24AA';
+// const UP_LIMIT_BORDER = '#6A1B9A';
+// const DOWN_LIMIT_COLOR = '#1565C0';
+// const DOWN_LIMIT_BORDER = '#0D47A1';
 
 const MA_COLORS: Record<string, string> = {
   MA5: '#f5a623',
@@ -54,8 +61,8 @@ function InfoRow({ items }: { items: { label: string; value: string; color?: str
     <div style={{ fontSize: 12, lineHeight: 1.6 }}>
       {items.map(({ label, value, color }) => (
         <span key={label} style={{ marginRight: 16 }}>
-          <span style={{ color: '#999' }}>{label}: </span>
-          <span style={{ color: color ?? '#d9d9d9', fontWeight: 500 }}>{value}</span>
+          <span style={{ color: '#8c8c8c' }}>{label}: </span>
+          <span style={{ color: color ?? '#262626', fontWeight: 500 }}>{value}</span>
         </span>
       ))}
     </div>
@@ -75,15 +82,15 @@ function KLineInfoBar({
   const priceColor = bar.close_price >= bar.open_price ? UP_COLOR : DOWN_COLOR;
 
   return (
-    <div style={{ padding: '4px 0 8px', borderBottom: '1px solid #2a2a2a', marginBottom: 4 }}>
+    <div style={{ padding: '4px 0 8px', borderBottom: '1px solid #e8e8e8', marginBottom: 4 }}>
       <InfoRow
         items={[
           { label: '日期', value: bar.trade_date },
-          { label: '开', value: fmtNum(bar.open_price), color: '#d9d9d9' },
+          { label: '开', value: fmtNum(bar.open_price), color: '#262626' },
           { label: '高', value: fmtNum(bar.high_price), color: UP_COLOR },
           { label: '低', value: fmtNum(bar.low_price), color: DOWN_COLOR },
           { label: '收', value: fmtNum(bar.close_price), color: priceColor },
-          { label: '量', value: fmtVol(bar.volume), color: '#d9d9d9' },
+          { label: '量', value: fmtVol(bar.volume), color: '#262626' },
         ]}
       />
       <InfoRow
@@ -174,9 +181,9 @@ function buildChartOption(data: StockDetailResponse) {
     type: 'category' as const,
     data: dates,
     boundaryGap: true,
-    axisLine: { lineStyle: { color: '#555' } },
+    axisLine: { lineStyle: { color: '#d0d0d0' } },
     axisTick: { show: false },
-    axisLabel: { color: '#999', fontSize: 11 },
+    axisLabel: { color: '#666', fontSize: 11 },
     splitLine: { show: false },
   };
 
@@ -193,8 +200,8 @@ function buildChartOption(data: StockDetailResponse) {
     position: 'right' as const,
     axisLine: { show: false },
     axisTick: { show: false },
-    axisLabel: { color: '#999', fontSize: 10 },
-    splitLine: { lineStyle: { color: '#2a2a2a', type: 'dashed' as const } },
+    axisLabel: { color: '#666', fontSize: 10 },
+    splitLine: { lineStyle: { color: '#e8e8e8', type: 'dashed' as const } },
   };
 
   const yAxes = [
@@ -223,11 +230,11 @@ function buildChartOption(data: StockDetailResponse) {
       bottom: '1%',
       height: 18,
       handleSize: '80%',
-      borderColor: '#444',
-      fillerColor: 'rgba(80,80,80,0.2)',
-      backgroundColor: '#1a1a1a',
-      dataBackground: { areaStyle: { color: '#444' }, lineStyle: { color: '#555' } },
-      textStyle: { color: '#999', fontSize: 10 },
+      borderColor: '#d0d0d0',
+      fillerColor: 'rgba(100,150,200,0.15)',
+      backgroundColor: '#f5f5f5',
+      dataBackground: { areaStyle: { color: '#d0d0d0' }, lineStyle: { color: '#bbb' } },
+      textStyle: { color: '#666', fontSize: 10 },
     },
   ];
 
@@ -328,8 +335,8 @@ function buildChartOption(data: StockDetailResponse) {
         itemStyle: {
           color: UP_COLOR,
           color0: DOWN_COLOR,
-          borderColor: UP_COLOR,
-          borderColor0: DOWN_COLOR,
+          borderColor: UP_BORDER_COLOR,
+          borderColor0: DOWN_BORDER_COLOR,
         },
         z: 2,
       },
@@ -371,8 +378,8 @@ function QuoteItem({ label, value, color }: { label: string; value: string; colo
   return (
     <Col xs={8} sm={4}>
       <div style={{ textAlign: 'center' }}>
-        <div style={{ fontSize: 11, color: '#999', marginBottom: 2 }}>{label}</div>
-        <div style={{ fontSize: 14, fontWeight: 500, color: color ?? '#d9d9d9' }}>{value}</div>
+        <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 2 }}>{label}</div>
+        <div style={{ fontSize: 14, fontWeight: 500, color: color ?? '#262626' }}>{value}</div>
       </div>
     </Col>
   );
@@ -524,7 +531,7 @@ export function StockDetailPage() {
       )}
 
       {/* 4. Charts */}
-      <Card className="page-card" styles={{ body: { padding: '12px 16px', background: '#141414' } }}>
+      <Card className="page-card" styles={{ body: { padding: '12px 16px' } }}>
         <Tabs
           defaultActiveKey="kline"
           size="small"
@@ -557,7 +564,6 @@ export function StockDetailPage() {
                       ref={chartRef}
                       option={chartOption}
                       style={{ height: 780 }}
-                      theme="dark"
                       onEvents={events}
                     />
                   </>
