@@ -103,6 +103,11 @@ class MarketDataService:
             if row:
                 # ts_code like '000001.SZ' → symbol = first 6 digits
                 symbol = str(row['ts_code']).split('.')[0]
+                if not self._has_local_market_data(conn, symbol):
+                    return StockResolveResponse(
+                        status='not_found',
+                        message=f'已匹配股票 {symbol} {row["name"]}，但本地暂无行情数据，请先执行重新初始化市场数据。',
+                    )
                 return StockResolveResponse(
                     status='ok',
                     stock_code=symbol,
@@ -115,6 +120,14 @@ class MarketDataService:
                 "SELECT ts_code, name FROM stock_universe WHERE symbol = ? AND list_status = 'L'",
                 [q.zfill(6)],
             ).fetchall()
+            raw_rows = rows
+            rows = [r for r in raw_rows if self._has_local_market_data(conn, str(r['ts_code']).split('.')[0])]
+            if raw_rows and not rows:
+                first_symbol = str(raw_rows[0]['ts_code']).split('.')[0]
+                return StockResolveResponse(
+                    status='not_found',
+                    message=f'已匹配股票 {first_symbol} {raw_rows[0]["name"]}，但本地暂无行情数据，请先执行重新初始化市场数据。',
+                )
             if len(rows) == 1:
                 symbol = str(rows[0]['ts_code']).split('.')[0]
                 return StockResolveResponse(
@@ -138,6 +151,13 @@ class MarketDataService:
                 "SELECT ts_code, name FROM stock_universe WHERE cnspell = ? AND list_status = 'L'",
                 [q],
             ).fetchall()
+            raw_rows = rows
+            rows = [r for r in raw_rows if self._has_local_market_data(conn, str(r['ts_code']).split('.')[0])]
+            if raw_rows and not rows:
+                return StockResolveResponse(
+                    status='not_found',
+                    message='已匹配到股票清单，但本地暂无对应行情数据，请先执行重新初始化市场数据。',
+                )
             if len(rows) == 1:
                 symbol = str(rows[0]['ts_code']).split('.')[0]
                 return StockResolveResponse(
@@ -161,6 +181,13 @@ class MarketDataService:
                 "SELECT ts_code, name FROM stock_universe WHERE cnspell LIKE ? AND list_status = 'L' LIMIT 20",
                 [q + '%'],
             ).fetchall()
+            raw_rows = rows
+            rows = [r for r in raw_rows if self._has_local_market_data(conn, str(r['ts_code']).split('.')[0])]
+            if raw_rows and not rows:
+                return StockResolveResponse(
+                    status='not_found',
+                    message='已匹配到股票清单，但本地暂无对应行情数据，请先执行重新初始化市场数据。',
+                )
             if len(rows) == 1:
                 symbol = str(rows[0]['ts_code']).split('.')[0]
                 return StockResolveResponse(
@@ -183,6 +210,50 @@ class MarketDataService:
             conn.close()
 
         return StockResolveResponse(status='not_found', message='未找到匹配股票')
+
+    def _has_local_market_data(self, sqlite_conn: Any, stock_code: str) -> bool:
+        """Return True when local snapshot or bar data exists for the stock."""
+        row = sqlite_conn.execute(
+            'SELECT 1 FROM daily_stock_snapshots WHERE stock_code = ? LIMIT 1',
+            [stock_code],
+        ).fetchone()
+        if row:
+            return True
+
+        # Snapshot may be missing on partial imports; fallback to bar existence.
+        return self._has_stock_daily_bars(stock_code)
+
+    def _has_stock_daily_bars(self, stock_code: str) -> bool:
+        if self._duckdb_path.exists():
+            connection = connect_duckdb(self._duckdb_path)
+            try:
+                row = connection.execute(
+                    'SELECT 1 FROM daily_bars WHERE stock_code = ? LIMIT 1',
+                    [stock_code],
+                ).fetchone()
+                if row:
+                    return True
+            except Exception:
+                pass
+            finally:
+                connection.close()
+
+        if self._daily_bars_parquet_path.exists():
+            connection = connect_duckdb(self._duckdb_path)
+            parquet_path = str(self._daily_bars_parquet_path).replace('\\', '/').replace("'", "''")
+            try:
+                row = connection.execute(
+                    f"SELECT 1 FROM read_parquet('{parquet_path}') WHERE stock_code = ? LIMIT 1",
+                    [stock_code],
+                ).fetchone()
+                if row:
+                    return True
+            except Exception:
+                return False
+            finally:
+                connection.close()
+
+        return False
 
     def _load_market_overview_payload_from_sqlite(self) -> dict[str, Any] | None:
         if not self._sqlite_path.exists():
