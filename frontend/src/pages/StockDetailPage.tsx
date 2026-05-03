@@ -6,10 +6,17 @@ import { useParams } from 'react-router-dom';
 import { getStockDetail, type DailyBar, type StockDetailResponse, type StockIndicatorSeries } from '../lib/api';
 
 // ---------------------------------------------------------------------------
-// Constants
+// Color tokens (from docs/kline-limit-color-design.md, light theme)
 // ---------------------------------------------------------------------------
-const UP_COLOR = '#cf1322';
-const DOWN_COLOR = '#14b8a6';
+const UP_COLOR = '#E64B4B';          // up_normal fill
+const UP_BORDER_COLOR = '#C62828';   // up_normal border
+const DOWN_COLOR = '#2FA164';        // down_normal fill
+const DOWN_BORDER_COLOR = '#1E7A4C'; // down_normal border
+// Limit colors (P1: requires is_limit_up/is_limit_down fields from backend)
+// const UP_LIMIT_COLOR = '#8E24AA';
+// const UP_LIMIT_BORDER = '#6A1B9A';
+// const DOWN_LIMIT_COLOR = '#1565C0';
+// const DOWN_LIMIT_BORDER = '#0D47A1';
 
 const MA_COLORS: Record<string, string> = {
   MA5: '#f5a623',
@@ -396,8 +403,8 @@ function buildChartOption(data: StockDetailResponse) {
         itemStyle: {
           color: UP_COLOR,
           color0: DOWN_COLOR,
-          borderColor: UP_COLOR,
-          borderColor0: DOWN_COLOR,
+          borderColor: UP_BORDER_COLOR,
+          borderColor0: DOWN_BORDER_COLOR,
         },
         z: 2,
       },
