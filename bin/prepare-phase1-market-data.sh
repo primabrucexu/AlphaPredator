@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 export ROOT_DIR
 
-python - <<'PY'
+"$ROOT_DIR/backend/.venv/bin/python" - <<'PY'
 import csv
 import json
 import os
