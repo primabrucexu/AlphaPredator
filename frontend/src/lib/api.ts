@@ -326,6 +326,9 @@ export interface InitOverviewResponse {
   stock_list_uploaded: boolean;
   stock_list_updated_at: string | null;
   daily_quote_cutoff_time: string | null;
+  market_data_start_date: string | null;
+  market_data_end_date: string | null;
+  market_data_trading_day_count: number;
   board_counts: Record<string, number>;
 }
 

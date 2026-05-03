@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Alert,
   Button,
@@ -33,9 +33,13 @@ function formatIsoShort(iso: string | null | undefined): string {
   }
 }
 
+function formatRange(start: string | null | undefined, end: string | null | undefined): string {
+  if (!start || !end) return '—';
+  return `${start} ~ ${end}`;
+}
+
 export function HomeSearchPage() {
   const navigate = useNavigate();
-  const inputRef = useRef<HTMLInputElement>(null);
 
   const [query, setQuery] = useState('');
   const [searching, setSearching] = useState(false);
@@ -80,7 +84,6 @@ export function HomeSearchPage() {
   };
 
   const initReady = overview?.init_completed;
-  const stockListUploaded = overview?.stock_list_uploaded;
 
   return (
     <div
@@ -105,7 +108,6 @@ export function HomeSearchPage() {
       {/* Search */}
       <Space.Compact style={{ width: '100%', maxWidth: 520 }}>
         <Input
-          ref={inputRef as React.RefObject<HTMLInputElement & { focus(): void }>}
           size="large"
           placeholder="输入股票代码或拼音简称，按 Enter 搜索"
           value={query}
@@ -213,18 +215,15 @@ export function HomeSearchPage() {
               )}
             </Space>
 
-            {/* Token + stock list */}
+            {/* Token */}
             <Space wrap>
               <Tag color={overview.token_configured ? 'blue' : 'default'}>
                 {overview.token_configured ? '✓ Token 已配置' : '✗ Token 未配置'}
               </Tag>
-              <Tag color={stockListUploaded ? 'blue' : 'default'}>
-                {stockListUploaded ? '✓ 股票清单已上传' : '✗ 股票清单未上传'}
-              </Tag>
             </Space>
 
-            {/* Board counts (shown only when CSV uploaded) */}
-            {stockListUploaded && Object.keys(overview.board_counts).length > 0 && (
+            {/* Board counts */}
+            {Object.keys(overview.board_counts).length > 0 && (
               <Space wrap size={4}>
                 {Object.entries(overview.board_counts).map(([board, count]) => (
                   <Tag key={board} color="processing">
@@ -237,10 +236,8 @@ export function HomeSearchPage() {
             {/* Timestamps */}
             <Space direction="vertical" size={2}>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                股票清单更新时间：{formatIsoShort(overview.stock_list_updated_at)}
-              </Typography.Text>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                每日行情截止时间：{formatIsoShort(overview.daily_quote_cutoff_time)}
+                已有每日行情区间：{formatRange(overview.market_data_start_date, overview.market_data_end_date)}
+                {overview.market_data_trading_day_count > 0 ? `（${overview.market_data_trading_day_count} 个交易日）` : ''}
               </Typography.Text>
             </Space>
 

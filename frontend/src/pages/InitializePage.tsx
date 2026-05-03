@@ -14,21 +14,16 @@ import {
   Table,
   Tag,
   Typography,
-  Upload,
 } from 'antd';
-import type { UploadFile } from 'antd/es/upload';
 import dayjs from 'dayjs';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   DatabaseOutlined,
   LockOutlined,
-  RedoOutlined,
   SyncOutlined,
-  UploadOutlined,
 } from '@ant-design/icons';
 import {
-  type StockListUploadResponse,
   type TaskDayItem,
   type TaskResponse,
   type TokenConfigResponse,
@@ -37,10 +32,8 @@ import {
   getInitTask,
   getInitTaskDays,
   getTokenConfig,
-  reimportDay,
   saveTokenConfig,
   triggerDailyUpdate,
-  uploadStockList,
 } from '../lib/api';
 
 const POLL_INTERVAL_MS = 2000;
@@ -116,11 +109,6 @@ export function InitializePage() {
   const [tokenSaving, setTokenSaving] = useState(false);
   const [tokenSuccess, setTokenSuccess] = useState(false);
 
-  // Stock list
-  const [uploadFileList, setUploadFileList] = useState<UploadFile[]>([]);
-  const [uploadLoading, setUploadLoading] = useState(false);
-  const [uploadResult, setUploadResult] = useState<StockListUploadResponse | null>(null);
-
   // Task
   const [startDate, setStartDate] = useState<string>(DEFAULT_START_DATE);
   const [endDate, setEndDate] = useState<string>(todayYYYYMMDD());
@@ -134,10 +122,6 @@ export function InitializePage() {
   const [daysTotal, setDaysTotal] = useState(0);
   const [daysPage, setDaysPage] = useState(1);
   const [daysLoading, setDaysLoading] = useState(false);
-
-  // Reimport
-  const [reimportDate, setReimportDate] = useState('');
-  const [reimportLoading, setReimportLoading] = useState(false);
 
   // Daily update
   const [updateLoading, setUpdateLoading] = useState(false);
@@ -218,22 +202,6 @@ export function InitializePage() {
     }
   };
 
-  const handleUploadStockList = async () => {
-    if (uploadFileList.length === 0) return;
-    const file = uploadFileList[0].originFileObj as File;
-    setUploadLoading(true);
-    setUploadResult(null);
-    try {
-      const result = await uploadStockList(file);
-      setUploadResult(result);
-      setUploadFileList([]);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '上传股票清单失败');
-    } finally {
-      setUploadLoading(false);
-    }
-  };
-
   const handleStartInit = async () => {
     setError(null);
     setStartLoading(true);
@@ -256,24 +224,6 @@ export function InitializePage() {
       setDaysPage(1);
     }
     setShowDays(!showDays);
-  };
-
-  const handleReimport = async () => {
-    if (!reimportDate || !/^\d{8}$/.test(reimportDate)) {
-      setError('请输入有效的交易日（格式 YYYYMMDD）');
-      return;
-    }
-    setError(null);
-    setReimportLoading(true);
-    try {
-      const task = await reimportDay(reimportDate);
-      setCurrentTask(task);
-      setReimportDate('');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '重导失败');
-    } finally {
-      setReimportLoading(false);
-    }
   };
 
   const handleDailyUpdate = async () => {
@@ -344,7 +294,7 @@ export function InitializePage() {
           市场数据初始化
         </Typography.Title>
         <Typography.Text type="secondary">
-          通过 Tushare 接入全市场 A 股历史日线数据，支持按日期区间全量初始化与单日重导。
+          通过 Tushare 接入全市场 A 股历史日线数据，支持按日期区间全量初始化。
         </Typography.Text>
       </Space>
 
@@ -412,57 +362,6 @@ export function InitializePage() {
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             Token 保存在服务端，不会在页面上显示。也可以通过环境变量 TUSHARE_TOKEN 配置。
           </Typography.Text>
-        </Space>
-      </Card>
-
-      {/* Stock list upload */}
-      <Card
-        className="page-card"
-        title={
-          <Space>
-            <UploadOutlined />
-            上传股票清单 CSV
-          </Space>
-        }
-      >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Typography.Text type="secondary">
-            请上传包含以下字段的 CSV 文件：
-            <code> ts_code, symbol, name, market, list_status, list_date, delist_date</code>
-          </Typography.Text>
-          <Space wrap>
-            <Upload
-              accept=".csv"
-              beforeUpload={() => false}
-              fileList={uploadFileList}
-              onChange={({ fileList }) => setUploadFileList(fileList.slice(-1))}
-              maxCount={1}
-            >
-              <Button icon={<UploadOutlined />}>选择 CSV 文件</Button>
-            </Upload>
-            <Button
-              type="primary"
-              loading={uploadLoading}
-              disabled={uploadFileList.length === 0}
-              onClick={handleUploadStockList}
-            >
-              上传
-            </Button>
-          </Space>
-          {uploadResult && (
-            <Alert
-              type="success"
-              showIcon
-              message={`上传成功：共 ${uploadResult.total_stocks} 支股票，当前上市 ${uploadResult.active_stocks} 支`}
-              description={
-                <Space wrap>
-                  {Object.entries(uploadResult.boards).map(([board, count]) => (
-                    <Tag key={board} color="blue">{board}: {count}</Tag>
-                  ))}
-                </Space>
-              }
-            />
-          )}
         </Space>
       </Card>
 
@@ -605,41 +504,6 @@ export function InitializePage() {
           )}
         </Card>
       )}
-
-      {/* Reimport day */}
-      <Card
-        className="page-card"
-        title={
-          <Space>
-            <RedoOutlined />
-            单日重导
-          </Space>
-        }
-      >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Typography.Text type="secondary">
-            输入某一交易日（YYYYMMDD），系统将覆盖重导该日的全量行情数据。
-          </Typography.Text>
-          <Space wrap>
-            <Input
-              placeholder="例如：20240102"
-              value={reimportDate}
-              onChange={(e) => setReimportDate(e.target.value)}
-              style={{ width: 160 }}
-              onPressEnter={handleReimport}
-              disabled={isRunning || reimportLoading}
-            />
-            <Button
-              icon={<RedoOutlined />}
-              loading={reimportLoading}
-              disabled={isRunning || !reimportDate}
-              onClick={handleReimport}
-            >
-              覆盖重导
-            </Button>
-          </Space>
-        </Space>
-      </Card>
 
       {/* Daily update */}
       <Card className="page-card" title="当日增量更新">

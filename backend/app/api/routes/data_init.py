@@ -371,11 +371,12 @@ def get_init_overview() -> InitOverviewResponse:
     stock_list_path = settings.stock_list_path
     stock_list_uploaded = stock_list_path.exists()
 
-    # Determine init_completed from V2 task system
     v2 = get_overview()
+    # Determine init_completed from V2 task system
     init_completed = (
         (v2.get('latest_task') or {}).get('status') == 'SUCCESS'
     )
+    data_range = v2.get('data_range', {})
 
     stock_list_updated_at: str | None = None
     board_counts: dict[str, int] = {}
@@ -417,5 +418,8 @@ def get_init_overview() -> InitOverviewResponse:
         stock_list_uploaded=stock_list_uploaded,
         stock_list_updated_at=stock_list_updated_at,
         daily_quote_cutoff_time=daily_quote_cutoff_time,
+        market_data_start_date=data_range.get('min_trade_date'),
+        market_data_end_date=data_range.get('max_trade_date'),
+        market_data_trading_day_count=data_range.get('trading_day_count', 0),
         board_counts=board_counts,
     )

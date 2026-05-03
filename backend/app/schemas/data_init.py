@@ -59,6 +59,9 @@ class InitOverviewResponse(BaseModel):
     stock_list_uploaded: bool = Field(..., description='股票清单 CSV 是否已上传')
     stock_list_updated_at: str | None = Field(None, description='股票清单最后上传时间（ISO 8601 UTC）')
     daily_quote_cutoff_time: str | None = Field(None, description='每日行情更新截止时间（ISO 8601）')
+    market_data_start_date: str | None = Field(None, description='本地已入库行情起始交易日（YYYY-MM-DD）')
+    market_data_end_date: str | None = Field(None, description='本地已入库行情截止交易日（YYYY-MM-DD）')
+    market_data_trading_day_count: int = Field(0, description='本地已入库行情交易日数量')
     board_counts: dict[str, int] = Field(default_factory=dict, description='各板块当前上市股票数')
 
 
