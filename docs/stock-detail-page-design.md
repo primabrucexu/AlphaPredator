@@ -1,6 +1,6 @@
 # AlphaPredator 个股详情页设计（纯行情版）
 
-> 说明：本文档只讨论“纯行情个股详情页”设计，不包含 AI 结论、AI 动作、重分析、历史 AI 记录等智能层内容。
+> 说明：本文档只讨论“纯行情个股详情页”设计，不包含 AI 结论、AI 动作、重分析、历史 AI 记录等智能层内容。涨跌停等日度派生字段如何计算见 `docs/price-limit-rule-design.md`；字段新增后的重建流程见 `docs/market-data-reinitialize-workflow.md`。
 
 ## 1. 背景与目标
 
@@ -226,6 +226,12 @@ Tab 定义：
 - `RSI_n = SMA(MAX(C-REF(C,1),0), n, 1) / SMA(ABS(C-REF(C,1)), n, 1) * 100`
 
 ## 6. 数据契约设计
+
+说明：
+
+- 页面层只消费后端已经固化完成的字段；
+- 若后端新增了需要历史补齐的字段，应通过“重新初始化市场数据”补齐，而不是要求用户重新上传股票列表；
+- 与涨跌停相关的四态配色和状态语义，依赖 `docs/price-limit-rule-design.md` 与 `docs/kline-limit-color-design.md` 中的字段约定。
 
 ## 6.1 主接口
 
