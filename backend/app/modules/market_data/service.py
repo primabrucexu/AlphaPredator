@@ -12,8 +12,10 @@ from app.schemas.market import (
     MarketListRow,
     MarketOverviewResponse,
     MarketSummary,
+    StockCandidate,
     StockDetailResponse,
     StockKeyIndicators,
+    StockResolveResponse,
 )
 
 
@@ -49,6 +51,119 @@ class MarketDataService:
         payload['trade_date'] = payload.get('trade_date') or (daily_bars[-1]['trade_date'] if daily_bars else '')
         payload['key_indicators'] = self._build_key_indicators(daily_bars)
         return self._build_stock_detail_response(payload)
+
+    def resolve_stock(self, query: str) -> StockResolveResponse:
+        """
+        Resolve a user query (stock code or pinyin abbreviation) to a unique stock.
+
+        Match priority:
+          1. Exact ts_code match (e.g. '000001.SZ')
+          2. Exact 6-digit symbol match (e.g. '000001')
+          3. Exact cnspell match (case-insensitive)
+          4. cnspell prefix match (case-insensitive)
+
+        Returns:
+          status='ok' with stock_code/stock_name/match_type on unique match.
+          status='not_found' when no match.
+          status='ambiguous' with candidates list when multiple matches.
+        """
+        q = query.strip().upper()
+        if not q:
+            return StockResolveResponse(status='not_found', message='请输入股票代码或拼音简称')
+
+        if not self._sqlite_path.exists():
+            return StockResolveResponse(status='not_found', message='股票清单尚未初始化，请先上传股票清单')
+
+        conn = connect_sqlite(self._sqlite_path)
+        try:
+            # 1. Exact ts_code match (e.g. '000001.SZ')
+            row = conn.execute(
+                "SELECT ts_code, name FROM stock_universe WHERE UPPER(ts_code) = ? AND list_status = 'L' LIMIT 1",
+                [q],
+            ).fetchone()
+            if row:
+                # ts_code like '000001.SZ' → symbol = first 6 digits
+                symbol = str(row['ts_code']).split('.')[0]
+                return StockResolveResponse(
+                    status='ok',
+                    stock_code=symbol,
+                    stock_name=str(row['name']),
+                    match_type='code',
+                )
+
+            # 2. Exact 6-digit symbol match (e.g. '000001')
+            rows = conn.execute(
+                "SELECT ts_code, name FROM stock_universe WHERE symbol = ? AND list_status = 'L'",
+                [q.zfill(6)],
+            ).fetchall()
+            if len(rows) == 1:
+                symbol = str(rows[0]['ts_code']).split('.')[0]
+                return StockResolveResponse(
+                    status='ok',
+                    stock_code=symbol,
+                    stock_name=str(rows[0]['name']),
+                    match_type='code',
+                )
+            if len(rows) > 1:
+                return StockResolveResponse(
+                    status='ambiguous',
+                    message='匹配到多只股票，请输入更完整代码/简称',
+                    candidates=[
+                        StockCandidate(stock_code=str(r['ts_code']).split('.')[0], stock_name=str(r['name']))
+                        for r in rows
+                    ],
+                )
+
+            # 3. Exact cnspell match
+            rows = conn.execute(
+                "SELECT ts_code, name FROM stock_universe WHERE cnspell = ? AND list_status = 'L'",
+                [q],
+            ).fetchall()
+            if len(rows) == 1:
+                symbol = str(rows[0]['ts_code']).split('.')[0]
+                return StockResolveResponse(
+                    status='ok',
+                    stock_code=symbol,
+                    stock_name=str(rows[0]['name']),
+                    match_type='cnspell',
+                )
+            if len(rows) > 1:
+                return StockResolveResponse(
+                    status='ambiguous',
+                    message='匹配到多只股票，请输入更完整代码/简称',
+                    candidates=[
+                        StockCandidate(stock_code=str(r['ts_code']).split('.')[0], stock_name=str(r['name']))
+                        for r in rows
+                    ],
+                )
+
+            # 4. cnspell prefix match
+            rows = conn.execute(
+                "SELECT ts_code, name FROM stock_universe WHERE cnspell LIKE ? AND list_status = 'L' LIMIT 20",
+                [q + '%'],
+            ).fetchall()
+            if len(rows) == 1:
+                symbol = str(rows[0]['ts_code']).split('.')[0]
+                return StockResolveResponse(
+                    status='ok',
+                    stock_code=symbol,
+                    stock_name=str(rows[0]['name']),
+                    match_type='cnspell_prefix',
+                )
+            if len(rows) > 1:
+                return StockResolveResponse(
+                    status='ambiguous',
+                    message='匹配到多只股票，请输入更完整代码/简称',
+                    candidates=[
+                        StockCandidate(stock_code=str(r['ts_code']).split('.')[0], stock_name=str(r['name']))
+                        for r in rows
+                    ],
+                )
+
+        finally:
+            conn.close()
+
+        return StockResolveResponse(status='not_found', message='未找到匹配股票')
 
     def _load_market_overview_payload_from_sqlite(self) -> dict[str, Any] | None:
         if not self._sqlite_path.exists():

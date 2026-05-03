@@ -120,6 +120,22 @@ CREATE TABLE IF NOT EXISTS focus_stock_entries (
     created_at TEXT NOT NULL,
     FOREIGN KEY (stock_code) REFERENCES stock_profiles(stock_code)
 );
+
+CREATE TABLE IF NOT EXISTS stock_universe (
+    ts_code TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    name TEXT NOT NULL,
+    cnspell TEXT NOT NULL DEFAULT '',
+    market TEXT NOT NULL DEFAULT '',
+    list_status TEXT NOT NULL DEFAULT '',
+    list_date TEXT NOT NULL DEFAULT '',
+    delist_date TEXT NOT NULL DEFAULT '',
+    uploaded_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_universe_symbol ON stock_universe (symbol);
+CREATE INDEX IF NOT EXISTS idx_stock_universe_cnspell ON stock_universe (cnspell);
+CREATE INDEX IF NOT EXISTS idx_stock_universe_market ON stock_universe (market);
 '''
 
 
