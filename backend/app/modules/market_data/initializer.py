@@ -94,6 +94,11 @@ def start_initialization(
 
     Returns True if the task was started, False if one is already running.
     Raises ValueError if the Tushare token or stock list is not configured.
+
+    Note: *history_days* is used as a fallback only when
+    ``settings.tushare_history_start`` is not configured.  In the default setup
+    the fixed start date ``settings.tushare_history_start`` (``2024-01-01``)
+    takes precedence and *history_days* has no effect.
     """
     from app.modules.market_data.data_source import _get_token, load_stock_universe
 

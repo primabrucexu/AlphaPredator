@@ -11,6 +11,7 @@ endpoint (settings.stock_list_path).
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -21,6 +22,8 @@ from typing import Any
 import pandas as pd
 
 from app.core.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +183,8 @@ def fetch_spot_snapshot(
             daily_df = daily_df.merge(basic_df[['ts_code', 'turnover_rate']], on='ts_code', how='left')
         else:
             daily_df['turnover_rate'] = 0.0
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        logger.warning('fetch_spot_snapshot: failed to fetch turnover_rate from daily_basic: %s', exc)
         daily_df['turnover_rate'] = 0.0
 
     # Filter to the stock universe

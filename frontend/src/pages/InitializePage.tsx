@@ -7,7 +7,6 @@ import {
   Col,
   Descriptions,
   Input,
-  InputNumber,
   Progress,
   Row,
   Space,
@@ -85,7 +84,6 @@ function statusLabel(status: string): string {
 
 export function InitializePage() {
   const [initStatus, setInitStatus] = useState<InitStatusResponse | null>(null);
-  const [historyDays, setHistoryDays] = useState<number>(60);
   const [marketFilters, setMarketFilters] = useState<MarketBoard[]>([...ALL_MARKET_BOARDS]);
   const [startLoading, setStartLoading] = useState(false);
   const [updateLoading, setUpdateLoading] = useState(false);
@@ -183,7 +181,7 @@ export function InitializePage() {
     setError(null);
     setStartLoading(true);
     try {
-      const s = await startInit(historyDays, marketFilters);
+      const s = await startInit(60, marketFilters);
       setInitStatus(s);
     } catch (e) {
       setError(e instanceof Error ? e.message : '启动初始化失败');
@@ -421,17 +419,6 @@ export function InitializePage() {
       {/* Actions card */}
       <Card className="page-card" title="操作">
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
-          <Space wrap>
-            <span>历史行情天数：</span>
-            <InputNumber
-              min={1}
-              max={3650}
-              value={historyDays}
-              onChange={(v) => setHistoryDays(v ?? 60)}
-              disabled={isRunning}
-            />
-          </Space>
-
           <Space direction="vertical" size={4}>
             <span>市场板块筛选：</span>
             <Checkbox.Group
@@ -469,9 +456,6 @@ export function InitializePage() {
         <Typography.Paragraph>
           <strong>全量初始化</strong>：从 Tushare 拉取全市场 A 股当日快照与历史 K 线（自 2024-01-01 起），导入本地数据库。
           受限于网络与 API 速率（最多 450 次/分钟），全量初始化通常需要数分钟到数十分钟，请耐心等待。
-        </Typography.Paragraph>
-        <Typography.Paragraph>
-          <strong>历史行情天数</strong>：仅供参考，实际历史数据固定从 2024-01-01 开始拉取。
         </Typography.Paragraph>
         <Typography.Paragraph>
           <strong>市场板块筛选</strong>：只对选中板块的股票执行逐股行情拉取，可缩短初始化时间。

@@ -94,7 +94,9 @@ async def upload_stock_list(file: UploadFile) -> StockListUploadResponse:
     active_df = df[df['list_status'].fillna('') == 'L']
     active = len(active_df)
     boards: dict[str, int] = {}
-    for board, grp in active_df.groupby('market'):
+    # Exclude rows with null/empty market value to avoid NaN board names
+    market_active = active_df[active_df['market'].notna() & (active_df['market'].str.strip() != '')]
+    for board, grp in market_active.groupby('market'):
         boards[str(board)] = len(grp)
 
     return StockListUploadResponse(total_stocks=total, active_stocks=active, boards=boards)
