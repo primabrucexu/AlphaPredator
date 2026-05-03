@@ -24,6 +24,7 @@ class Settings:
     daily_bars_parquet_path: Path = parquet_dir / 'stock_daily_bars.parquet'
     market_data_import_dir: Path = DATA_DIR / 'imports' / 'market-data'
     hot_sector_import_dir: Path = DATA_DIR / 'imports' / 'hot-sector-images'
+    init_status_dir: Path = DATA_DIR / 'status'
 
 
 settings = Settings()
