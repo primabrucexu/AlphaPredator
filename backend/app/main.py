@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import logging
 
 import uvicorn
 from fastapi import FastAPI
@@ -8,6 +9,11 @@ from app.api import api_router
 from app.core.settings import settings
 from app.db.duckdb import ensure_duckdb_parent, ensure_duckdb_schema
 from app.db.sqlite import ensure_sqlite_parent, ensure_sqlite_schema
+
+# Ensure the application's own loggers emit at INFO level so task lifecycle
+# and per-day processing events are visible in the console alongside uvicorn's
+# access logs.
+logging.getLogger('app').setLevel(logging.INFO)
 
 
 @asynccontextmanager

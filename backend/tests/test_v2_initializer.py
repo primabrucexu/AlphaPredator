@@ -14,6 +14,7 @@ from app.modules.market_data.initializer import (
     _atomic_write_day,
     _generate_date_list,
     _idle_status,
+    _write_duckdb_day,
     create_task,
     get_overview,
     get_task,
@@ -156,9 +157,10 @@ def test_create_task_generates_day_records(tmp_path: Path) -> None:
 def test_atomic_write_day_inserts_rows(tmp_path: Path) -> None:
     from app.db.sqlite import ensure_sqlite_schema
     sqlite_path = tmp_path / 'test.db'
+    duckdb_path = tmp_path / 'test.duckdb'
     ensure_sqlite_schema(sqlite_path)
 
-    _atomic_write_day('20240102', MOCK_DAILY_ROWS, sqlite_path)
+    _atomic_write_day('20240102', MOCK_DAILY_ROWS, sqlite_path, duckdb_path)
 
     from app.db.sqlite import connect_sqlite
     conn = connect_sqlite(sqlite_path)
@@ -169,12 +171,80 @@ def test_atomic_write_day_inserts_rows(tmp_path: Path) -> None:
     assert count == 2
 
 
+def test_atomic_write_day_also_writes_duckdb(tmp_path: Path) -> None:
+    """_atomic_write_day must populate DuckDB daily_bars for detail-page queries."""
+    from app.db.duckdb import connect_duckdb, ensure_duckdb_schema
+    from app.db.sqlite import ensure_sqlite_schema
+    sqlite_path = tmp_path / 'test.db'
+    duckdb_path = tmp_path / 'test.duckdb'
+    ensure_sqlite_schema(sqlite_path)
+    ensure_duckdb_schema(duckdb_path)
+
+    _atomic_write_day('20240102', MOCK_DAILY_ROWS, sqlite_path, duckdb_path)
+
+    conn = connect_duckdb(duckdb_path)
+    rows = conn.execute(
+        "SELECT stock_code, trade_date, open_price, close_price, volume, turnover_amount_billion "
+        "FROM daily_bars WHERE trade_date = '2024-01-02' ORDER BY stock_code"
+    ).fetchall()
+    conn.close()
+
+    assert len(rows) == 2, f'Expected 2 DuckDB rows, got {len(rows)}'
+    # First row: 000001 (from 000001.SZ)
+    assert rows[0][0] == '000001'
+    assert rows[0][1] == '2024-01-02'
+    assert rows[0][2] == pytest.approx(11.0)   # open_price
+    assert rows[0][3] == pytest.approx(11.2)   # close_price
+    assert rows[0][4] == 50000000              # volume = int(vol)
+    # turnover_amount_billion = amount / 1e6 = 560000 / 1e6 = 0.56
+    assert rows[0][5] == pytest.approx(0.56, abs=0.001)
+
+
+def test_write_duckdb_day_direct(tmp_path: Path) -> None:
+    """_write_duckdb_day correctly maps ts_code → stock_code and date format."""
+    from app.db.duckdb import connect_duckdb, ensure_duckdb_schema
+    duckdb_path = tmp_path / 'test.duckdb'
+    ensure_duckdb_schema(duckdb_path)
+
+    _write_duckdb_day('20240102', MOCK_DAILY_ROWS, duckdb_path)
+
+    conn = connect_duckdb(duckdb_path)
+    rows = conn.execute(
+        "SELECT stock_code, trade_date FROM daily_bars ORDER BY stock_code"
+    ).fetchall()
+    conn.close()
+
+    assert len(rows) == 2
+    assert rows[0][0] == '000001'
+    assert rows[0][1] == '2024-01-02'
+    assert rows[1][0] == '600036'
+    assert rows[1][1] == '2024-01-02'
+
+
+def test_write_duckdb_day_idempotent(tmp_path: Path) -> None:
+    """Writing the same day twice should result in 2 rows, not 4."""
+    from app.db.duckdb import connect_duckdb, ensure_duckdb_schema
+    duckdb_path = tmp_path / 'test.duckdb'
+    ensure_duckdb_schema(duckdb_path)
+
+    _write_duckdb_day('20240102', MOCK_DAILY_ROWS, duckdb_path)
+    _write_duckdb_day('20240102', MOCK_DAILY_ROWS, duckdb_path)
+
+    conn = connect_duckdb(duckdb_path)
+    count = conn.execute(
+        "SELECT COUNT(*) FROM daily_bars WHERE trade_date = '2024-01-02'"
+    ).fetchone()[0]
+    conn.close()
+    assert count == 2
+
+
 def test_atomic_write_day_persists_limit_fields(tmp_path: Path) -> None:
     from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
     sqlite_path = tmp_path / 'test.db'
+    duckdb_path = tmp_path / 'test.duckdb'
     ensure_sqlite_schema(sqlite_path)
 
-    _atomic_write_day('20240102', MOCK_DAILY_ROWS, sqlite_path)
+    _atomic_write_day('20240102', MOCK_DAILY_ROWS, sqlite_path, duckdb_path)
 
     conn = connect_sqlite(sqlite_path)
     row = conn.execute(
@@ -196,10 +266,11 @@ def test_atomic_write_day_persists_limit_fields(tmp_path: Path) -> None:
 def test_atomic_write_day_is_idempotent(tmp_path: Path) -> None:
     from app.db.sqlite import ensure_sqlite_schema
     sqlite_path = tmp_path / 'test.db'
+    duckdb_path = tmp_path / 'test.duckdb'
     ensure_sqlite_schema(sqlite_path)
 
-    _atomic_write_day('20240102', MOCK_DAILY_ROWS, sqlite_path)
-    _atomic_write_day('20240102', MOCK_DAILY_ROWS, sqlite_path)  # second write
+    _atomic_write_day('20240102', MOCK_DAILY_ROWS, sqlite_path, duckdb_path)
+    _atomic_write_day('20240102', MOCK_DAILY_ROWS, sqlite_path, duckdb_path)  # second write
 
     from app.db.sqlite import connect_sqlite
     conn = connect_sqlite(sqlite_path)
@@ -213,9 +284,10 @@ def test_atomic_write_day_is_idempotent(tmp_path: Path) -> None:
 def test_atomic_write_day_empty_rows(tmp_path: Path) -> None:
     from app.db.sqlite import ensure_sqlite_schema
     sqlite_path = tmp_path / 'test.db'
+    duckdb_path = tmp_path / 'test.duckdb'
     ensure_sqlite_schema(sqlite_path)
 
-    _atomic_write_day('20240102', [], sqlite_path)  # should not raise
+    _atomic_write_day('20240102', [], sqlite_path, duckdb_path)  # should not raise
 
     from app.db.sqlite import connect_sqlite
     conn = connect_sqlite(sqlite_path)
@@ -264,6 +336,7 @@ def _mock_fetch_daily_raw(date_str: str, sqlite_path: Any = None) -> list[dict[s
 
 def test_full_task_run_succeeds(tmp_path: Path) -> None:
     sqlite_path = tmp_path / 'test.db'
+    duckdb_path = tmp_path / 'test.duckdb'
 
     with _patch_token():
         task = create_task('20240101', '20240103', sqlite_path=sqlite_path)
@@ -279,7 +352,7 @@ def test_full_task_run_succeeds(tmp_path: Path) -> None:
     token_patcher.start()
     fetch_patcher.start()
     try:
-        started = start_task(task_id, sqlite_path=sqlite_path)
+        started = start_task(task_id, sqlite_path=sqlite_path, duckdb_path=duckdb_path)
         assert started is True
 
         for _ in range(50):
@@ -296,7 +369,7 @@ def test_full_task_run_succeeds(tmp_path: Path) -> None:
     assert t['status'] == 'SUCCESS', f'Unexpected status: {t}'
     assert t['processed_days'] == t['total_days']
 
-    # Verify data was written for trading day 20240102
+    # Verify data was written for trading day 20240102 in SQLite
     from app.db.sqlite import connect_sqlite
     conn = connect_sqlite(sqlite_path)
     count = conn.execute(
@@ -304,6 +377,15 @@ def test_full_task_run_succeeds(tmp_path: Path) -> None:
     ).fetchone()[0]
     conn.close()
     assert count == 2
+
+    # Verify data was also written to DuckDB for detail-page queries
+    from app.db.duckdb import connect_duckdb
+    dconn = connect_duckdb(duckdb_path)
+    dcount = dconn.execute(
+        "SELECT COUNT(*) FROM daily_bars WHERE trade_date = '2024-01-02'"
+    ).fetchone()[0]
+    dconn.close()
+    assert dcount == 2, f'Expected 2 DuckDB rows for 2024-01-02, got {dcount}'
 
 
 def test_task_fails_on_fetch_error(tmp_path: Path) -> None:
