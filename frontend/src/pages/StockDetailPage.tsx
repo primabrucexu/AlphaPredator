@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import ReactECharts from 'echarts-for-react';
 import { Alert, Card, Col, Empty, Row, Space, Spin, Tabs, Tag, Typography } from 'antd';
@@ -29,6 +29,19 @@ const KDJ_COLORS = { K: '#f5a623', D: '#7ed321', J: '#cf1322' };
 const MACD_COLORS = { DIF: '#f5a623', DEA: '#7ed321' };
 const RSI_COLORS = { RSI6: '#f5a623', RSI12: '#7ed321', RSI24: '#cf1322' };
 
+// Grid percentage positions (used for overlay and chart option)
+const GRID_POSITIONS = {
+  kline: { top: '3%', height: '37%' },
+  volume: { top: '44%', height: '10%' },
+  macd: { top: '57%', height: '10%' },
+  kdj: { top: '70%', height: '10%' },
+  rsi: { top: '83%', height: '9%' },
+} as const;
+
+const CHART_HEIGHT = 780;
+const GRID_LEFT = '70px';
+const GRID_RIGHT = '80px';
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -37,8 +50,18 @@ function fmtNum(v: number | null | undefined, decimals = 2): string {
 }
 
 function fmtVol(v: number): string {
-  if (v >= 1e8) return `${(v / 1e8).toFixed(2)}亿`;
-  return `${(v / 1e4).toFixed(0)}万`;
+  if (v >= 1e8) return `${(v / 1e8).toFixed(2)}亿手`;
+  return `${(v / 1e4).toFixed(0)}万手`;
+}
+
+function fmtAmount(v: number | undefined | null): string {
+  if (v == null) return '--';
+  return `${v.toFixed(2)}亿`;
+}
+
+function fmtTurnover(v: number | undefined | null): string {
+  if (v == null) return '--';
+  return `${v.toFixed(2)}%`;
 }
 
 function colorOf(change: number): string {
@@ -58,11 +81,11 @@ interface HoverInfo {
 // ---------------------------------------------------------------------------
 function InfoRow({ items }: { items: { label: string; value: string; color?: string }[] }) {
   return (
-    <div style={{ fontSize: 12, lineHeight: 1.6 }}>
+    <div style={{ fontSize: 11, lineHeight: 1.6 }}>
       {items.map(({ label, value, color }) => (
-        <span key={label} style={{ marginRight: 16 }}>
-          <span style={{ color: '#8c8c8c' }}>{label}: </span>
-          <span style={{ color: color ?? '#262626', fontWeight: 500 }}>{value}</span>
+        <span key={label} style={{ marginRight: 12 }}>
+          <span style={{ color: '#888' }}>{label}: </span>
+          <span style={{ color: color ?? '#333', fontWeight: 500 }}>{value}</span>
         </span>
       ))}
     </div>
@@ -86,11 +109,10 @@ function KLineInfoBar({
       <InfoRow
         items={[
           { label: '日期', value: bar.trade_date },
-          { label: '开', value: fmtNum(bar.open_price), color: '#262626' },
+          { label: '开', value: fmtNum(bar.open_price), color: '#333' },
           { label: '高', value: fmtNum(bar.high_price), color: UP_COLOR },
           { label: '低', value: fmtNum(bar.low_price), color: DOWN_COLOR },
           { label: '收', value: fmtNum(bar.close_price), color: priceColor },
-          { label: '量', value: fmtVol(bar.volume), color: '#262626' },
         ]}
       />
       <InfoRow
@@ -107,24 +129,16 @@ function KLineInfoBar({
 
 function VolumeInfoBar({ hover, latest, ind }: { hover: HoverInfo | null; latest: HoverInfo; ind: StockIndicatorSeries }) {
   const { idx, bar } = hover ?? latest;
+  const volColor = bar.close_price >= bar.open_price ? UP_COLOR : DOWN_COLOR;
   return (
     <InfoRow
       items={[
-        { label: 'VOL', value: fmtVol(bar.volume), color: bar.close_price >= bar.open_price ? UP_COLOR : DOWN_COLOR },
+        { label: 'VOL', value: fmtVol(bar.volume), color: volColor },
         { label: 'MA5', value: fmtNum(ind.volume_ma5[idx]), color: MA_COLORS.MA5 },
-      ]}
-    />
-  );
-}
-
-function KDJInfoBar({ hover, latest, ind }: { hover: HoverInfo | null; latest: HoverInfo; ind: StockIndicatorSeries }) {
-  const { idx } = hover ?? latest;
-  return (
-    <InfoRow
-      items={[
-        { label: 'K', value: fmtNum(ind.kdj_k[idx]), color: KDJ_COLORS.K },
-        { label: 'D', value: fmtNum(ind.kdj_d[idx]), color: KDJ_COLORS.D },
-        { label: 'J', value: fmtNum(ind.kdj_j[idx]), color: KDJ_COLORS.J },
+        { label: 'MA10', value: fmtNum(ind.volume_ma10[idx]), color: MA_COLORS.MA10 },
+        { label: 'MA20', value: fmtNum(ind.volume_ma20[idx]), color: MA_COLORS.MA20 },
+        { label: '成交额', value: fmtAmount(bar.turnover_amount_billion) },
+        { label: '换手率', value: fmtTurnover(bar.turnover_rate) },
       ]}
     />
   );
@@ -144,6 +158,19 @@ function MACDInfoBar({ hover, latest, ind }: { hover: HoverInfo | null; latest: 
   );
 }
 
+function KDJInfoBar({ hover, latest, ind }: { hover: HoverInfo | null; latest: HoverInfo; ind: StockIndicatorSeries }) {
+  const { idx } = hover ?? latest;
+  return (
+    <InfoRow
+      items={[
+        { label: 'K', value: fmtNum(ind.kdj_k[idx]), color: KDJ_COLORS.K },
+        { label: 'D', value: fmtNum(ind.kdj_d[idx]), color: KDJ_COLORS.D },
+        { label: 'J', value: fmtNum(ind.kdj_j[idx]), color: KDJ_COLORS.J },
+      ]}
+    />
+  );
+}
+
 function RSIInfoBar({ hover, latest, ind }: { hover: HoverInfo | null; latest: HoverInfo; ind: StockIndicatorSeries }) {
   const { idx } = hover ?? latest;
   return (
@@ -158,23 +185,51 @@ function RSIInfoBar({ hover, latest, ind }: { hover: HoverInfo | null; latest: H
 }
 
 // ---------------------------------------------------------------------------
+// Sub-chart overlay label component
+// ---------------------------------------------------------------------------
+function SubChartOverlay({
+  gridKey,
+  title,
+  children,
+}: {
+  gridKey: keyof typeof GRID_POSITIONS;
+  title: string;
+  children: React.ReactNode;
+}) {
+  const pos = GRID_POSITIONS[gridKey];
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        top: pos.top,
+        left: GRID_LEFT,
+        right: GRID_RIGHT,
+        zIndex: 10,
+        pointerEvents: 'none',
+        padding: '2px 4px',
+      }}
+    >
+      <span style={{ color: '#aaa', fontSize: 10, marginRight: 8, fontWeight: 600 }}>{title}</span>
+      {children}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Chart option builder
+// Sub-chart order: Volume(1) → MACD(2) → KDJ(3) → RSI(4)
 // ---------------------------------------------------------------------------
 function buildChartOption(data: StockDetailResponse) {
   const bars = data.daily_bars;
   const ind = data.indicators;
   const dates = bars.map((b) => b.trade_date);
 
-  const GRID_LEFT = '70px';
-  const GRID_RIGHT = '80px';
-
-  // Grid positions (percentage of chart height)
   const grids = [
-    { top: '3%', left: GRID_LEFT, right: GRID_RIGHT, height: '37%' },  // K-line
-    { top: '44%', left: GRID_LEFT, right: GRID_RIGHT, height: '10%' }, // Volume
-    { top: '57%', left: GRID_LEFT, right: GRID_RIGHT, height: '10%' }, // KDJ
-    { top: '70%', left: GRID_LEFT, right: GRID_RIGHT, height: '10%' }, // MACD
-    { top: '83%', left: GRID_LEFT, right: GRID_RIGHT, height: '9%' },  // RSI
+    { top: GRID_POSITIONS.kline.top, left: GRID_LEFT, right: GRID_RIGHT, height: GRID_POSITIONS.kline.height },
+    { top: GRID_POSITIONS.volume.top, left: GRID_LEFT, right: GRID_RIGHT, height: GRID_POSITIONS.volume.height },
+    { top: GRID_POSITIONS.macd.top, left: GRID_LEFT, right: GRID_RIGHT, height: GRID_POSITIONS.macd.height },
+    { top: GRID_POSITIONS.kdj.top, left: GRID_LEFT, right: GRID_RIGHT, height: GRID_POSITIONS.kdj.height },
+    { top: GRID_POSITIONS.rsi.top, left: GRID_LEFT, right: GRID_RIGHT, height: GRID_POSITIONS.rsi.height },
   ];
 
   const xAxisBase = {
@@ -201,9 +256,10 @@ function buildChartOption(data: StockDetailResponse) {
     axisLine: { show: false },
     axisTick: { show: false },
     axisLabel: { color: '#666', fontSize: 10 },
-    splitLine: { lineStyle: { color: '#e8e8e8', type: 'dashed' as const } },
+    splitLine: { lineStyle: { color: '#f0f0f0', type: 'dashed' as const } },
   };
 
+  // Grid index mapping: 0=KLine, 1=Volume, 2=MACD, 3=KDJ, 4=RSI
   const yAxes = [
     { ...yAxisBase, gridIndex: 0 },
     {
@@ -215,9 +271,9 @@ function buildChartOption(data: StockDetailResponse) {
         formatter: (v: number) => (v >= 1e8 ? `${(v / 1e8).toFixed(1)}亿` : `${(v / 1e4).toFixed(0)}万`),
       },
     },
-    { ...yAxisBase, gridIndex: 2, min: 0, max: 100, splitLine: { show: false } },
-    { ...yAxisBase, gridIndex: 3, splitLine: { show: false } },
-    { ...yAxisBase, gridIndex: 4, min: 0, max: 100, splitLine: { show: false } },
+    { ...yAxisBase, gridIndex: 2, splitLine: { show: false } }, // MACD — auto range
+    { ...yAxisBase, gridIndex: 3, splitLine: { show: false } }, // KDJ — auto range (no fixed min/max)
+    { ...yAxisBase, gridIndex: 4, min: 0, max: 100, splitLine: { show: false } }, // RSI fixed 0-100
   ];
 
   const dataZoom = [
@@ -231,9 +287,9 @@ function buildChartOption(data: StockDetailResponse) {
       height: 18,
       handleSize: '80%',
       borderColor: '#d0d0d0',
-      fillerColor: 'rgba(100,150,200,0.15)',
-      backgroundColor: '#f5f5f5',
-      dataBackground: { areaStyle: { color: '#d0d0d0' }, lineStyle: { color: '#bbb' } },
+      fillerColor: 'rgba(0,120,255,0.1)',
+      backgroundColor: '#fff',
+      dataBackground: { areaStyle: { color: '#e0e0e0' }, lineStyle: { color: '#bbb' } },
       textStyle: { color: '#666', fontSize: 10 },
     },
   ];
@@ -262,50 +318,62 @@ function buildChartOption(data: StockDetailResponse) {
     z: 3,
   }));
 
-  const volMaSeries = {
+  // Volume MA series (MA5, MA10, MA20)
+  const volMaSeriesConfig: { name: string; key: 'volume_ma5' | 'volume_ma10' | 'volume_ma20'; color: string }[] = [
+    { name: 'VOL_MA5', key: 'volume_ma5', color: MA_COLORS.MA5 },
+    { name: 'VOL_MA10', key: 'volume_ma10', color: MA_COLORS.MA10 },
+    { name: 'VOL_MA20', key: 'volume_ma20', color: MA_COLORS.MA20 },
+  ];
+  const volMaSeries = volMaSeriesConfig.map(({ name, key, color }) => ({
     ...lineSeriesBase,
-    name: 'VOL_MA5',
+    name,
     xAxisIndex: 1,
     yAxisIndex: 1,
-    data: ind.volume_ma5,
-    lineStyle: { width: 1, color: MA_COLORS.MA5 },
-  };
+    data: ind[key],
+    lineStyle: { width: 1, color },
+  }));
 
-  const kdjSeries = [
-    { key: 'kdj_k', name: 'KDJ_K', color: KDJ_COLORS.K },
-    { key: 'kdj_d', name: 'KDJ_D', color: KDJ_COLORS.D },
-    { key: 'kdj_j', name: 'KDJ_J', color: KDJ_COLORS.J },
-  ].map(({ key, name, color }) => ({
+  // MACD — gridIndex 2
+  const macdLineSeriesConfig: { key: 'macd_dif' | 'macd_dea'; name: string; color: string }[] = [
+    { key: 'macd_dif', name: 'DIF', color: MACD_COLORS.DIF },
+    { key: 'macd_dea', name: 'DEA', color: MACD_COLORS.DEA },
+  ];
+  const macdLineSeries = macdLineSeriesConfig.map(({ key, name, color }) => ({
     ...lineSeriesBase,
     name,
     xAxisIndex: 2,
     yAxisIndex: 2,
-    data: ind[key as keyof StockIndicatorSeries],
+    data: ind[key],
     lineStyle: { width: 1, color },
   }));
 
-  const macdLineSeries = [
-    { key: 'macd_dif', name: 'DIF', color: MACD_COLORS.DIF },
-    { key: 'macd_dea', name: 'DEA', color: MACD_COLORS.DEA },
-  ].map(({ key, name, color }) => ({
+  // KDJ — gridIndex 3
+  const kdjSeriesConfig: { key: 'kdj_k' | 'kdj_d' | 'kdj_j'; name: string; color: string }[] = [
+    { key: 'kdj_k', name: 'KDJ_K', color: KDJ_COLORS.K },
+    { key: 'kdj_d', name: 'KDJ_D', color: KDJ_COLORS.D },
+    { key: 'kdj_j', name: 'KDJ_J', color: KDJ_COLORS.J },
+  ];
+  const kdjSeries = kdjSeriesConfig.map(({ key, name, color }) => ({
     ...lineSeriesBase,
     name,
     xAxisIndex: 3,
     yAxisIndex: 3,
-    data: ind[key as keyof StockIndicatorSeries],
+    data: ind[key],
     lineStyle: { width: 1, color },
   }));
 
-  const rsiSeries = [
+  // RSI — gridIndex 4
+  const rsiSeriesConfig: { key: 'rsi6' | 'rsi12' | 'rsi24'; name: string; color: string }[] = [
     { key: 'rsi6', name: 'RSI6', color: RSI_COLORS.RSI6 },
     { key: 'rsi12', name: 'RSI12', color: RSI_COLORS.RSI12 },
     { key: 'rsi24', name: 'RSI24', color: RSI_COLORS.RSI24 },
-  ].map(({ key, name, color }) => ({
+  ];
+  const rsiSeries = rsiSeriesConfig.map(({ key, name, color }) => ({
     ...lineSeriesBase,
     name,
     xAxisIndex: 4,
     yAxisIndex: 4,
-    data: ind[key as keyof StockIndicatorSeries],
+    data: ind[key],
     lineStyle: { width: 1, color },
   }));
 
@@ -352,20 +420,23 @@ function buildChartOption(data: StockDetailResponse) {
         })),
         barMaxWidth: 8,
       },
-      volMaSeries,
-      ...kdjSeries,
+      ...volMaSeries,
+      // MACD (gridIndex 2)
       ...macdLineSeries,
       {
         name: 'MACD_HIST',
         type: 'bar' as const,
-        xAxisIndex: 3,
-        yAxisIndex: 3,
+        xAxisIndex: 2,
+        yAxisIndex: 2,
         data: ind.macd_hist.map((v) => ({
           value: v,
           itemStyle: { color: v != null && v >= 0 ? UP_COLOR : DOWN_COLOR },
         })),
         barMaxWidth: 8,
       },
+      // KDJ (gridIndex 3)
+      ...kdjSeries,
+      // RSI (gridIndex 4)
       ...rsiSeries,
     ],
   };
@@ -378,8 +449,8 @@ function QuoteItem({ label, value, color }: { label: string; value: string; colo
   return (
     <Col xs={8} sm={4}>
       <div style={{ textAlign: 'center' }}>
-        <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 2 }}>{label}</div>
-        <div style={{ fontSize: 14, fontWeight: 500, color: color ?? '#262626' }}>{value}</div>
+        <div style={{ fontSize: 11, color: '#999', marginBottom: 2 }}>{label}</div>
+        <div style={{ fontSize: 14, fontWeight: 500, color: color ?? '#333' }}>{value}</div>
       </div>
     </Col>
   );
@@ -399,15 +470,32 @@ export function StockDetailPage() {
     enabled: Boolean(stockCode),
   });
 
+  // Build date → index map for robust hover resolution
+  const dateIndexMap = useMemo<Record<string, number>>(() => {
+    if (!data) return {};
+    const map: Record<string, number> = {};
+    data.daily_bars.forEach((bar, i) => {
+      map[bar.trade_date] = i;
+    });
+    return map;
+  }, [data]);
+
   const onChartEvents = useCallback(
-    (bars: DailyBar[]) => ({
-      updateAxisPointer: (params: { axesInfo?: { value?: number }[] }) => {
+    (bars: DailyBar[], indexMap: Record<string, number>) => ({
+      updateAxisPointer: (params: { axesInfo?: { value?: number | string }[] }) => {
         const axesInfo = params?.axesInfo;
-        if (axesInfo && axesInfo.length > 0) {
-          const idx = axesInfo[0].value;
-          if (typeof idx === 'number' && idx >= 0 && idx < bars.length) {
-            setHoverInfo({ idx, bar: bars[idx] });
-          }
+        if (!axesInfo || axesInfo.length === 0) return;
+        const raw = axesInfo[0].value;
+        let idx: number;
+        if (typeof raw === 'number') {
+          idx = raw;
+        } else if (typeof raw === 'string') {
+          idx = indexMap[raw] ?? -1;
+        } else {
+          return;
+        }
+        if (idx >= 0 && idx < bars.length) {
+          setHoverInfo({ idx, bar: bars[idx] });
         }
       },
       globalout: () => setHoverInfo(null),
@@ -471,7 +559,7 @@ export function StockDetailPage() {
   const priceColor = colorOf(data.change_pct);
   const changeSign = data.change_amount >= 0 ? '+' : '';
   const chartOption = buildChartOption(data);
-  const events = onChartEvents(bars);
+  const events = onChartEvents(bars, dateIndexMap);
 
   return (
     <Space direction="vertical" size={12} style={{ display: 'flex' }}>
@@ -542,30 +630,36 @@ export function StockDetailPage() {
               children:
                 bars.length > 0 ? (
                   <>
-                    {/* K-line hover info */}
+                    {/* K-line hover info (above chart) */}
                     <KLineInfoBar hover={hoverInfo} latest={latestInfo} ind={ind} />
 
-                    {/* Sub-chart info bars */}
-                    <div style={{ display: 'flex', gap: 24, marginBottom: 4 }}>
-                      <VolumeInfoBar hover={hoverInfo} latest={latestInfo} ind={ind} />
-                    </div>
-                    <div style={{ display: 'flex', gap: 24, marginBottom: 4 }}>
-                      <KDJInfoBar hover={hoverInfo} latest={latestInfo} ind={ind} />
-                    </div>
-                    <div style={{ display: 'flex', gap: 24, marginBottom: 4 }}>
-                      <MACDInfoBar hover={hoverInfo} latest={latestInfo} ind={ind} />
-                    </div>
-                    <div style={{ display: 'flex', gap: 24, marginBottom: 4 }}>
-                      <RSIInfoBar hover={hoverInfo} latest={latestInfo} ind={ind} />
-                    </div>
+                    {/* Chart with sub-chart info overlays */}
+                    <div style={{ position: 'relative', height: CHART_HEIGHT }}>
+                      {/* Sub-chart info overlays — positioned near each sub-chart */}
+                      <SubChartOverlay gridKey="volume" title="VOL">
+                        <VolumeInfoBar hover={hoverInfo} latest={latestInfo} ind={ind} />
+                      </SubChartOverlay>
 
-                    {/* Main chart */}
-                    <ReactECharts
-                      ref={chartRef}
-                      option={chartOption}
-                      style={{ height: 780 }}
-                      onEvents={events}
-                    />
+                      <SubChartOverlay gridKey="macd" title="MACD">
+                        <MACDInfoBar hover={hoverInfo} latest={latestInfo} ind={ind} />
+                      </SubChartOverlay>
+
+                      <SubChartOverlay gridKey="kdj" title="KDJ">
+                        <KDJInfoBar hover={hoverInfo} latest={latestInfo} ind={ind} />
+                      </SubChartOverlay>
+
+                      <SubChartOverlay gridKey="rsi" title="RSI">
+                        <RSIInfoBar hover={hoverInfo} latest={latestInfo} ind={ind} />
+                      </SubChartOverlay>
+
+                      {/* Main chart */}
+                      <ReactECharts
+                        ref={chartRef}
+                        option={chartOption}
+                        style={{ height: CHART_HEIGHT }}
+                        onEvents={events}
+                      />
+                    </div>
                   </>
                 ) : (
                   <Empty description="暂无K线数据" />
