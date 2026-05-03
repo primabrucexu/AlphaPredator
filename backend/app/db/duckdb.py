@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS daily_bars (
     high_price DOUBLE NOT NULL,
     low_price DOUBLE NOT NULL,
     close_price DOUBLE NOT NULL,
-    volume BIGINT NOT NULL
+    volume BIGINT NOT NULL,
+    turnover_amount_billion DOUBLE NOT NULL DEFAULT 0.0
 )
 '''
 
@@ -35,5 +36,12 @@ def ensure_duckdb_schema(duckdb_path: Path | None = None) -> None:
     connection = connect_duckdb(duckdb_path)
     try:
         connection.execute(DAILY_BARS_SCHEMA_SQL)
+        # Migration: add turnover_amount_billion if missing (for existing DuckDB files)
+        try:
+            connection.execute(
+                'ALTER TABLE daily_bars ADD COLUMN turnover_amount_billion DOUBLE DEFAULT 0.0'
+            )
+        except Exception:  # noqa: BLE001
+            pass  # Column already exists
     finally:
         connection.close()

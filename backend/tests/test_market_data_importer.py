@@ -58,21 +58,21 @@ DAILY_SNAPSHOT_ROWS = [
 ]
 
 DAILY_BAR_ROWS = [
-    {'stock_code': '000001', 'trade_date': '2026-04-24', 'open_price': '10.92', 'high_price': '11.05', 'low_price': '10.86', 'close_price': '10.97', 'volume': '51230000'},
-    {'stock_code': '000001', 'trade_date': '2026-04-25', 'open_price': '10.98', 'high_price': '11.08', 'low_price': '10.91', 'close_price': '11.02', 'volume': '49820000'},
-    {'stock_code': '000001', 'trade_date': '2026-04-28', 'open_price': '11.03', 'high_price': '11.13', 'low_price': '10.95', 'close_price': '11.08', 'volume': '53410000'},
-    {'stock_code': '000001', 'trade_date': '2026-04-29', 'open_price': '11.06', 'high_price': '11.16', 'low_price': '11.01', 'close_price': '11.12', 'volume': '47650000'},
-    {'stock_code': '000001', 'trade_date': '2026-04-30', 'open_price': '11.13', 'high_price': '11.31', 'low_price': '11.08', 'close_price': '11.28', 'volume': '56340000'},
-    {'stock_code': '300308', 'trade_date': '2026-04-24', 'open_price': '157.60', 'high_price': '160.20', 'low_price': '156.80', 'close_price': '159.40', 'volume': '18320000'},
-    {'stock_code': '300308', 'trade_date': '2026-04-25', 'open_price': '159.80', 'high_price': '162.60', 'low_price': '158.90', 'close_price': '161.70', 'volume': '19180000'},
-    {'stock_code': '300308', 'trade_date': '2026-04-28', 'open_price': '162.10', 'high_price': '164.30', 'low_price': '160.70', 'close_price': '163.50', 'volume': '20540000'},
-    {'stock_code': '300308', 'trade_date': '2026-04-29', 'open_price': '163.80', 'high_price': '166.10', 'low_price': '162.90', 'close_price': '165.40', 'volume': '21490000'},
-    {'stock_code': '300308', 'trade_date': '2026-04-30', 'open_price': '165.90', 'high_price': '168.40', 'low_price': '164.70', 'close_price': '167.53', 'volume': '22860000'},
-    {'stock_code': '601138', 'trade_date': '2026-04-24', 'open_price': '24.85', 'high_price': '25.14', 'low_price': '24.71', 'close_price': '24.98', 'volume': '72540000'},
-    {'stock_code': '601138', 'trade_date': '2026-04-25', 'open_price': '25.01', 'high_price': '25.33', 'low_price': '24.95', 'close_price': '25.21', 'volume': '74810000'},
-    {'stock_code': '601138', 'trade_date': '2026-04-28', 'open_price': '25.25', 'high_price': '25.64', 'low_price': '25.11', 'close_price': '25.48', 'volume': '78130000'},
-    {'stock_code': '601138', 'trade_date': '2026-04-29', 'open_price': '25.56', 'high_price': '25.92', 'low_price': '25.41', 'close_price': '25.56', 'volume': '76280000'},
-    {'stock_code': '601138', 'trade_date': '2026-04-30', 'open_price': '25.61', 'high_price': '26.28', 'low_price': '25.48', 'close_price': '26.17', 'volume': '80550000'},
+    {'stock_code': '000001', 'trade_date': '2026-04-24', 'open_price': '10.92', 'high_price': '11.05', 'low_price': '10.86', 'close_price': '10.97', 'volume': '51230000', 'turnover_amount_billion': '22.30'},
+    {'stock_code': '000001', 'trade_date': '2026-04-25', 'open_price': '10.98', 'high_price': '11.08', 'low_price': '10.91', 'close_price': '11.02', 'volume': '49820000', 'turnover_amount_billion': '21.80'},
+    {'stock_code': '000001', 'trade_date': '2026-04-28', 'open_price': '11.03', 'high_price': '11.13', 'low_price': '10.95', 'close_price': '11.08', 'volume': '53410000', 'turnover_amount_billion': '23.50'},
+    {'stock_code': '000001', 'trade_date': '2026-04-29', 'open_price': '11.06', 'high_price': '11.16', 'low_price': '11.01', 'close_price': '11.12', 'volume': '47650000', 'turnover_amount_billion': '20.90'},
+    {'stock_code': '000001', 'trade_date': '2026-04-30', 'open_price': '11.13', 'high_price': '11.31', 'low_price': '11.08', 'close_price': '11.28', 'volume': '56340000', 'turnover_amount_billion': '31.70'},
+    {'stock_code': '300308', 'trade_date': '2026-04-24', 'open_price': '157.60', 'high_price': '160.20', 'low_price': '156.80', 'close_price': '159.40', 'volume': '18320000', 'turnover_amount_billion': '58.30'},
+    {'stock_code': '300308', 'trade_date': '2026-04-25', 'open_price': '159.80', 'high_price': '162.60', 'low_price': '158.90', 'close_price': '161.70', 'volume': '19180000', 'turnover_amount_billion': '61.50'},
+    {'stock_code': '300308', 'trade_date': '2026-04-28', 'open_price': '162.10', 'high_price': '164.30', 'low_price': '160.70', 'close_price': '163.50', 'volume': '20540000', 'turnover_amount_billion': '67.20'},
+    {'stock_code': '300308', 'trade_date': '2026-04-29', 'open_price': '163.80', 'high_price': '166.10', 'low_price': '162.90', 'close_price': '165.40', 'volume': '21490000', 'turnover_amount_billion': '70.80'},
+    {'stock_code': '300308', 'trade_date': '2026-04-30', 'open_price': '165.90', 'high_price': '168.40', 'low_price': '164.70', 'close_price': '167.53', 'volume': '22860000', 'turnover_amount_billion': '82.40'},
+    {'stock_code': '601138', 'trade_date': '2026-04-24', 'open_price': '24.85', 'high_price': '25.14', 'low_price': '24.71', 'close_price': '24.98', 'volume': '72540000', 'turnover_amount_billion': '36.10'},
+    {'stock_code': '601138', 'trade_date': '2026-04-25', 'open_price': '25.01', 'high_price': '25.33', 'low_price': '24.95', 'close_price': '25.21', 'volume': '74810000', 'turnover_amount_billion': '37.50'},
+    {'stock_code': '601138', 'trade_date': '2026-04-28', 'open_price': '25.25', 'high_price': '25.64', 'low_price': '25.11', 'close_price': '25.48', 'volume': '78130000', 'turnover_amount_billion': '39.80'},
+    {'stock_code': '601138', 'trade_date': '2026-04-29', 'open_price': '25.56', 'high_price': '25.92', 'low_price': '25.41', 'close_price': '25.56', 'volume': '76280000', 'turnover_amount_billion': '38.70'},
+    {'stock_code': '601138', 'trade_date': '2026-04-30', 'open_price': '25.61', 'high_price': '26.28', 'low_price': '25.48', 'close_price': '26.17', 'volume': '80550000', 'turnover_amount_billion': '45.20'},
 ]
 
 HOT_SECTORS_PAYLOAD = {
@@ -102,7 +102,7 @@ def _prepare_batch_dir(batch_dir: Path) -> None:
     )
     _write_csv(
         batch_dir / 'daily_bars.csv',
-        ['stock_code', 'trade_date', 'open_price', 'high_price', 'low_price', 'close_price', 'volume'],
+        ['stock_code', 'trade_date', 'open_price', 'high_price', 'low_price', 'close_price', 'volume', 'turnover_amount_billion'],
         DAILY_BAR_ROWS,
     )
     (batch_dir / 'hot_sectors.json').write_text(json.dumps(HOT_SECTORS_PAYLOAD, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -159,3 +159,5 @@ def test_import_market_data_batch_populates_local_store(tmp_path: Path) -> None:
     assert detail.key_indicators.avg_volume_5d == 20478000
     assert len(detail.daily_bars) == 5
     assert detail.daily_bars[-1].close_price == 167.53
+    # Verify turnover_amount_billion is populated from daily_bars
+    assert detail.daily_bars[-1].turnover_amount_billion == 82.40

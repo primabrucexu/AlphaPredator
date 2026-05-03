@@ -548,7 +548,8 @@ class MarketDataService:
         try:
             rows = connection.execute(
                 '''
-                SELECT trade_date, open_price, high_price, low_price, close_price, volume
+                SELECT trade_date, open_price, high_price, low_price, close_price, volume,
+                       turnover_amount_billion
                 FROM daily_bars
                 WHERE stock_code = ?
                 ORDER BY trade_date
@@ -571,7 +572,8 @@ class MarketDataService:
         try:
             rows = connection.execute(
                 f'''
-                SELECT trade_date, open_price, high_price, low_price, close_price, volume
+                SELECT trade_date, open_price, high_price, low_price, close_price, volume,
+                       COALESCE(turnover_amount_billion, 0.0) AS turnover_amount_billion
                 FROM read_parquet('{parquet_path}')
                 WHERE stock_code = ?
                 ORDER BY trade_date
@@ -592,8 +594,9 @@ class MarketDataService:
                 'low_price': low_price,
                 'close_price': close_price,
                 'volume': volume,
+                'turnover_amount_billion': float(turnover_amount_billion or 0.0),
             }
-            for trade_date, open_price, high_price, low_price, close_price, volume in rows
+            for trade_date, open_price, high_price, low_price, close_price, volume, turnover_amount_billion in rows
         ]
 
     def _parse_sectors_json(self, sectors_json: str | None) -> list[str]:

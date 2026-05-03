@@ -318,3 +318,69 @@ def get_default_history_start(history_days: int = 60) -> str:
     """Return an ISO date string `history_days` calendar days before today."""
     start = date.today() - timedelta(days=int(history_days * 1.5))
     return start.strftime('%Y-%m-%d')
+
+
+def fetch_daily_bars_by_date(
+    trade_date: str,
+    *,
+    use_uploaded_universe: bool = True,
+    market_filters: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Fetch daily K-line bars for the whole market for a given trade_date.
+
+    Uses a single bulk API call (pro.daily(trade_date=...)) instead of per-stock loops.
+    Optionally filters to the uploaded stock universe.
+
+    Returns a list of dicts with keys:
+        stock_code, trade_date, open_price, high_price, low_price,
+        close_price, volume, turnover_amount_billion
+    """
+    pro = _get_tushare_api()
+    ts_date = trade_date.replace('-', '')
+
+    df = _rate_limited_call(pro.daily, trade_date=ts_date)
+    if df is None or df.empty:
+        return []
+
+    symbol_map: dict[str, str] = {}
+    if use_uploaded_universe:
+        try:
+            universe_df = load_stock_universe(market_filters)
+            ts_code_set = set(universe_df['ts_code'].tolist())
+            symbol_map = dict(zip(universe_df['ts_code'], universe_df['symbol']))
+            df = df[df['ts_code'].isin(ts_code_set)].copy()
+        except FileNotFoundError:
+            # No universe uploaded; keep all stocks from Tushare response
+            pass
+
+    rows: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        ts_code = str(row['ts_code'])
+        try:
+            close = float(row.get('close') or 0)
+            if close <= 0:
+                continue
+            # Convert ts_code to 6-digit symbol
+            if ts_code in symbol_map:
+                stock_code = str(symbol_map[ts_code]).zfill(6)
+            else:
+                stock_code = ts_code.split('.')[0].zfill(6)
+            # Tushare trade_date column is 'YYYYMMDD'; convert to 'YYYY-MM-DD'
+            td = str(row['trade_date'])
+            trade_date_str = f'{td[:4]}-{td[4:6]}-{td[6:8]}'
+            rows.append({
+                'stock_code': stock_code,
+                'trade_date': trade_date_str,
+                'open_price': round(float(row['open']), 4),
+                'high_price': round(float(row['high']), 4),
+                'low_price': round(float(row['low']), 4),
+                'close_price': close,
+                'volume': int(float(row['vol'])),
+                # Tushare amount is in 千元 (thousand yuan); convert to 亿元 (100M yuan)
+                'turnover_amount_billion': round(float(row.get('amount') or 0) / 1e6, 4),
+            })
+        except (ValueError, TypeError):
+            continue
+
+    return rows
