@@ -15,6 +15,27 @@ from app.schemas.data_init import (
 router = APIRouter()
 
 
+def _read_stock_list_csv(contents: bytes):
+    """Read uploaded stock list CSV with common encoding fallbacks."""
+    import io
+
+    import pandas as pd
+
+    encodings = ('utf-8-sig', 'utf-8', 'gb18030', 'gbk')
+    last_error: Exception | None = None
+    for encoding in encodings:
+        try:
+            return pd.read_csv(io.BytesIO(contents), dtype=str, encoding=encoding)
+        except UnicodeDecodeError as exc:
+            last_error = exc
+            continue
+
+    raise ValueError(
+        'Failed to parse CSV with supported encodings '
+        f"{encodings}. Last error: {last_error}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Token configuration
 # ---------------------------------------------------------------------------
@@ -56,10 +77,6 @@ async def upload_stock_list(file: UploadFile) -> StockListUploadResponse:
     The file is persisted server-side and used as the source for all subsequent
     initialization runs.
     """
-    import io
-
-    import pandas as pd
-
     from app.modules.market_data.data_source import _REQUIRED_STOCK_LIST_COLS
 
     if not file.filename or not file.filename.lower().endswith('.csv'):
@@ -70,11 +87,11 @@ async def upload_stock_list(file: UploadFile) -> StockListUploadResponse:
 
     contents = await file.read()
     try:
-        df = pd.read_csv(io.BytesIO(contents), dtype=str)
-    except Exception as exc:
+        df = _read_stock_list_csv(contents)
+    except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f'Failed to parse CSV: {exc}',
+            detail=str(exc),
         ) from exc
 
     missing = _REQUIRED_STOCK_LIST_COLS - set(df.columns)

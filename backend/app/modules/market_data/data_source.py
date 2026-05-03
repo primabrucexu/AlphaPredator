@@ -225,17 +225,27 @@ def fetch_stock_pool(
     Returns a list of dicts with keys:
         stock_code, stock_name, sectors, ai_quick_summary
     """
-    if snapshot_rows is None:
-        snapshot_rows = fetch_spot_snapshot(market_filters=market_filters)
+    if snapshot_rows:
+        return [
+            {
+                'stock_code': row['stock_code'],
+                'stock_name': row['stock_name'],
+                'sectors': '',
+                'ai_quick_summary': '',
+            }
+            for row in snapshot_rows
+        ]
 
+    # Fallback for non-trading days or empty snapshot responses: use uploaded stock universe
+    universe_df = load_stock_universe(market_filters)
     return [
         {
-            'stock_code': row['stock_code'],
-            'stock_name': row['stock_name'],
+            'stock_code': str(row['symbol']).zfill(6),
+            'stock_name': str(row['name']).strip(),
             'sectors': '',
             'ai_quick_summary': '',
         }
-        for row in snapshot_rows
+        for _, row in universe_df.iterrows()
     ]
 
 

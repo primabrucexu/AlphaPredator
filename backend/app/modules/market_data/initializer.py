@@ -171,7 +171,7 @@ def _run_initialization(
         # ---- Step 1: fetch spot snapshot ----
         logger.info('Initialization: fetching spot snapshot …')
         snapshot_rows = fetch_spot_snapshot(trade_date, market_filters=market_filters)
-        stock_pool = fetch_stock_pool(snapshot_rows)
+        stock_pool = fetch_stock_pool(snapshot_rows, market_filters=market_filters)
 
         total = len(stock_pool)
         _write_status(
@@ -208,6 +208,16 @@ def _run_initialization(
                     },
                     status_dir,
                 )
+
+        # If today's snapshot is empty (e.g., non-trading day), derive snapshots from latest bars.
+        if not snapshot_rows:
+            snapshot_rows = _derive_snapshots_from_bars(all_bars, stock_pool)
+
+        if not snapshot_rows:
+            raise ValueError(
+                'No snapshot rows available after fetching data. '
+                'Please confirm selected market filters and date range contain trading data.'
+            )
 
         # ---- Step 3: write batch CSVs ----
         batch_dir = batch_dir_override or (settings.market_data_import_dir / f'tushare-{trade_date}')
@@ -324,3 +334,43 @@ def _write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) ->
 def _now_iso() -> str:
     from datetime import datetime, timezone
     return datetime.now(tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def _derive_snapshots_from_bars(
+    daily_bars: list[dict[str, Any]],
+    stock_pool: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build one snapshot row per stock from the latest available daily bar."""
+    if not daily_bars:
+        return []
+
+    name_by_code = {row['stock_code']: row.get('stock_name', '') for row in stock_pool}
+    bars_by_code: dict[str, list[dict[str, Any]]] = {}
+    for row in daily_bars:
+        bars_by_code.setdefault(row['stock_code'], []).append(row)
+
+    snapshots: list[dict[str, Any]] = []
+    for code, bars in bars_by_code.items():
+        ordered = sorted(bars, key=lambda x: x['trade_date'])
+        latest = ordered[-1]
+        prev_close = float(ordered[-2]['close_price']) if len(ordered) > 1 else float(latest['close_price'])
+        current_price = float(latest['close_price'])
+        change_amount = current_price - prev_close
+        change_pct = 0.0 if prev_close == 0 else (change_amount / prev_close) * 100
+
+        snapshots.append(
+            {
+                'trade_date': latest['trade_date'],
+                'stock_code': code,
+                'stock_name': name_by_code.get(code, ''),
+                'current_price': round(current_price, 4),
+                'change_amount': round(change_amount, 4),
+                'change_pct': round(change_pct, 4),
+                # Not provided by per-stock daily endpoint in current pipeline.
+                'turnover_amount_billion': 0.0,
+                'turnover_rate': 0.0,
+            }
+        )
+
+    return snapshots
+
