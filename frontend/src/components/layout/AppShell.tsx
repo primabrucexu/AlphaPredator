@@ -2,6 +2,7 @@ import {
   AreaChartOutlined,
   DatabaseOutlined,
   HistoryOutlined,
+  HomeOutlined,
   RadarChartOutlined,
   SettingOutlined,
   StarOutlined,
@@ -13,7 +14,8 @@ import { useLocation, useNavigate } from 'react-router-dom';
 const { Header, Content, Sider } = Layout;
 
 const menuItems = [
-  { key: '/', icon: <AreaChartOutlined />, label: '市场总览' },
+  { key: '/', icon: <HomeOutlined />, label: '首页搜索' },
+  { key: '/market', icon: <AreaChartOutlined />, label: '市场总览' },
   { key: '/results', icon: <RadarChartOutlined />, label: 'AI 选股结果' },
   { key: '/focus', icon: <StarOutlined />, label: '重点关注' },
   { key: '/history', icon: <HistoryOutlined />, label: '历史记录' },

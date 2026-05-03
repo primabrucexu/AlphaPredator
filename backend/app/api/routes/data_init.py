@@ -4,6 +4,7 @@ from app.core.settings import settings
 from app.modules.market_data.initializer import read_init_status, start_initialization
 from app.modules.market_data.updater import run_daily_update
 from app.schemas.data_init import (
+    InitOverviewResponse,
     InitStatusResponse,
     SaveTokenRequest,
     StartInitRequest,
@@ -84,10 +85,43 @@ async def upload_stock_list(file: UploadFile) -> StockListUploadResponse:
             detail=f'CSV is missing required columns: {sorted(missing)}',
         )
 
-    # Persist to configured path
+    # Persist raw CSV to configured path
     dest = settings.stock_list_path
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(contents)
+
+    # Persist to stock_universe table for fast lookup (including cnspell for pinyin search)
+    from datetime import datetime, timezone
+
+    from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
+
+    uploaded_at = datetime.now(timezone.utc).isoformat()
+    ensure_sqlite_schema()
+    conn = connect_sqlite()
+    try:
+        conn.execute('DELETE FROM stock_universe')
+        rows_to_insert = []
+        for _, row in df.iterrows():
+            rows_to_insert.append((
+                str(row.get('ts_code', '') or '').strip(),
+                str(row.get('symbol', '') or '').strip(),
+                str(row.get('name', '') or '').strip(),
+                str(row.get('cnspell', '') or '').strip().upper(),
+                str(row.get('market', '') or '').strip(),
+                str(row.get('list_status', '') or '').strip(),
+                str(row.get('list_date', '') or '').strip(),
+                str(row.get('delist_date', '') or '').strip(),
+                uploaded_at,
+            ))
+        conn.executemany(
+            '''INSERT OR REPLACE INTO stock_universe
+               (ts_code, symbol, name, cnspell, market, list_status, list_date, delist_date, uploaded_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            rows_to_insert,
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
     # Compute stats
     total = len(df)
@@ -151,3 +185,77 @@ def daily_update() -> UpdateResult:
     """
     result = run_daily_update()
     return UpdateResult(**result)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.10: Init overview (homepage status panel)
+# ---------------------------------------------------------------------------
+
+
+@router.get('/overview', response_model=InitOverviewResponse)
+def get_init_overview() -> InitOverviewResponse:
+    """
+    Return a lightweight overview of the initialization state for the homepage.
+
+    Includes:
+    - Whether a Tushare token is configured.
+    - Whether the stock universe CSV has been uploaded.
+    - Whether initialization has completed (status=done).
+    - Stock list update timestamp and per-board active stock counts.
+    - Daily quote cutoff time (15:30 CST on today's date).
+    """
+    from datetime import datetime, timezone
+
+    from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
+    from app.modules.market_data.data_source import _get_token
+
+    token_configured = bool(_get_token())
+    stock_list_path = settings.stock_list_path
+    stock_list_uploaded = stock_list_path.exists()
+
+    init_status_data = read_init_status()
+    init_completed = init_status_data.get('status') == 'done'
+
+    stock_list_updated_at: str | None = None
+    board_counts: dict[str, int] = {}
+
+    if stock_list_uploaded:
+        ensure_sqlite_schema()
+        conn = connect_sqlite()
+        try:
+            row = conn.execute(
+                'SELECT MAX(uploaded_at) AS uploaded_at FROM stock_universe'
+            ).fetchone()
+            if row and row['uploaded_at']:
+                stock_list_updated_at = str(row['uploaded_at'])
+
+            board_rows = conn.execute(
+                '''SELECT market, COUNT(*) AS cnt
+                   FROM stock_universe
+                   WHERE list_status = 'L' AND market != ''
+                   GROUP BY market'''
+            ).fetchall()
+            for br in board_rows:
+                board_counts[str(br['market'])] = int(br['cnt'])
+        finally:
+            conn.close()
+
+        # Fallback: use file mtime if no uploaded_at in DB
+        if not stock_list_updated_at:
+            mtime = stock_list_path.stat().st_mtime
+            stock_list_updated_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+
+    # Daily quote cutoff: 15:30 CST (07:30 UTC) on today's date
+    from datetime import timedelta
+    today_utc = datetime.now(timezone.utc).date()
+    cutoff_utc = datetime(today_utc.year, today_utc.month, today_utc.day, 7, 30, tzinfo=timezone.utc)
+    daily_quote_cutoff_time = cutoff_utc.isoformat()
+
+    return InitOverviewResponse(
+        init_completed=init_completed,
+        token_configured=token_configured,
+        stock_list_uploaded=stock_list_uploaded,
+        stock_list_updated_at=stock_list_updated_at,
+        daily_quote_cutoff_time=daily_quote_cutoff_time,
+        board_counts=board_counts,
+    )

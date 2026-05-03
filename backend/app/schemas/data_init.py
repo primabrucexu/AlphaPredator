@@ -46,3 +46,17 @@ class StockListUploadResponse(BaseModel):
     total_stocks: int = Field(..., description='CSV 中股票总数（含退市）')
     active_stocks: int = Field(..., description='当前上市股票数（list_status=L）')
     boards: dict[str, int] = Field(..., description='各板块上市股票数量')
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.10: Init overview (homepage status panel)
+# ---------------------------------------------------------------------------
+
+
+class InitOverviewResponse(BaseModel):
+    init_completed: bool = Field(..., description='是否已完成初始化（status=done）')
+    token_configured: bool = Field(..., description='Tushare token 是否已配置')
+    stock_list_uploaded: bool = Field(..., description='股票清单 CSV 是否已上传')
+    stock_list_updated_at: str | None = Field(None, description='股票清单最后上传时间（ISO 8601 UTC），未上传则为 null')
+    daily_quote_cutoff_time: str | None = Field(None, description='每日行情更新截止时间（ISO 8601）')
+    board_counts: dict[str, int] = Field(default_factory=dict, description='各板块当前上市股票数（仅已上传时有值）')
