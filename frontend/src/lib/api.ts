@@ -126,8 +126,8 @@ export interface StockListUploadResponse {
   boards: Record<string, number>;
 }
 
-export type MarketBoard = '主板' | '创业板' | '科创板';
-export const ALL_MARKET_BOARDS: MarketBoard[] = ['主板', '创业板', '科创板'];
+export type MarketBoard = '主板' | '创业板' | '科创板' | '北交所';
+export const ALL_MARKET_BOARDS: MarketBoard[] = ['主板', '创业板', '科创板', '北交所'];
 
 // ---------------------------------------------------------------------------
 // HTTP helpers

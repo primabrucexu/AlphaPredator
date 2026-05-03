@@ -15,16 +15,16 @@ class InitStatusResponse(BaseModel):
     error_message: str = Field('', description='错误信息（仅 error 状态时有值）')
 
 
-MarketBoard = Literal['主板', '创业板', '科创板']
+MarketBoard = Literal['主板', '创业板', '科创板', '北交所']
 
-ALL_MARKET_BOARDS: list[MarketBoard] = ['主板', '创业板', '科创板']
+ALL_MARKET_BOARDS: list[MarketBoard] = ['主板', '创业板', '科创板', '北交所']
 
 
 class StartInitRequest(BaseModel):
     history_days: int = Field(60, ge=1, le=3650, description='历史行情天数（日历天数近似）')
     market_filters: list[MarketBoard] = Field(
         default_factory=lambda: list(ALL_MARKET_BOARDS),
-        description='市场板块筛选：主板 / 创业板 / 科创板（默认全量）',
+        description='市场板块筛选：主板 / 创业板 / 科创板 / 北交所（默认全量）',
     )
 
 
