@@ -294,7 +294,7 @@ def get_overview(sqlite_path: Path | None = None) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _run_task(task_id: str, sqlite_path: Path | None) -> None:  # noqa: C901
+def _run_task(task_id: str, sqlite_path: Path | None) -> None:
     """Background thread: process every date in the task's date range."""
     logger.info('Task %s: started', task_id)
     try:
@@ -313,97 +313,9 @@ def _run_task(task_id: str, sqlite_path: Path | None) -> None:  # noqa: C901
         dates = _generate_date_list(task_row['start_date'], task_row['end_date'])
 
         for date_str in dates:
-            d = datetime.strptime(date_str, '%Y%m%d').date()
-            trading = is_trading_day(d)
-
-            # Update current_date and day status
-            conn = _connect(sqlite_path)
-            try:
-                conn.execute(
-                    'UPDATE init_task SET current_date = ? WHERE task_id = ?',
-                    (date_str, task_id),
-                )
-                conn.execute(
-                    '''UPDATE init_task_day SET started_at = ?, status = ?
-                       WHERE task_id = ? AND trade_date = ?''',
-                    (
-                        _now_iso(),
-                        'FETCHING' if trading else 'SKIPPED_NON_TRADING',
-                        task_id,
-                        date_str,
-                    ),
-                )
-                conn.commit()
-            finally:
-                conn.close()
-
-            if not trading:
-                conn = _connect(sqlite_path)
-                try:
-                    conn.execute(
-                        '''UPDATE init_task_day SET finished_at = ?
-                           WHERE task_id = ? AND trade_date = ?''',
-                        (_now_iso(), task_id, date_str),
-                    )
-                    conn.execute(
-                        'UPDATE init_task SET processed_days = processed_days + 1 WHERE task_id = ?',
-                        (task_id,),
-                    )
-                    conn.commit()
-                finally:
-                    conn.close()
-                continue
-
-            # Trading day: fetch data
-            try:
-                rows = _fetch_daily_raw(date_str)
-            except Exception as exc:
-                logger.exception('Task %s: fetch failed for %s: %s', task_id, date_str, exc)
-                _mark_day_failed(task_id, date_str, str(exc), sqlite_path)
-                _mark_task_failed(task_id, f'Fetch failed on {date_str}: {exc}', sqlite_path)
+            # Returns False when the task must be aborted due to a fatal error.
+            if not _process_one_day(task_id, date_str, sqlite_path):
                 return
-
-            # Trading day: write
-            conn = _connect(sqlite_path)
-            try:
-                conn.execute(
-                    '''UPDATE init_task_day SET status = 'WRITING'
-                       WHERE task_id = ? AND trade_date = ?''',
-                    (task_id, date_str),
-                )
-                conn.commit()
-            finally:
-                conn.close()
-
-            try:
-                _atomic_write_day(date_str, rows, sqlite_path)
-            except Exception as exc:
-                logger.exception('Task %s: write failed for %s: %s', task_id, date_str, exc)
-                _mark_day_failed(task_id, date_str, str(exc), sqlite_path)
-                _mark_task_failed(task_id, f'Write failed on {date_str}: {exc}', sqlite_path)
-                return
-
-            # Day succeeded
-            conn = _connect(sqlite_path)
-            try:
-                conn.execute(
-                    '''UPDATE init_task_day
-                       SET status = 'SUCCESS', finished_at = ?, row_count = ?
-                       WHERE task_id = ? AND trade_date = ?''',
-                    (_now_iso(), len(rows), task_id, date_str),
-                )
-                conn.execute(
-                    '''UPDATE init_task
-                       SET processed_days = processed_days + 1,
-                           done_trading_days = done_trading_days + 1
-                       WHERE task_id = ?''',
-                    (task_id,),
-                )
-                conn.commit()
-            finally:
-                conn.close()
-
-            logger.debug('Task %s: %s done (%d rows)', task_id, date_str, len(rows))
 
         # All dates processed
         conn = _connect(sqlite_path)
@@ -429,6 +341,130 @@ def _run_task(task_id: str, sqlite_path: Path | None) -> None:  # noqa: C901
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _process_one_day(
+    task_id: str,
+    date_str: str,
+    sqlite_path: Path | None,
+) -> bool:
+    """Process a single calendar date for a running task.
+
+    Returns True on success (or skip for non-trading day).
+    Returns False when a fatal error occurred and the task must be aborted.
+    """
+    d = datetime.strptime(date_str, '%Y%m%d').date()
+    trading = is_trading_day(d)
+
+    # Update current_date and day status
+    conn = _connect(sqlite_path)
+    try:
+        conn.execute(
+            'UPDATE init_task SET current_date = ? WHERE task_id = ?',
+            (date_str, task_id),
+        )
+        conn.execute(
+            '''UPDATE init_task_day SET started_at = ?, status = ?
+               WHERE task_id = ? AND trade_date = ?''',
+            (
+                _now_iso(),
+                'FETCHING' if trading else 'SKIPPED_NON_TRADING',
+                task_id,
+                date_str,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    if not trading:
+        return _skip_non_trading_day(task_id, date_str, sqlite_path)
+
+    return _process_trading_day(task_id, date_str, sqlite_path)
+
+
+def _skip_non_trading_day(
+    task_id: str,
+    date_str: str,
+    sqlite_path: Path | None,
+) -> bool:
+    """Mark a non-trading day as skipped and increment the processed counter."""
+    conn = _connect(sqlite_path)
+    try:
+        conn.execute(
+            'UPDATE init_task_day SET finished_at = ? WHERE task_id = ? AND trade_date = ?',
+            (_now_iso(), task_id, date_str),
+        )
+        conn.execute(
+            'UPDATE init_task SET processed_days = processed_days + 1 WHERE task_id = ?',
+            (task_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return True
+
+
+def _process_trading_day(
+    task_id: str,
+    date_str: str,
+    sqlite_path: Path | None,
+) -> bool:
+    """Fetch data from Tushare and atomically write it for a single trading day.
+
+    Returns True on success, False on any fatal error.
+    """
+    # Fetch
+    try:
+        rows = _fetch_daily_raw(date_str)
+    except Exception as exc:
+        logger.exception('Task %s: fetch failed for %s: %s', task_id, date_str, exc)
+        _mark_day_failed(task_id, date_str, str(exc), sqlite_path)
+        _mark_task_failed(task_id, f'Fetch failed on {date_str}: {exc}', sqlite_path)
+        return False
+
+    # Mark as WRITING
+    conn = _connect(sqlite_path)
+    try:
+        conn.execute(
+            "UPDATE init_task_day SET status = 'WRITING' WHERE task_id = ? AND trade_date = ?",
+            (task_id, date_str),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Write atomically
+    try:
+        _atomic_write_day(date_str, rows, sqlite_path)
+    except Exception as exc:
+        logger.exception('Task %s: write failed for %s: %s', task_id, date_str, exc)
+        _mark_day_failed(task_id, date_str, str(exc), sqlite_path)
+        _mark_task_failed(task_id, f'Write failed on {date_str}: {exc}', sqlite_path)
+        return False
+
+    # Day succeeded
+    conn = _connect(sqlite_path)
+    try:
+        conn.execute(
+            '''UPDATE init_task_day
+               SET status = 'SUCCESS', finished_at = ?, row_count = ?
+               WHERE task_id = ? AND trade_date = ?''',
+            (_now_iso(), len(rows), task_id, date_str),
+        )
+        conn.execute(
+            '''UPDATE init_task
+               SET processed_days = processed_days + 1,
+                   done_trading_days = done_trading_days + 1
+               WHERE task_id = ?''',
+            (task_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    logger.debug('Task %s: %s done (%d rows)', task_id, date_str, len(rows))
+    return True
 
 
 def _fetch_daily_raw(date_str: str) -> list[dict[str, Any]]:

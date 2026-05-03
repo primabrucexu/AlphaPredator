@@ -2,9 +2,19 @@
 Tests migrated from the old Phase 2.9 initializer.
 
 The V2 initializer replaces the old CSV-based approach.  This file retains
-tests that are still relevant (updater, data-source helpers) and removes
-tests that exercised the old implementation (write_batch, start_initialization).
-The new V2-specific tests live in test_v2_initializer.py.
+the following tests that remain relevant after the V2 refactor:
+- Updater (run_daily_update): unmodified, still uses the same API.
+- Data source helpers (load_stock_universe, _to_ts_code): unchanged utilities.
+
+Tests removed (exercised old CSV-based V1 initializer only):
+- test_read_init_status_returns_idle_when_no_file
+- test_write_batch_creates_expected_files
+- test_start_initialization_runs_and_sets_done
+- test_start_initialization_returns_false_when_already_running
+- test_start_initialization_raises_when_token_missing
+- test_start_initialization_raises_when_stock_list_missing
+
+New V2-specific tests live in test_v2_initializer.py.
 """
 
 from __future__ import annotations
