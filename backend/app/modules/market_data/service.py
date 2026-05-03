@@ -36,7 +36,7 @@ class MarketDataService:
 
     def get_market_overview(self) -> MarketOverviewResponse:
         payload = (
-            self._load_market_overview_payload_from_sqlite()
+            self._load_market_overview_payload_from_duckdb()
             or self._load_market_overview_payload_from_snapshot()
             or self._sample_market_overview_payload()
         )
@@ -44,7 +44,7 @@ class MarketDataService:
 
     def get_stock_detail(self, stock_code: str) -> StockDetailResponse:
         payload = (
-            self._load_stock_detail_payload_from_sqlite(stock_code)
+            self._load_stock_detail_payload_from_duckdb(stock_code)
             or self._load_stock_detail_payload_from_snapshot(stock_code)
             or self._sample_stock_detail_payload(stock_code)
         )
@@ -212,15 +212,7 @@ class MarketDataService:
         return StockResolveResponse(status='not_found', message='未找到匹配股票')
 
     def _has_local_market_data(self, sqlite_conn: Any, stock_code: str) -> bool:
-        """Return True when local snapshot or bar data exists for the stock."""
-        row = sqlite_conn.execute(
-            'SELECT 1 FROM daily_stock_snapshots WHERE stock_code = ? LIMIT 1',
-            [stock_code],
-        ).fetchone()
-        if row:
-            return True
-
-        # Snapshot may be missing on partial imports; fallback to bar existence.
+        """Return True when local daily bars exist in DuckDB for the stock."""
         return self._has_stock_daily_bars(stock_code)
 
     def _has_stock_daily_bars(self, stock_code: str) -> bool:
@@ -238,88 +230,63 @@ class MarketDataService:
             finally:
                 connection.close()
 
-        if self._daily_bars_parquet_path.exists():
-            connection = connect_duckdb(self._duckdb_path)
-            parquet_path = str(self._daily_bars_parquet_path).replace('\\', '/').replace("'", "''")
-            try:
-                row = connection.execute(
-                    f"SELECT 1 FROM read_parquet('{parquet_path}') WHERE stock_code = ? LIMIT 1",
-                    [stock_code],
-                ).fetchone()
-                if row:
-                    return True
-            except Exception:
-                return False
-            finally:
-                connection.close()
-
         return False
 
-    def _load_market_overview_payload_from_sqlite(self) -> dict[str, Any] | None:
-        if not self._sqlite_path.exists():
+    def _load_market_overview_payload_from_duckdb(self) -> dict[str, Any] | None:
+        if not self._duckdb_path.exists():
             return None
 
-        connection = connect_sqlite(self._sqlite_path)
+        connection = connect_duckdb(self._duckdb_path)
         try:
             latest_trade_date_row = connection.execute(
-                'SELECT MAX(trade_date) AS trade_date FROM daily_stock_snapshots'
+                'SELECT MAX(trade_date) AS trade_date FROM daily_bars'
             ).fetchone()
-            latest_trade_date = str(latest_trade_date_row['trade_date'] or '').strip() if latest_trade_date_row else ''
+            latest_trade_date = str(latest_trade_date_row[0] or '').strip() if latest_trade_date_row else ''
             if not latest_trade_date:
                 return None
 
             stock_rows = connection.execute(
                 '''
                 SELECT
-                    snapshots.trade_date,
-                    snapshots.stock_code,
-                    profiles.stock_name,
-                    profiles.sectors_json,
-                    profiles.ai_quick_summary,
-                    snapshots.current_price,
-                    snapshots.change_amount,
-                    snapshots.change_pct,
-                    snapshots.turnover_amount_billion,
-                    snapshots.turnover_rate
-                FROM daily_stock_snapshots AS snapshots
-                JOIN stock_profiles AS profiles
-                  ON profiles.stock_code = snapshots.stock_code
-                WHERE snapshots.trade_date = ?
-                ORDER BY snapshots.turnover_amount_billion DESC, snapshots.stock_code ASC
+                    stock_code,
+                    trade_date,
+                    close_price,
+                    turnover_amount_billion,
+                    LAG(close_price) OVER (PARTITION BY stock_code ORDER BY trade_date) AS prev_close
+                FROM daily_bars
+                QUALIFY trade_date = ?
+                ORDER BY turnover_amount_billion DESC, stock_code ASC
                 ''',
                 [latest_trade_date],
             ).fetchall()
             if not stock_rows:
                 return None
-
-            hot_sector_rows = self._load_hot_sectors_from_image_pipeline(connection, latest_trade_date)
-            if not hot_sector_rows:
-                hot_sector_rows = connection.execute(
-                    '''
-                    SELECT trade_date, name, trend_label, heat_score
-                    FROM hot_sector_snapshots
-                    WHERE trade_date = ?
-                    ORDER BY heat_score DESC, name ASC
-                    ''',
-                    [latest_trade_date],
-                ).fetchall()
         finally:
             connection.close()
 
+        name_map = self._load_stock_name_map()
+
         stocks = []
         for row in stock_rows:
+            stock_code = str(row[0])
+            trade_date = str(row[1])
+            current_price = float(row[2])
+            turnover_amount_billion = float(row[3] or 0.0)
+            prev_close = float(row[4]) if row[4] is not None else current_price
+            change_amount = round(current_price - prev_close, 4)
+            change_pct = 0.0 if prev_close == 0 else round(change_amount / prev_close * 100, 4)
             stocks.append(
                 {
-                    'trade_date': row['trade_date'],
-                    'stock_code': row['stock_code'],
-                    'stock_name': row['stock_name'],
-                    'current_price': row['current_price'],
-                    'change_amount': row['change_amount'],
-                    'change_pct': row['change_pct'],
-                    'turnover_amount_billion': row['turnover_amount_billion'],
-                    'turnover_rate': row['turnover_rate'],
-                    'sectors': self._parse_sectors_json(row['sectors_json']),
-                    'ai_quick_summary': row['ai_quick_summary'],
+                    'trade_date': trade_date,
+                    'stock_code': stock_code,
+                    'stock_name': name_map.get(stock_code, stock_code),
+                    'current_price': current_price,
+                    'change_amount': change_amount,
+                    'change_pct': change_pct,
+                    'turnover_amount_billion': turnover_amount_billion,
+                    'turnover_rate': 0.0,
+                    'sectors': [],
+                    'ai_quick_summary': '',
                 }
             )
 
@@ -333,7 +300,7 @@ class MarketDataService:
                     2,
                 ),
             },
-            'hot_sectors': [dict(row) for row in hot_sector_rows],
+            'hot_sectors': [],
             'stocks': stocks,
         }
 
@@ -389,30 +356,25 @@ class MarketDataService:
             return '热度回落'
         return '新晋热点'
 
-    def _load_stock_detail_payload_from_sqlite(self, stock_code: str) -> dict[str, Any] | None:
-        if not self._sqlite_path.exists():
+    def _load_stock_detail_payload_from_duckdb(self, stock_code: str) -> dict[str, Any] | None:
+        if not self._duckdb_path.exists():
             return None
 
-        connection = connect_sqlite(self._sqlite_path)
+        connection = connect_duckdb(self._duckdb_path)
         try:
             row = connection.execute(
                 '''
                 SELECT
-                    snapshots.trade_date,
-                    snapshots.stock_code,
-                    profiles.stock_name,
-                    profiles.sectors_json,
-                    profiles.ai_quick_summary,
-                    snapshots.current_price,
-                    snapshots.change_amount,
-                    snapshots.change_pct,
-                    snapshots.turnover_amount_billion,
-                    snapshots.turnover_rate
-                FROM daily_stock_snapshots AS snapshots
-                JOIN stock_profiles AS profiles
-                  ON profiles.stock_code = snapshots.stock_code
-                WHERE snapshots.stock_code = ?
-                ORDER BY snapshots.trade_date DESC
+                    trade_date,
+                    open_price,
+                    high_price,
+                    low_price,
+                    close_price,
+                    turnover_amount_billion,
+                    LAG(close_price) OVER (PARTITION BY stock_code ORDER BY trade_date) AS prev_close
+                FROM daily_bars
+                WHERE stock_code = ?
+                ORDER BY trade_date DESC
                 LIMIT 1
                 ''',
                 [stock_code],
@@ -423,17 +385,26 @@ class MarketDataService:
         if row is None:
             return None
 
+        stock_name = self._load_stock_name_map().get(stock_code, stock_code)
+        current_price = float(row[4])
+        prev_close = float(row[6]) if row[6] is not None else current_price
+        change_amount = round(current_price - prev_close, 4)
+        change_pct = 0.0 if prev_close == 0 else round(change_amount / prev_close * 100, 4)
+
         return {
-            'trade_date': row['trade_date'],
-            'stock_code': row['stock_code'],
-            'stock_name': row['stock_name'],
-            'current_price': row['current_price'],
-            'change_amount': row['change_amount'],
-            'change_pct': row['change_pct'],
-            'turnover_amount_billion': row['turnover_amount_billion'],
-            'turnover_rate': row['turnover_rate'],
-            'sectors': self._parse_sectors_json(row['sectors_json']),
-            'ai_quick_summary': row['ai_quick_summary'],
+            'trade_date': str(row[0]),
+            'stock_code': stock_code,
+            'stock_name': stock_name,
+            'current_price': current_price,
+            'change_amount': change_amount,
+            'change_pct': change_pct,
+            'open_price': float(row[1]),
+            'high_price': float(row[2]),
+            'low_price': float(row[3]),
+            'turnover_amount_billion': float(row[5] or 0.0),
+            'turnover_rate': 0.0,
+            'sectors': [],
+            'ai_quick_summary': '',
         }
 
     def _load_market_overview_payload_from_snapshot(self) -> dict[str, Any] | None:
@@ -493,10 +464,7 @@ class MarketDataService:
         return payload if isinstance(payload, dict) else None
 
     def _load_stock_daily_bars(self, stock_code: str) -> list[dict[str, Any]]:
-        rows = self._load_stock_daily_bars_from_duckdb(stock_code)
-        if rows:
-            return rows
-        return self._load_stock_daily_bars_from_parquet(stock_code)
+        return self._load_stock_daily_bars_from_duckdb(stock_code)
 
     def _enrich_daily_bars_with_turnover(
         self, stock_code: str, daily_bars: list[dict[str, Any]]
@@ -584,6 +552,22 @@ class MarketDataService:
             connection.close()
 
         return self._serialize_daily_bar_rows(rows)
+
+    def _load_stock_name_map(self) -> dict[str, str]:
+        if not self._sqlite_path.exists():
+            return {}
+        connection = connect_sqlite(self._sqlite_path)
+        try:
+            rows = connection.execute(
+                "SELECT symbol, name FROM stock_universe WHERE list_status = 'L'"
+            ).fetchall()
+        finally:
+            connection.close()
+        return {
+            str(row['symbol']).zfill(6): str(row['name'])
+            for row in rows
+            if row['symbol'] and row['name']
+        }
 
     def _serialize_daily_bar_rows(self, rows: list[tuple[Any, ...]]) -> list[dict[str, Any]]:
         return [

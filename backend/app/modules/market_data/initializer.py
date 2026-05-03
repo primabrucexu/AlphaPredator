@@ -7,8 +7,8 @@ Date-driven approach:
    a. Check whether it is a Chinese stock-market trading day (via ChnCal).
    b. Non-trading days -> mark SKIPPED_NON_TRADING, advance progress counter.
    c. Trading days -> call tushare pro.daily(trade_date=YYYYMMDD), write the
-      result atomically to ``market_daily_quote`` (delete-then-insert in one
-      SQLite transaction), validate row count, then commit.
+      result atomically to DuckDB ``daily_bars`` (delete-then-insert),
+      validate row count, then commit.
 3. Update task status and data-range metadata on completion.
 
 Key properties:
@@ -283,8 +283,12 @@ def get_overview(sqlite_path: Path | None = None) -> dict[str, Any]:
             "ORDER BY finished_at DESC LIMIT 1"
         ).fetchone()
         meta_row = conn.execute(
-            "SELECT * FROM data_range_meta WHERE dataset = 'market_daily_quote'"
+            "SELECT * FROM data_range_meta WHERE dataset = 'daily_bars'"
         ).fetchone()
+        if not meta_row:
+            meta_row = conn.execute(
+                "SELECT * FROM data_range_meta WHERE dataset = 'market_daily_quote'"
+            ).fetchone()
         return {
             'running_task': dict(running_row) if running_row else None,
             'latest_task': dict(latest_row) if latest_row else None,
@@ -343,7 +347,7 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
         finally:
             conn.close()
 
-        _update_data_range_meta(sqlite_path)
+        _update_data_range_meta(sqlite_path, duckdb_path)
 
         # Regenerate Parquet from DuckDB so the fallback read path is also up to date.
         try:
@@ -513,7 +517,7 @@ def _fetch_daily_raw(
 ) -> list[dict[str, Any]]:
     """Fetch full-market daily quote from Tushare for *date_str* (YYYYMMDD).
 
-    Returns a list of row dicts matching the ``market_daily_quote`` columns,
+    Returns a list of row dicts matching the fetched Tushare daily quote columns,
     including computed limit-up/down prices and ST flags.
     """
     from app.modules.market_data.data_source import _get_tushare_api, _rate_limited_call
@@ -592,65 +596,11 @@ def _atomic_write_day(
     sqlite_path: Path | None,
     duckdb_path: Path | None = None,
 ) -> None:
-    """Delete existing rows for *date_str* then insert *rows* in one transaction.
+    """Delete existing DuckDB rows for *date_str* then insert *rows* atomically.
 
-    Writes to both SQLite (market_daily_quote) and DuckDB (daily_bars) so the
-    detail-page query path is populated after initialization.
-
-    Rolls back SQLite and raises if the post-write row count does not match.
-    DuckDB write failure also raises so the caller can mark the day as FAILED.
+    V2 keeps daily market quotes in DuckDB only; SQLite is reserved for task
+    status / metadata tables.
     """
-    # --- SQLite write ---
-    conn = _connect(sqlite_path)
-    try:
-        conn.execute('DELETE FROM market_daily_quote WHERE trade_date = ?', (date_str,))
-        if rows:
-            conn.executemany(
-                '''INSERT INTO market_daily_quote
-                   (trade_date, ts_code, open, high, low, close,
-                    pre_close, change, pct_chg, vol, amount, updated_at,
-                    is_st, st_source,
-                    limit_up_price, limit_down_price, limit_pct,
-                    is_limit_up, is_limit_down,
-                    limit_rule, limit_status, limit_rule_version)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                [
-                    (
-                        r['trade_date'], r['ts_code'],
-                        r['open'], r['high'], r['low'], r['close'],
-                        r['pre_close'], r['change'], r['pct_chg'],
-                        r['vol'], r['amount'], r['updated_at'],
-                        r.get('is_st', 0),
-                        r.get('st_source', ''),
-                        r.get('limit_up_price'),
-                        r.get('limit_down_price'),
-                        r.get('limit_pct'),
-                        r.get('is_limit_up', 0),
-                        r.get('is_limit_down', 0),
-                        r.get('limit_rule', ''),
-                        r.get('limit_status', ''),
-                        r.get('limit_rule_version', ''),
-                    )
-                    for r in rows
-                ],
-            )
-            written = conn.execute(
-                'SELECT COUNT(*) FROM market_daily_quote WHERE trade_date = ?', (date_str,)
-            ).fetchone()[0]
-            if written != len(rows):
-                conn.rollback()
-                raise RuntimeError(
-                    f'Integrity check failed for {date_str}: '
-                    f'expected {len(rows)} rows, got {written}'
-                )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
-    # --- DuckDB write (daily_bars for detail-page queries) ---
     _write_duckdb_day(date_str, rows, duckdb_path)
 
 
@@ -661,7 +611,7 @@ def _write_duckdb_day(
 ) -> None:
     """Write *rows* for *date_str* into DuckDB's ``daily_bars`` table.
 
-    Maps market_daily_quote columns to the daily_bars schema:
+    Maps fetched Tushare daily quote fields to the daily_bars schema:
     - ts_code (e.g. '000001.SZ') → stock_code ('000001')
     - trade_date 'YYYYMMDD' → 'YYYY-MM-DD'
     - open/high/low/close → open_price/high_price/low_price/close_price
@@ -688,15 +638,29 @@ def _write_duckdb_day(
 
     conn = _connect_duckdb(duckdb_path)
     try:
+        conn.execute('BEGIN TRANSACTION')
         conn.execute('DELETE FROM daily_bars WHERE trade_date = ?', [trade_date_str])
         if duckdb_rows:
             conn.executemany(
                 'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
                 duckdb_rows,
             )
+        written = conn.execute(
+            'SELECT COUNT(*) FROM daily_bars WHERE trade_date = ?', [trade_date_str]
+        ).fetchone()[0]
+        if written != len(duckdb_rows):
+            conn.rollback()
+            raise RuntimeError(
+                f'DuckDB integrity check failed for {trade_date_str}: '
+                f'expected {len(duckdb_rows)} rows, got {written}'
+            )
+        conn.commit()
         logger.debug(
             '_write_duckdb_day: %s → %d rows written to daily_bars', date_str, len(duckdb_rows)
         )
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -757,24 +721,31 @@ def _mark_task_failed(
         conn.close()
 
 
-def _update_data_range_meta(sqlite_path: Path | None) -> None:
-    """Refresh data_range_meta from the current market_daily_quote contents."""
-    conn = _connect(sqlite_path)
+def _update_data_range_meta(sqlite_path: Path | None, duckdb_path: Path | None = None) -> None:
+    """Refresh data_range_meta from DuckDB daily_bars contents."""
+    dconn = _connect_duckdb(duckdb_path)
     try:
-        row = conn.execute(
+        row = dconn.execute(
             '''SELECT MIN(trade_date) AS min_td,
                       MAX(trade_date) AS max_td,
                       COUNT(DISTINCT trade_date) AS cnt
-               FROM market_daily_quote'''
+               FROM daily_bars'''
         ).fetchone()
-        if row and row['min_td']:
-            conn.execute(
+    finally:
+        dconn.close()
+
+    if not row or not row[0]:
+        return
+
+    conn = _connect(sqlite_path)
+    try:
+        conn.execute(
                 '''INSERT OR REPLACE INTO data_range_meta
                    (dataset, min_trade_date, max_trade_date, trading_day_count, updated_at)
-                   VALUES ('market_daily_quote', ?, ?, ?, ?)''',
-                (row['min_td'], row['max_td'], row['cnt'], _now_iso()),
-            )
-            conn.commit()
+                   VALUES ('daily_bars', ?, ?, ?, ?)''',
+                (str(row[0]), str(row[1]), int(row[2]), _now_iso()),
+        )
+        conn.commit()
     finally:
         conn.close()
 

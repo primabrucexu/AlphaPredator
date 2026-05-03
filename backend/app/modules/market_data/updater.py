@@ -1,14 +1,11 @@
-"""
-Daily incremental updater for Phase 2.9.
+"""Daily incremental updater (DuckDB-first).
 
-Fetches today's spot snapshot, writes a minimal batch (no new daily bars,
-only today's snapshot), and merges it into the existing database by
-upserting the daily_stock_snapshots and updating the market snapshot JSON.
+Daily quote facts are persisted into DuckDB ``daily_bars`` only.
+SQLite is used for metadata tables (e.g. stock profiles), not daily quote facts.
 """
 
 from __future__ import annotations
 
-import csv
 import json
 import logging
 from datetime import date
@@ -48,17 +45,18 @@ def run_daily_update(
     snapshot_rows = fetch_spot_snapshot(trade_date)
     stock_pool = fetch_stock_pool(snapshot_rows)
 
-    # Upsert stock profiles & today's snapshot into SQLite
+    # Upsert stock profile metadata only (no daily quote facts in SQLite)
     ensure_sqlite_schema(target_sqlite)
-    _upsert_sqlite(target_sqlite, stock_pool, snapshot_rows)
+    _upsert_sqlite_profiles(target_sqlite, stock_pool)
 
     # Fetch today's bars and append to DuckDB / Parquet
     logger.info('Daily update: fetching today\'s bars for %d stocks …', len(stock_pool))
     today_bars = _fetch_today_bars(stock_pool, trade_date)
     _upsert_duckdb(target_duckdb, target_parquet, today_bars)
 
-    # Rebuild the market snapshot JSON from the updated SQLite
-    _rebuild_snapshot(target_sqlite, target_snapshot, trade_date)
+    # Refresh data-range metadata from DuckDB and rebuild market snapshot JSON
+    _update_data_range_meta(target_sqlite, target_duckdb)
+    _rebuild_snapshot(target_snapshot, trade_date, snapshot_rows)
 
     logger.info(
         'Daily update complete: %d stocks, %d bars, trade_date=%s',
@@ -81,10 +79,9 @@ def run_daily_update(
 # ---------------------------------------------------------------------------
 
 
-def _upsert_sqlite(
+def _upsert_sqlite_profiles(
     sqlite_path: Path,
     stock_pool: list[dict[str, Any]],
-    snapshot_rows: list[dict[str, Any]],
 ) -> None:
     from app.db.sqlite import connect_sqlite
     conn = connect_sqlite(sqlite_path)
@@ -108,33 +105,6 @@ def _upsert_sqlite(
                     r.get('ai_quick_summary', ''),
                 )
                 for r in stock_pool
-            ],
-        )
-        conn.executemany(
-            '''
-            INSERT INTO daily_stock_snapshots (
-                trade_date, stock_code, current_price, change_amount,
-                change_pct, turnover_amount_billion, turnover_rate
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(trade_date, stock_code) DO UPDATE SET
-                current_price = excluded.current_price,
-                change_amount = excluded.change_amount,
-                change_pct = excluded.change_pct,
-                turnover_amount_billion = excluded.turnover_amount_billion,
-                turnover_rate = excluded.turnover_rate
-            ''',
-            [
-                (
-                    r['trade_date'],
-                    r['stock_code'],
-                    r['current_price'],
-                    r['change_amount'],
-                    r['change_pct'],
-                    r['turnover_amount_billion'],
-                    r['turnover_rate'],
-                )
-                for r in snapshot_rows
             ],
         )
         conn.commit()
@@ -164,6 +134,7 @@ def _upsert_duckdb(
 
     conn = connect_duckdb(duckdb_path)
     try:
+        conn.execute('BEGIN TRANSACTION')
         # Delete existing rows for the same (stock_code, trade_date) then insert
         trade_dates = {r['trade_date'] for r in today_bars}
         for td in trade_dates:
@@ -192,79 +163,88 @@ def _upsert_duckdb(
         conn.execute(
             f"COPY (SELECT * FROM daily_bars ORDER BY stock_code, trade_date) TO '{parquet_path}' (FORMAT PARQUET)"
         )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
 
 def _rebuild_snapshot(
-    sqlite_path: Path,
     market_snapshot_path: Path,
     trade_date: str,
+    snapshot_rows: list[dict[str, Any]],
 ) -> None:
+    stocks: list[dict[str, Any]] = []
+    for r in snapshot_rows:
+        stocks.append(
+            {
+                'stock_code': r['stock_code'],
+                'stock_name': r.get('stock_name', ''),
+                'current_price': float(r.get('current_price', 0.0) or 0.0),
+                'change_amount': float(r.get('change_amount', 0.0) or 0.0),
+                'change_pct': float(r.get('change_pct', 0.0) or 0.0),
+                'turnover_amount_billion': float(r.get('turnover_amount_billion', 0.0) or 0.0),
+                'turnover_rate': float(r.get('turnover_rate', 0.0) or 0.0),
+                'sectors': [s.strip() for s in str(r.get('sectors', '')).split('|') if s.strip()],
+                'ai_quick_summary': r.get('ai_quick_summary', ''),
+                'trade_date': r.get('trade_date', trade_date),
+            }
+        )
+
+    stocks.sort(key=lambda x: float(x.get('turnover_amount_billion', 0.0) or 0.0), reverse=True)
+
+    summary = {
+        'trade_date': trade_date,
+        'rising_count': sum(1 for s in stocks if float(s.get('change_pct', 0.0)) >= 0),
+        'falling_count': sum(1 for s in stocks if float(s.get('change_pct', 0.0)) < 0),
+        'turnover_amount_billion': round(sum(float(s.get('turnover_amount_billion', 0.0)) for s in stocks), 2),
+    }
+
+    # Preserve existing hot_sectors from the snapshot if available
+    existing_hot_sectors: list[dict[str, Any]] = []
+    if market_snapshot_path.exists():
+        try:
+            payload = json.loads(market_snapshot_path.read_text(encoding='utf-8'))
+            existing_hot_sectors = payload.get('hot_sectors', [])
+        except Exception:  # noqa: BLE001
+            pass
+
+    payload = {
+        'summary': summary,
+        'hot_sectors': existing_hot_sectors,
+        'stocks': stocks,
+    }
+    market_snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    market_snapshot_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+
+
+def _update_data_range_meta(sqlite_path: Path, duckdb_path: Path) -> None:
+    from app.db.duckdb_storage import connect_duckdb
+
+    dconn = connect_duckdb(duckdb_path)
+    try:
+        row = dconn.execute(
+            '''SELECT MIN(trade_date) AS min_td,
+                      MAX(trade_date) AS max_td,
+                      COUNT(DISTINCT trade_date) AS cnt
+               FROM daily_bars'''
+        ).fetchone()
+    finally:
+        dconn.close()
+
+    if not row or not row[0]:
+        return
+
     conn = connect_sqlite(sqlite_path)
     try:
-        stock_rows_raw = conn.execute(
-            '''
-            SELECT
-                s.trade_date,
-                s.stock_code,
-                p.stock_name,
-                p.sectors_json,
-                p.ai_quick_summary,
-                s.current_price,
-                s.change_amount,
-                s.change_pct,
-                s.turnover_amount_billion,
-                s.turnover_rate
-            FROM daily_stock_snapshots AS s
-            JOIN stock_profiles AS p ON p.stock_code = s.stock_code
-            WHERE s.trade_date = ?
-            ORDER BY s.turnover_amount_billion DESC
-            ''',
-            (trade_date,),
-        ).fetchall()
-
-        stocks = []
-        for r in stock_rows_raw:
-            try:
-                sectors = json.loads(r['sectors_json'])
-            except Exception:  # noqa: BLE001
-                sectors = []
-            stocks.append({
-                'stock_code': r['stock_code'],
-                'stock_name': r['stock_name'],
-                'current_price': r['current_price'],
-                'change_amount': r['change_amount'],
-                'change_pct': r['change_pct'],
-                'turnover_amount_billion': r['turnover_amount_billion'],
-                'turnover_rate': r['turnover_rate'],
-                'sectors': sectors,
-                'ai_quick_summary': r['ai_quick_summary'],
-                'trade_date': r['trade_date'],
-            })
-
-        summary = {
-            'trade_date': trade_date,
-            'rising_count': sum(1 for s in stocks if s['change_pct'] >= 0),
-            'falling_count': sum(1 for s in stocks if s['change_pct'] < 0),
-            'turnover_amount_billion': round(sum(s['turnover_amount_billion'] for s in stocks), 2),
-        }
-
-        # Preserve existing hot_sectors from the snapshot if available
-        existing_hot_sectors: list[dict[str, Any]] = []
-        if market_snapshot_path.exists():
-            try:
-                payload = json.loads(market_snapshot_path.read_text(encoding='utf-8'))
-                existing_hot_sectors = payload.get('hot_sectors', [])
-            except Exception:  # noqa: BLE001
-                pass
-
-        payload = {
-            'summary': summary,
-            'hot_sectors': existing_hot_sectors,
-            'stocks': stocks,
-        }
-        market_snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-        market_snapshot_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+        conn.execute(
+            '''INSERT OR REPLACE INTO data_range_meta
+               (dataset, min_trade_date, max_trade_date, trading_day_count, updated_at)
+               VALUES ('daily_bars', ?, ?, ?, datetime('now'))''',
+            (str(row[0]), str(row[1]), int(row[2])),
+        )
+        conn.commit()
     finally:
         conn.close()
