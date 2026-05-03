@@ -28,7 +28,7 @@ class Settings:
     # Tushare configuration
     tushare_token_path: Path = DATA_DIR / 'config' / 'tushare.token'
     stock_list_path: Path = DATA_DIR / 'config' / 'stock_list.csv'
-    tushare_rate_limit: int = 450  # max requests per minute
+    tushare_rate_limit: int = 50  # max requests per minute
     tushare_history_start: str = '2024-01-01'
 
 
