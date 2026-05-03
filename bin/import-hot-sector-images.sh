@@ -7,4 +7,4 @@ YEAR="${2:-$(date +%Y)}"
 IMPORT_BATCH="${3:-$(basename "$IMAGE_DIR")}"
 
 cd "$ROOT_DIR/backend"
-python -m app.modules.market_data.hot_sector_importer "$IMAGE_DIR" "$YEAR" "$IMPORT_BATCH"
+.venv/bin/python -m app.modules.market_data.hot_sector_importer "$IMAGE_DIR" "$YEAR" "$IMPORT_BATCH"

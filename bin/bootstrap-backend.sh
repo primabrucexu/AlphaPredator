@@ -4,4 +4,5 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR/backend"
 
-python -m pip install -e .
+python -m venv .venv
+.venv/bin/pip install -e ".[dev]"
