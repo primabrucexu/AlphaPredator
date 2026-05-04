@@ -89,11 +89,9 @@ class TaskResponse(BaseModel):
     mode: str
     start_date: str
     end_date: str
-    status: str = Field(..., description='PENDING | RUNNING | SUCCESS | FAILED')
+    status: str = Field(..., description='PENDING | RUNNING | SUCCESS | FAILED | TERMINATED')
     total_days: int
     processed_days: int
-    trading_days: int
-    done_trading_days: int
     current_date: str = Field('', description='当前正在处理的日期（YYYYMMDD）')
     error_message: str = ''
     created_at: str = ''
@@ -114,8 +112,6 @@ class TaskResponse(BaseModel):
             status=row.get('status', 'PENDING'),
             total_days=total,
             processed_days=processed,
-            trading_days=row.get('trading_days', 0),
-            done_trading_days=row.get('done_trading_days', 0),
             current_date=row.get('current_date', ''),
             error_message=row.get('error_message', ''),
             created_at=row.get('created_at', ''),
@@ -128,7 +124,6 @@ class TaskResponse(BaseModel):
 class TaskDayItem(BaseModel):
     task_id: str
     trade_date: str
-    is_trading_day: bool
     status: str
     row_count: int = 0
     started_at: str = ''

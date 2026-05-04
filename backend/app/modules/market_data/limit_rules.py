@@ -109,12 +109,13 @@ def detect_is_st(name: str) -> bool:
 
 
 def _is_trading_day_local(d: date) -> bool:
-    """Local copy of is_trading_day to avoid circular imports with initializer."""
-    try:
-        import chncal  # type: ignore[import]
-        return chncal.is_tradeday(d)
-    except (NotImplementedError, Exception):
-        return d.weekday() < 5
+    """Weekday-only approximation used for no-limit-day window detection.
+
+    Tushare's empty response is the authoritative non-trading-day signal
+    during import; this function is only used to count trading days within
+    the new-listing 5-day window for limit-rule classification.
+    """
+    return d.weekday() < 5  # Mon-Fri
 
 
 def is_no_limit_day(trade_date: str, list_date: str | None) -> bool:

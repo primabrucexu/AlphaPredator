@@ -7,7 +7,6 @@ from app.modules.market_data.hot_sector_importer import OCRToken, import_hot_sec
 from app.modules.market_data.importer import import_market_data_batch
 from app.modules.market_data.service import MarketDataService
 
-
 STOCK_POOL_ROWS = [
     {
         'stock_code': '300308',
@@ -119,8 +118,8 @@ def test_import_hot_sector_images_populates_layered_tables_and_overrides_manual_
 ) -> None:
     batch_dir = tmp_path / 'market-batch'
     image_dir = tmp_path / 'hot-sector-images'
-    sqlite_path = tmp_path / 'sqlite' / 'alphapredator.db'
-    duckdb_path = tmp_path / 'duckdb' / 'alphapredator.duckdb'
+    sqlite_path = tmp_path / 'alphapredator.db'
+    duckdb_path = tmp_path / 'alphapredator.duckdb'
     daily_bars_parquet_path = tmp_path / 'parquet' / 'stock_daily_bars.parquet'
     market_snapshot_path = tmp_path / 'parquet' / 'market_snapshot.json'
 
@@ -207,8 +206,8 @@ def test_market_overview_uses_latest_available_image_date_when_snapshot_date_is_
 ) -> None:
     batch_dir = tmp_path / 'market-batch'
     image_dir = tmp_path / 'hot-sector-images'
-    sqlite_path = tmp_path / 'sqlite' / 'alphapredator.db'
-    duckdb_path = tmp_path / 'duckdb' / 'alphapredator.duckdb'
+    sqlite_path = tmp_path / 'alphapredator.db'
+    duckdb_path = tmp_path / 'alphapredator.duckdb'
     daily_bars_parquet_path = tmp_path / 'parquet' / 'stock_daily_bars.parquet'
     market_snapshot_path = tmp_path / 'parquet' / 'market_snapshot.json'
 

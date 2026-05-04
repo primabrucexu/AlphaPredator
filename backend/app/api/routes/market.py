@@ -1,7 +1,13 @@
 from fastapi import APIRouter, Query
 
 from app.modules.market_data.service import market_data_service
-from app.schemas.market import MarketOverviewResponse, StockCandidate, StockDetailResponse, StockResolveResponse
+from app.schemas.market import (
+    MarketOverviewResponse,
+    StockBarsRangeResponse,
+    StockCandidate,
+    StockDetailResponse,
+    StockResolveResponse,
+)
 
 router = APIRouter()
 
@@ -14,6 +20,15 @@ def get_market_overview() -> MarketOverviewResponse:
 @router.get('/stocks/{stock_code}', response_model=StockDetailResponse)
 def get_stock_detail(stock_code: str) -> StockDetailResponse:
     return market_data_service.get_stock_detail(stock_code)
+
+
+@router.get('/stocks/{stock_code}/bars', response_model=StockBarsRangeResponse)
+def get_stock_bars_range(
+        stock_code: str,
+        months: int = Query(6, ge=1, le=120, description='时间窗口（月）'),
+        end_date: str | None = Query(None, description='窗口结束日期，格式 YYYY-MM-DD，默认最新交易日'),
+) -> StockBarsRangeResponse:
+    return market_data_service.get_stock_bars_range(stock_code, months=months, end_date=end_date)
 
 
 @router.get('/search', response_model=list[StockCandidate])

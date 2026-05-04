@@ -9,7 +9,9 @@ from app.modules.market_data.initializer import (
     list_tasks,
     read_init_status,
     reimport_day,
+    retry_task,
     start_task,
+    terminate_task,
 )
 from app.modules.market_data.updater import run_daily_update
 from app.schemas.data_init import (
@@ -227,7 +229,6 @@ def get_init_task_days(
         TaskDayItem(
             task_id=d['task_id'],
             trade_date=d['trade_date'],
-            is_trading_day=bool(d['is_trading_day']),
             status=d['status'],
             row_count=d.get('row_count', 0),
             started_at=d.get('started_at', ''),
@@ -243,6 +244,41 @@ def get_init_task_days(
         per_page=result['per_page'],
         days=days,
     )
+
+
+@router.post('/tasks/{task_id}/retry', response_model=TaskResponse, status_code=status.HTTP_202_ACCEPTED)
+def retry_init_task(task_id: str) -> TaskResponse:
+    """Retry a failed task by resetting progress and starting it again."""
+    task = retry_task(task_id)
+    if task is None:
+        existing = get_task(task_id)
+        if existing is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Task not found')
+        if existing.get('status') != 'FAILED':
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail='Only FAILED tasks can be retried',
+            )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail='Another initialization task is already running',
+        )
+    return TaskResponse.from_db_row(task)
+
+
+@router.post('/tasks/{task_id}/terminate', response_model=TaskResponse)
+def terminate_init_task(task_id: str) -> TaskResponse:
+    """Terminate a RUNNING/FAILED/PENDING task."""
+    task = terminate_task(task_id)
+    if task is None:
+        existing = get_task(task_id)
+        if existing is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Task not found')
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail='Only RUNNING/FAILED/PENDING tasks can be terminated',
+        )
+    return TaskResponse.from_db_row(task)
 
 
 @router.post('/reimport-day', response_model=TaskResponse, status_code=status.HTTP_202_ACCEPTED)

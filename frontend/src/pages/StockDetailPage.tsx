@@ -1,9 +1,15 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import {type ReactNode, useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {useQuery} from '@tanstack/react-query';
 import ReactECharts from 'echarts-for-react';
-import { Alert, Card, Col, Empty, Row, Space, Spin, Tabs, Tag, Typography } from 'antd';
-import { useParams } from 'react-router-dom';
-import { getStockDetail, type DailyBar, type StockDetailResponse, type StockIndicatorSeries } from '../lib/api';
+import {Alert, Card, Col, Empty, Row, Space, Spin, Tabs, Tag, Typography} from 'antd';
+import {useParams} from 'react-router-dom';
+import {
+  type DailyBar,
+  getStockBarsRange,
+  getStockDetail,
+  type StockDetailResponse,
+  type StockIndicatorSeries,
+} from '../lib/api';
 
 // ---------------------------------------------------------------------------
 // Color tokens (from docs/kline-limit-color-design.md, light theme)
@@ -26,21 +32,45 @@ const MA_COLORS: Record<string, string> = {
 };
 
 const KDJ_COLORS = { K: '#f5a623', D: '#7ed321', J: '#cf1322' };
-const MACD_COLORS = { DIF: '#f5a623', DEA: '#7ed321' };
+const MACD_COLORS = {DIF: '#2962FF', DEA: '#FF6D00'};
 const RSI_COLORS = { RSI6: '#f5a623', RSI12: '#7ed321', RSI24: '#cf1322' };
 
 // Grid percentage positions (used for overlay and chart option)
+// Slider lives at top: 0, height: 18px (~2%); kline starts at 8% to leave room for slider + two-line labels
 const GRID_POSITIONS = {
-  kline: { top: '3%', height: '37%' },
-  volume: { top: '44%', height: '10%' },
-  macd: { top: '57%', height: '10%' },
-  kdj: { top: '70%', height: '10%' },
-  rsi: { top: '83%', height: '9%' },
+  kline: {top: '8%', height: '26%'},
+  volume: {top: '38%', height: '13%'},
+  macd: {top: '55%', height: '13%'},
+  kdj: {top: '72%', height: '13%'},
+  rsi: {top: '89%', height: '9%'},
 } as const;
 
-const CHART_HEIGHT = 780;
+const CHART_HEIGHT = 'calc(100vh - 210px)';
+const CHART_MIN_HEIGHT = 980;
 const GRID_LEFT = '70px';
 const GRID_RIGHT = '80px';
+
+// K-line candle width tuning: use wider candles so adjacent gap is about 1-2px.
+const KLINE_BAR_WIDTH = '88%';
+const KLINE_BAR_MIN_WIDTH = 3;
+const KLINE_BAR_MAX_WIDTH = 18;
+
+const SUB_CHART_TITLES = {
+  volume: 'VOL',
+  macd: 'MACD',
+  kdj: 'KDJ',
+  rsi: 'RSI',
+} as const;
+
+// Backend returns duckdb raw amount sourced from Tushare `amount` (unit: 千元).
+// UI should display in 亿元.
+const QIANYUAN_PER_YI = 100_000;
+const INITIAL_MONTHS_WINDOW = 6;
+const LOAD_MORE_MONTHS_STEP = 6;
+
+// Separator lines between panels (bottom edge of each panel = top% + height%)
+// kline 8%+26%=34%, volume 38%+13%=51%, macd 55%+13%=68%, kdj 72%+13%=85%
+const PANEL_SEPARATORS = ['34%', '51%', '68%', '85%'] as const;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -50,22 +80,35 @@ function fmtNum(v: number | null | undefined, decimals = 2): string {
 }
 
 function fmtVol(v: number): string {
-  if (v >= 1e8) return `${(v / 1e8).toFixed(2)}亿手`;
-  return `${(v / 1e4).toFixed(0)}万手`;
+  return v >= 1e8 ? `${(v / 1e8).toFixed(2)}亿手` : `${(v / 1e4).toFixed(0)}万手`;
 }
 
-function fmtAmount(v: number | undefined | null): string {
-  if (v == null) return '--';
-  return `${v.toFixed(2)}亿`;
+function fmtAmount(v: number | null | undefined): string {
+  return v != null ? `${(v / QIANYUAN_PER_YI).toFixed(2)}亿` : '--';
 }
 
-function fmtTurnover(v: number | undefined | null): string {
+function fmtPct(v: number | null | undefined): string {
+  return v != null ? `${v.toFixed(2)}%` : '--';
+}
+
+function fmtSignedPct(v: number | null | undefined): string {
   if (v == null) return '--';
-  return `${v.toFixed(2)}%`;
+  const sign = v >= 0 ? '+' : '';
+  return `${sign}${v.toFixed(2)}%`;
 }
 
 function colorOf(change: number): string {
   return change >= 0 ? UP_COLOR : DOWN_COLOR;
+}
+
+function emptyIndicators(): StockIndicatorSeries {
+  return {
+    ma5: [], ma10: [], ma20: [], ma60: [],
+    volume_ma5: [], volume_ma10: [], volume_ma20: [],
+    kdj_k: [], kdj_d: [], kdj_j: [],
+    macd_dif: [], macd_dea: [], macd_hist: [],
+    rsi6: [], rsi12: [], rsi24: [],
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -76,14 +119,25 @@ interface HoverInfo {
   bar: DailyBar;
 }
 
+interface ZoomRange {
+  start: number;
+  end: number;
+}
+
+function monthKeyOf(date: string): string {
+  const d = date.replace(/[^0-9]/g, '');
+  if (d.length >= 6) return d.slice(0, 6);
+  return date.slice(0, 7);
+}
+
 // ---------------------------------------------------------------------------
 // Sub-info rows shown inside chart
 // ---------------------------------------------------------------------------
 function InfoRow({ items }: { items: { label: string; value: string; color?: string }[] }) {
   return (
-    <div style={{ fontSize: 11, lineHeight: 1.6 }}>
+      <div style={{fontSize: 13, lineHeight: 1.85}}>
       {items.map(({ label, value, color }) => (
-        <span key={label} style={{ marginRight: 12 }}>
+          <span key={label} style={{marginRight: 16}}>
           <span style={{ color: '#888' }}>{label}: </span>
           <span style={{ color: color ?? '#333', fontWeight: 500 }}>{value}</span>
         </span>
@@ -92,124 +146,32 @@ function InfoRow({ items }: { items: { label: string; value: string; color?: str
   );
 }
 
-function KLineInfoBar({
-  hover,
-  latest,
-  ind,
-}: {
-  hover: HoverInfo | null;
-  latest: HoverInfo;
-  ind: StockIndicatorSeries;
-}) {
-  const { idx, bar } = hover ?? latest;
-  const priceColor = bar.close_price >= bar.open_price ? UP_COLOR : DOWN_COLOR;
-
-  return (
-    <div style={{ padding: '4px 0 8px', borderBottom: '1px solid #e8e8e8', marginBottom: 4 }}>
-      <InfoRow
-        items={[
-          { label: '日期', value: bar.trade_date },
-          { label: '开', value: fmtNum(bar.open_price), color: '#333' },
-          { label: '高', value: fmtNum(bar.high_price), color: UP_COLOR },
-          { label: '低', value: fmtNum(bar.low_price), color: DOWN_COLOR },
-          { label: '收', value: fmtNum(bar.close_price), color: priceColor },
-        ]}
-      />
-      <InfoRow
-        items={[
-          { label: 'MA5', value: fmtNum(ind.ma5[idx]), color: MA_COLORS.MA5 },
-          { label: 'MA10', value: fmtNum(ind.ma10[idx]), color: MA_COLORS.MA10 },
-          { label: 'MA20', value: fmtNum(ind.ma20[idx]), color: MA_COLORS.MA20 },
-          { label: 'MA60', value: fmtNum(ind.ma60[idx]), color: MA_COLORS.MA60 },
-        ]}
-      />
-    </div>
-  );
-}
-
-function VolumeInfoBar({ hover, latest, ind }: { hover: HoverInfo | null; latest: HoverInfo; ind: StockIndicatorSeries }) {
-  const { idx, bar } = hover ?? latest;
-  const volColor = bar.close_price >= bar.open_price ? UP_COLOR : DOWN_COLOR;
-  return (
-    <InfoRow
-      items={[
-        { label: 'VOL', value: fmtVol(bar.volume), color: volColor },
-        { label: 'MA5', value: fmtNum(ind.volume_ma5[idx]), color: MA_COLORS.MA5 },
-        { label: 'MA10', value: fmtNum(ind.volume_ma10[idx]), color: MA_COLORS.MA10 },
-        { label: 'MA20', value: fmtNum(ind.volume_ma20[idx]), color: MA_COLORS.MA20 },
-        { label: '成交额', value: fmtAmount(bar.turnover_amount_billion) },
-        { label: '换手率', value: fmtTurnover(bar.turnover_rate) },
-      ]}
-    />
-  );
-}
-
-function MACDInfoBar({ hover, latest, ind }: { hover: HoverInfo | null; latest: HoverInfo; ind: StockIndicatorSeries }) {
-  const { idx } = hover ?? latest;
-  const hist = ind.macd_hist[idx];
-  return (
-    <InfoRow
-      items={[
-        { label: 'DIF', value: fmtNum(ind.macd_dif[idx], 4), color: MACD_COLORS.DIF },
-        { label: 'DEA', value: fmtNum(ind.macd_dea[idx], 4), color: MACD_COLORS.DEA },
-        { label: 'MACD', value: fmtNum(hist, 4), color: hist != null && hist >= 0 ? UP_COLOR : DOWN_COLOR },
-      ]}
-    />
-  );
-}
-
-function KDJInfoBar({ hover, latest, ind }: { hover: HoverInfo | null; latest: HoverInfo; ind: StockIndicatorSeries }) {
-  const { idx } = hover ?? latest;
-  return (
-    <InfoRow
-      items={[
-        { label: 'K', value: fmtNum(ind.kdj_k[idx]), color: KDJ_COLORS.K },
-        { label: 'D', value: fmtNum(ind.kdj_d[idx]), color: KDJ_COLORS.D },
-        { label: 'J', value: fmtNum(ind.kdj_j[idx]), color: KDJ_COLORS.J },
-      ]}
-    />
-  );
-}
-
-function RSIInfoBar({ hover, latest, ind }: { hover: HoverInfo | null; latest: HoverInfo; ind: StockIndicatorSeries }) {
-  const { idx } = hover ?? latest;
-  return (
-    <InfoRow
-      items={[
-        { label: 'RSI6', value: fmtNum(ind.rsi6[idx]), color: RSI_COLORS.RSI6 },
-        { label: 'RSI12', value: fmtNum(ind.rsi12[idx]), color: RSI_COLORS.RSI12 },
-        { label: 'RSI24', value: fmtNum(ind.rsi24[idx]), color: RSI_COLORS.RSI24 },
-      ]}
-    />
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Sub-chart overlay label component
-// ---------------------------------------------------------------------------
-function SubChartOverlay({
+function PanelFloatCard({
   gridKey,
   title,
   children,
 }: {
   gridKey: keyof typeof GRID_POSITIONS;
   title: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   const pos = GRID_POSITIONS[gridKey];
   return (
     <div
       style={{
         position: 'absolute',
-        top: pos.top,
+        top: `calc(${pos.top} + 4px)`,
         left: GRID_LEFT,
-        right: GRID_RIGHT,
-        zIndex: 10,
+        zIndex: 16,
         pointerEvents: 'none',
-        padding: '2px 4px',
+        background: 'rgba(255,255,255,0.86)',
+        border: '1px solid rgba(0,0,0,0.18)',
+        borderRadius: 8,
+        padding: '8px 12px',
+        backdropFilter: 'blur(3px)',
       }}
     >
-      <span style={{ color: '#aaa', fontSize: 10, marginRight: 8, fontWeight: 600 }}>{title}</span>
+      <div style={{color: '#555', fontSize: 13, fontWeight: 700, marginBottom: 4}}>{title}</div>
       {children}
     </div>
   );
@@ -219,10 +181,53 @@ function SubChartOverlay({
 // Chart option builder
 // Sub-chart order: Volume(1) → MACD(2) → KDJ(3) → RSI(4)
 // ---------------------------------------------------------------------------
-function buildChartOption(data: StockDetailResponse) {
+function buildChartOption(data: StockDetailResponse, zoomRange: ZoomRange) {
   const bars = data.daily_bars;
   const ind = data.indicators;
   const dates = bars.map((b) => b.trade_date);
+
+  const maxIdx = Math.max(0, bars.length - 1);
+  const zoomStartPct = Math.max(0, Math.min(100, zoomRange.start));
+  const zoomEndPct = Math.max(0, Math.min(100, zoomRange.end));
+  const visibleStart = Math.max(0, Math.floor((zoomStartPct / 100) * maxIdx));
+  const visibleEnd = Math.min(maxIdx, Math.ceil((zoomEndPct / 100) * maxIdx));
+
+  const keyDateIndices = new Set<number>();
+  const yearTransitionIndices = new Set<number>();
+  const monthBuckets = new Map<string, number[]>();
+  for (let i = visibleStart; i <= visibleEnd; i += 1) {
+    const key = monthKeyOf(dates[i]);
+    const bucket = monthBuckets.get(key);
+    if (bucket) {
+      bucket.push(i);
+    } else {
+      monthBuckets.set(key, [i]);
+    }
+  }
+  monthBuckets.forEach((bucket) => {
+    const first = bucket[0];
+    const mid = bucket[Math.floor((bucket.length - 1) / 2)];
+    const last = bucket[bucket.length - 1];
+    keyDateIndices.add(first);
+    keyDateIndices.add(mid);
+    keyDateIndices.add(last);
+  });
+
+  [...keyDateIndices]
+      .sort((a, b) => a - b)
+      .forEach((idx, pos, arr) => {
+        if (pos === 0) {
+          yearTransitionIndices.add(idx);
+          return;
+        }
+        const cur = dates[idx] ?? '';
+        const prev = dates[arr[pos - 1]] ?? '';
+        const curYear = cur.replace(/[^0-9]/g, '').slice(0, 4);
+        const prevYear = prev.replace(/[^0-9]/g, '').slice(0, 4);
+        if (curYear && prevYear && curYear !== prevYear) {
+          yearTransitionIndices.add(idx);
+        }
+      });
 
   const grids = [
     { top: GRID_POSITIONS.kline.top, left: GRID_LEFT, right: GRID_RIGHT, height: GRID_POSITIONS.kline.height },
@@ -245,8 +250,31 @@ function buildChartOption(data: StockDetailResponse) {
   const xAxes = grids.map((_, i) => ({
     ...xAxisBase,
     gridIndex: i,
-    axisLabel: { ...xAxisBase.axisLabel, show: i === grids.length - 1 },
-    axisTick: { show: i === grids.length - 1 },
+    position: i === 0 ? ('top' as const) : ('bottom' as const),
+    axisLabel: {
+      ...xAxisBase.axisLabel,
+      show: i === 0,
+      ...(i === 0
+          ? {
+            rich: {
+              year: {color: '#333', fontSize: 11, fontWeight: 700, lineHeight: 20, align: 'center' as const},
+              date: {color: '#888', fontSize: 10, lineHeight: 15, align: 'center' as const},
+            },
+            formatter: (_value: string, idx: number) => {
+              if (!keyDateIndices.has(idx)) return '';
+              const date = dates[idx];
+              const d = date.replace(/[^0-9]/g, '');
+              const mmdd = d.length >= 8 ? `${d.slice(4, 6)}-${d.slice(6, 8)}` : date;
+              if (yearTransitionIndices.has(idx)) {
+                const year = d.length >= 4 ? `${d.slice(0, 4)}年` : '';
+                return `{year|${year}}\n{date|${mmdd}}`;
+              }
+              return `{date|${mmdd}}`;
+            },
+          }
+          : {}),
+    },
+    axisTick: {show: i === 0},
   }));
 
   const yAxisBase = {
@@ -272,25 +300,49 @@ function buildChartOption(data: StockDetailResponse) {
       },
     },
     { ...yAxisBase, gridIndex: 2, splitLine: { show: false } }, // MACD — auto range
-    { ...yAxisBase, gridIndex: 3, splitLine: { show: false } }, // KDJ — auto range (no fixed min/max)
-    { ...yAxisBase, gridIndex: 4, min: 0, max: 100, splitLine: { show: false } }, // RSI fixed 0-100
+    {
+      ...yAxisBase,
+      gridIndex: 3,
+      splitLine: {show: false},
+      axisLabel: {show: false},
+      axisTick: {show: false},
+    }, // KDJ — hide right y-axis labels
+    {
+      ...yAxisBase,
+      gridIndex: 4,
+      min: 0,
+      max: 100,
+      splitLine: {show: false},
+      axisLabel: {show: false},
+      axisTick: {show: false},
+    }, // RSI — hide right y-axis labels
   ];
 
   const dataZoom = [
-    { type: 'inside', xAxisIndex: [0, 1, 2, 3, 4], start: 0, end: 100 },
+    {
+      type: 'inside',
+      xAxisIndex: [0, 1, 2, 3, 4],
+      start: zoomStartPct,
+      end: zoomEndPct,
+      zoomOnMouseWheel: true,
+      moveOnMouseMove: false,
+      moveOnMouseWheel: false,
+      preventDefaultMouseMove: false,
+    },
     {
       type: 'slider',
       xAxisIndex: [0, 1, 2, 3, 4],
-      start: 0,
-      end: 100,
-      bottom: '1%',
+      start: zoomStartPct,
+      end: zoomEndPct,
+      top: 0,
       height: 18,
       handleSize: '80%',
       borderColor: '#d0d0d0',
       fillerColor: 'rgba(0,120,255,0.1)',
-      backgroundColor: '#fff',
+      backgroundColor: '#f0f0f0',
       dataBackground: { areaStyle: { color: '#e0e0e0' }, lineStyle: { color: '#bbb' } },
       textStyle: { color: '#666', fontSize: 10 },
+      showDetail: false,
     },
   ];
 
@@ -382,8 +434,18 @@ function buildChartOption(data: StockDetailResponse) {
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'axis' as const,
-      axisPointer: { type: 'cross' as const, link: [{ xAxisIndex: 'all' }] },
-      show: false, // hide built-in tooltip; we use custom info bar
+      axisPointer: {
+        type: 'cross' as const,
+        link: [{xAxisIndex: 'all'}],
+        crossStyle: {color: '#000', width: 1, type: 'dashed' as const},
+        label: {show: false},
+      },
+      backgroundColor: 'rgba(255, 255, 255, 0.88)',
+      borderColor: 'transparent',
+      borderWidth: 0,
+      padding: 0,
+      extraCssText: 'box-shadow:none;',
+      formatter: () => '',
     },
     axisPointer: {
       link: [{ xAxisIndex: 'all' }],
@@ -399,6 +461,9 @@ function buildChartOption(data: StockDetailResponse) {
         type: 'candlestick' as const,
         xAxisIndex: 0,
         yAxisIndex: 0,
+        barWidth: KLINE_BAR_WIDTH,
+        barMinWidth: KLINE_BAR_MIN_WIDTH,
+        barMaxWidth: KLINE_BAR_MAX_WIDTH,
         data: bars.map((b) => {
           if (b.is_up_limit) {
             return {
@@ -477,6 +542,15 @@ export function StockDetailPage() {
   const { stockCode } = useParams();
   const chartRef = useRef<ReactECharts>(null);
   const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null);
+  const [zoomRange, setZoomRange] = useState<ZoomRange>({start: 0, end: 100});
+  const [barsData, setBarsData] = useState<DailyBar[]>([]);
+  const [indicatorData, setIndicatorData] = useState<StockIndicatorSeries>(() => emptyIndicators());
+  const [hasMoreBefore, setHasMoreBefore] = useState(false);
+  const [monthsWindow, setMonthsWindow] = useState(INITIAL_MONTHS_WINDOW);
+  const [isRangeLoading, setIsRangeLoading] = useState(false);
+  const [allowAutoLoadMore, setAllowAutoLoadMore] = useState(true);
+  // Tracks bars count + zoom-start so we can restore position after prepending older data
+  const pendingLoadMetaRef = useRef<{ count: number; start: number } | null>(null);
 
   const { data, error, isLoading } = useQuery({
     queryKey: ['stock-detail', stockCode],
@@ -484,15 +558,76 @@ export function StockDetailPage() {
     enabled: Boolean(stockCode),
   });
 
+  useEffect(() => {
+    if (!data) return;
+    const totalBars = data.daily_bars.length;
+    // Start zoomed to the last 120 trading days
+    const initialStart = totalBars > 120 ? ((totalBars - 120) / totalBars) * 100 : 0;
+    setBarsData(data.daily_bars);
+    setIndicatorData(data.indicators);
+    setHasMoreBefore(Boolean(data.has_more_before));
+    setMonthsWindow(INITIAL_MONTHS_WINDOW);
+    setZoomRange({start: initialStart, end: 100});
+    setAllowAutoLoadMore(true);
+    setHoverInfo(null);
+  }, [data]);
+
+  useEffect(() => {
+    if (!stockCode || !data) return;
+    if (monthsWindow === INITIAL_MONTHS_WINDOW) return;
+
+    let cancelled = false;
+    setIsRangeLoading(true);
+    getStockBarsRange(stockCode, monthsWindow, data.trade_date)
+        .then((resp) => {
+          if (cancelled) return;
+          setBarsData(resp.daily_bars);
+          setIndicatorData(resp.indicators);
+          setHasMoreBefore(resp.has_more_before);
+          setHoverInfo(null);
+          // Restore zoom so the same physical candles stay visible after prepend
+          const meta = pendingLoadMetaRef.current;
+          if (meta && resp.daily_bars.length > meta.count) {
+            const added = resp.daily_bars.length - meta.count;
+            const oldAbsStart = Math.round(meta.count * meta.start / 100);
+            const newAbsStart = oldAbsStart + added;
+            const newStartPct = Math.max(0, Math.min((newAbsStart / resp.daily_bars.length) * 100, 100));
+            setZoomRange({start: newStartPct, end: 100});
+            pendingLoadMetaRef.current = null;
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setIsRangeLoading(false);
+        });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [stockCode, data, monthsWindow]);
+
+  useEffect(() => {
+    if (zoomRange.start > 20) {
+      setAllowAutoLoadMore(true);
+      return;
+    }
+    if (!allowAutoLoadMore || !hasMoreBefore || isRangeLoading) return;
+    if (zoomRange.start <= 8) {
+      // Record current state so we can restore position after prepend
+      pendingLoadMetaRef.current = {count: barsData.length, start: zoomRange.start};
+      setMonthsWindow((prev) => prev + LOAD_MORE_MONTHS_STEP);
+      setAllowAutoLoadMore(false);
+    }
+  }, [zoomRange.start, allowAutoLoadMore, hasMoreBefore, isRangeLoading, barsData.length]);
+
   // Build date → index map for robust hover resolution
   const dateIndexMap = useMemo<Record<string, number>>(() => {
-    if (!data) return {};
+    if (!barsData.length) return {};
     const map: Record<string, number> = {};
-    data.daily_bars.forEach((bar, i) => {
+    barsData.forEach((bar, i) => {
       map[bar.trade_date] = i;
     });
     return map;
-  }, [data]);
+  }, [barsData]);
 
   const onChartEvents = useCallback(
     (bars: DailyBar[], indexMap: Record<string, number>) => ({
@@ -501,21 +636,50 @@ export function StockDetailPage() {
         if (!axesInfo || axesInfo.length === 0) return;
         const raw = axesInfo[0].value;
         let idx: number;
-        if (typeof raw === 'number') {
+        if (typeof raw === 'number' && isFinite(raw)) {
           idx = raw;
         } else if (typeof raw === 'string') {
           idx = indexMap[raw] ?? -1;
         } else {
           return;
         }
-        if (idx >= 0 && idx < bars.length) {
+        if (idx >= 0 && idx < bars.length && bars[idx]) {
           setHoverInfo({ idx, bar: bars[idx] });
         }
       },
       globalout: () => setHoverInfo(null),
+      datazoom: (params: { batch?: { start?: number; end?: number }[]; start?: number; end?: number }) => {
+        const src = params?.batch?.[0] ?? params;
+        if (!src) return;
+        const nextStartRaw = typeof src.start === 'number' ? src.start : null;
+        const nextEndRaw = typeof src.end === 'number' ? src.end : null;
+        if (nextStartRaw == null || nextEndRaw == null) return;
+        const nextStart = Math.max(0, Math.min(100, nextStartRaw));
+        const nextEnd = Math.max(0, Math.min(100, nextEndRaw));
+        setZoomRange((prev) => {
+          if (Math.abs(prev.start - nextStart) < 0.01 && Math.abs(prev.end - nextEnd) < 0.01) {
+            return prev;
+          }
+          return {start: Math.min(nextStart, nextEnd), end: Math.max(nextStart, nextEnd)};
+        });
+      },
     }),
     [],
   );
+
+  // Keep hook order stable across loading/error/empty/data branches.
+  // Memoized option also preserves zoom state during hover-driven re-renders.
+  const chartOption = useMemo(() => {
+    if (!data) return null;
+    const effectiveBars = barsData.length > 0 ? barsData : data.daily_bars;
+    const effectiveIndicators = barsData.length > 0 ? indicatorData : data.indicators;
+    const merged: StockDetailResponse = {
+      ...data,
+      daily_bars: effectiveBars,
+      indicators: effectiveIndicators,
+    };
+    return buildChartOption(merged, zoomRange);
+  }, [data, barsData, indicatorData, zoomRange]);
 
   if (!stockCode) {
     return <Alert type="error" showIcon message="缺少股票代码参数" />;
@@ -566,13 +730,24 @@ export function StockDetailPage() {
     );
   }
 
-  const bars = data.daily_bars;
-  const ind = data.indicators;
+  // Use live barsData (extended window) if available, falling back to initial load
+  const bars = barsData.length > 0 ? barsData : data.daily_bars;
+  const ind = barsData.length > 0 ? indicatorData : data.indicators;
   const latestIdx = bars.length - 1;
   const latestInfo: HoverInfo = { idx: latestIdx, bar: bars[latestIdx] };
+  const activeInfo = hoverInfo ?? latestInfo;
+  const activeIdx = activeInfo.idx;
+  const activeBar = activeInfo.bar;
+  const activePriceColor = activeBar.close_price >= activeBar.open_price ? UP_COLOR : DOWN_COLOR;
+  const activePrevClose = activeBar.pre_close ?? (activeIdx > 0 ? bars[activeIdx - 1]?.close_price ?? null : null);
+  const activeChangePct =
+      activeBar.change_pct ??
+      (activePrevClose != null && activePrevClose !== 0
+          ? ((activeBar.close_price - activePrevClose) / activePrevClose) * 100
+          : null);
+  const activeMacdHist = ind.macd_hist[activeIdx];
   const priceColor = colorOf(data.change_pct);
   const changeSign = data.change_amount >= 0 ? '+' : '';
-  const chartOption = buildChartOption(data);
   const events = onChartEvents(bars, dateIndexMap);
 
   return (
@@ -603,11 +778,10 @@ export function StockDetailPage() {
 
       {/* 2. Quote metrics */}
       <Row gutter={[8, 8]}>
-        <QuoteItem label="开盘" value={data.open_price.toFixed(2)} />
         <QuoteItem label="昨收" value={data.prev_close.toFixed(2)} />
         <QuoteItem label="最高" value={data.high_price.toFixed(2)} color={UP_COLOR} />
         <QuoteItem label="最低" value={data.low_price.toFixed(2)} color={DOWN_COLOR} />
-        <QuoteItem label="成交额" value={`${data.turnover_amount_billion.toFixed(2)}亿`} />
+        <QuoteItem label="成交额" value={fmtAmount(data.turnover_amount_billion)}/>
         <QuoteItem label="换手率" value={`${data.turnover_rate.toFixed(2)}%`} />
       </Row>
 
@@ -644,33 +818,104 @@ export function StockDetailPage() {
               children:
                 bars.length > 0 ? (
                   <>
-                    {/* K-line hover info (above chart) */}
-                    <KLineInfoBar hover={hoverInfo} latest={latestInfo} ind={ind} />
+                    {/* Chart */}
+                    <div style={{position: 'relative', height: CHART_HEIGHT, minHeight: CHART_MIN_HEIGHT}}>
+                      {/* Panel separator lines */}
+                      {PANEL_SEPARATORS.map((top) => (
+                          <div
+                              key={`sep-${top}`}
+                              style={{
+                                position: 'absolute',
+                                top,
+                                left: 0,
+                                right: 0,
+                                height: 2,
+                                backgroundColor: '#bfbfbf',
+                                zIndex: 5,
+                                pointerEvents: 'none',
+                              }}
+                          />
+                      ))}
 
-                    {/* Chart with sub-chart info overlays */}
-                    <div style={{ position: 'relative', height: CHART_HEIGHT }}>
-                      {/* Sub-chart info overlays — positioned near each sub-chart */}
-                      <SubChartOverlay gridKey="volume" title="VOL">
-                        <VolumeInfoBar hover={hoverInfo} latest={latestInfo} ind={ind} />
-                      </SubChartOverlay>
+                      <PanelFloatCard gridKey="kline" title="K线">
+                        <InfoRow
+                            items={[
+                              {label: '日期', value: activeBar.trade_date},
+                              {label: '开', value: fmtNum(activeBar.open_price)},
+                              {label: '高', value: fmtNum(activeBar.high_price), color: UP_COLOR},
+                              {label: '低', value: fmtNum(activeBar.low_price), color: DOWN_COLOR},
+                              {label: '收', value: fmtNum(activeBar.close_price), color: activePriceColor},
+                              {label: '涨跌幅', value: fmtSignedPct(activeChangePct), color: activePriceColor},
+                            ]}
+                        />
+                        <InfoRow
+                            items={[
+                              {label: 'MA5', value: fmtNum(ind.ma5[activeIdx]), color: MA_COLORS.MA5},
+                              {label: 'MA10', value: fmtNum(ind.ma10[activeIdx]), color: MA_COLORS.MA10},
+                              {label: 'MA20', value: fmtNum(ind.ma20[activeIdx]), color: MA_COLORS.MA20},
+                              {label: 'MA60', value: fmtNum(ind.ma60[activeIdx]), color: MA_COLORS.MA60},
+                            ]}
+                        />
+                      </PanelFloatCard>
 
-                      <SubChartOverlay gridKey="macd" title="MACD">
-                        <MACDInfoBar hover={hoverInfo} latest={latestInfo} ind={ind} />
-                      </SubChartOverlay>
+                      <PanelFloatCard gridKey="volume" title={SUB_CHART_TITLES.volume}>
+                        <InfoRow
+                            items={[
+                              {label: 'VOL', value: fmtVol(activeBar.volume), color: activePriceColor},
+                              {label: '额', value: fmtAmount(activeBar.turnover_amount_billion)},
+                              {label: '换手', value: fmtPct(activeBar.turnover_rate)},
+                            ]}
+                        />
+                        <InfoRow
+                            items={[
+                              {label: 'MA5', value: fmtNum(ind.volume_ma5[activeIdx]), color: MA_COLORS.MA5},
+                              {label: 'MA10', value: fmtNum(ind.volume_ma10[activeIdx]), color: MA_COLORS.MA10},
+                              {label: 'MA20', value: fmtNum(ind.volume_ma20[activeIdx]), color: MA_COLORS.MA20},
+                            ]}
+                        />
+                      </PanelFloatCard>
 
-                      <SubChartOverlay gridKey="kdj" title="KDJ">
-                        <KDJInfoBar hover={hoverInfo} latest={latestInfo} ind={ind} />
-                      </SubChartOverlay>
+                      <PanelFloatCard gridKey="macd" title={SUB_CHART_TITLES.macd}>
+                        <InfoRow
+                            items={[
+                              {label: 'DIF', value: fmtNum(ind.macd_dif[activeIdx], 4), color: MACD_COLORS.DIF},
+                              {label: 'DEA', value: fmtNum(ind.macd_dea[activeIdx], 4), color: MACD_COLORS.DEA},
+                              {
+                                label: 'MACD',
+                                value: fmtNum(activeMacdHist, 4),
+                                color: activeMacdHist != null && activeMacdHist >= 0 ? UP_COLOR : DOWN_COLOR,
+                              },
+                            ]}
+                        />
+                      </PanelFloatCard>
 
-                      <SubChartOverlay gridKey="rsi" title="RSI">
-                        <RSIInfoBar hover={hoverInfo} latest={latestInfo} ind={ind} />
-                      </SubChartOverlay>
+                      <PanelFloatCard gridKey="kdj" title={SUB_CHART_TITLES.kdj}>
+                        <InfoRow
+                            items={[
+                              {label: 'K', value: fmtNum(ind.kdj_k[activeIdx]), color: KDJ_COLORS.K},
+                              {label: 'D', value: fmtNum(ind.kdj_d[activeIdx]), color: KDJ_COLORS.D},
+                              {label: 'J', value: fmtNum(ind.kdj_j[activeIdx]), color: KDJ_COLORS.J},
+                            ]}
+                        />
+                      </PanelFloatCard>
+
+                      <PanelFloatCard gridKey="rsi" title={SUB_CHART_TITLES.rsi}>
+                        <InfoRow
+                            items={[
+                              {label: 'RSI6', value: fmtNum(ind.rsi6[activeIdx]), color: RSI_COLORS.RSI6},
+                              {label: 'RSI12', value: fmtNum(ind.rsi12[activeIdx]), color: RSI_COLORS.RSI12},
+                              {label: 'RSI24', value: fmtNum(ind.rsi24[activeIdx]), color: RSI_COLORS.RSI24},
+                            ]}
+                        />
+                      </PanelFloatCard>
 
                       {/* Main chart */}
                       <ReactECharts
                         ref={chartRef}
-                        option={chartOption}
-                        style={{ height: CHART_HEIGHT }}
+                        option={chartOption ?? {}}
+                        notMerge={false}
+                        lazyUpdate={true}
+                        style={{height: CHART_HEIGHT, minHeight: CHART_MIN_HEIGHT}}
                         onEvents={events}
                       />
                     </div>

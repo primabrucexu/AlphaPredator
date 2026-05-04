@@ -13,8 +13,7 @@ dependencies = [
   "pydantic>=2.10.6",
   "rapidocr>=3.8.1",
   "sqlmodel>=0.0.22",
-  "uvicorn[standard]>=0.34.0",
-  "chncal>=3.1.2025"
+  "uvicorn[standard]>=0.34.0"
 ]
 
 [project.optional-dependencies]

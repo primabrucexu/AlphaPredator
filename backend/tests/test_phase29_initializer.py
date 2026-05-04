@@ -25,7 +25,6 @@ from unittest.mock import patch
 
 import pytest
 
-
 MOCK_SNAPSHOT_ROWS = [
     {
         'stock_code': '000001',
@@ -115,8 +114,8 @@ def test_run_daily_update_succeeds(tmp_path: Path) -> None:
     from app.db.duckdb_storage import ensure_duckdb_parent, ensure_duckdb_schema
     from app.modules.market_data.updater import run_daily_update
 
-    sqlite_path = tmp_path / 'sqlite' / 'alphapredator.db'
-    duckdb_path = tmp_path / 'duckdb' / 'alphapredator.duckdb'
+    sqlite_path = tmp_path / 'alphapredator.db'
+    duckdb_path = tmp_path / 'alphapredator.duckdb'
     daily_bars_parquet_path = tmp_path / 'parquet' / 'stock_daily_bars.parquet'
     market_snapshot_path = tmp_path / 'parquet' / 'market_snapshot.json'
 

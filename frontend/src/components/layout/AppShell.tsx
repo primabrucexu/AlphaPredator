@@ -1,15 +1,16 @@
 import {
-  AreaChartOutlined,
-  DatabaseOutlined,
-  HistoryOutlined,
-  HomeOutlined,
-  RadarChartOutlined,
-  SettingOutlined,
-  StarOutlined,
+    AreaChartOutlined,
+    DatabaseOutlined,
+    HistoryOutlined,
+    HomeOutlined,
+    RadarChartOutlined,
+    SettingOutlined,
+    StarOutlined,
 } from '@ant-design/icons';
-import { Breadcrumb, Layout, Menu, Typography } from 'antd';
-import type { PropsWithChildren } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import {Breadcrumb, Layout, Menu, Typography} from 'antd';
+import type {PropsWithChildren} from 'react';
+import {useLocation, useNavigate} from 'react-router-dom';
+import {StockSearchBar} from '../StockSearchBar';
 
 const { Header, Content, Sider } = Layout;
 
@@ -55,6 +56,7 @@ export function AppShell({ children }: PropsWithChildren) {
             borderBottom: '1px solid #f0f0f0',
             display: 'flex',
             alignItems: 'center',
+              justifyContent: 'space-between',
             paddingInline: 24,
           }}
         >
@@ -64,6 +66,7 @@ export function AppShell({ children }: PropsWithChildren) {
               { title: menuItems.find((item) => item.key === selectedKey)?.label ?? '工作台' },
             ]}
           />
+            <StockSearchBar inputSize="middle" style={{width: 280}}/>
         </Header>
         <Content style={{ padding: 24 }}>{children}</Content>
       </Layout>

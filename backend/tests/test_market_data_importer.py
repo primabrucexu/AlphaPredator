@@ -5,7 +5,6 @@ from pathlib import Path
 from app.modules.market_data.importer import import_market_data_batch
 from app.modules.market_data.service import MarketDataService
 
-
 STOCK_POOL_ROWS = [
     {
         'stock_code': '000001',
@@ -110,8 +109,8 @@ def _prepare_batch_dir(batch_dir: Path) -> None:
 
 def test_import_market_data_batch_populates_local_store(tmp_path: Path) -> None:
     batch_dir = tmp_path / 'batch'
-    sqlite_path = tmp_path / 'sqlite' / 'alphapredator.db'
-    duckdb_path = tmp_path / 'duckdb' / 'alphapredator.duckdb'
+    sqlite_path = tmp_path / 'alphapredator.db'
+    duckdb_path = tmp_path / 'alphapredator.duckdb'
     daily_bars_parquet_path = tmp_path / 'parquet' / 'stock_daily_bars.parquet'
     market_snapshot_path = tmp_path / 'parquet' / 'market_snapshot.json'
     _prepare_batch_dir(batch_dir)

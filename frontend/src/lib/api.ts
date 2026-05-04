@@ -36,6 +36,9 @@ export interface DailyBar {
   high_price: number;
   low_price: number;
   close_price: number;
+  pre_close?: number;
+  change_amount?: number;
+  change_pct?: number;
   volume: number;
   turnover_amount_billion?: number;
   turnover_rate?: number;
@@ -94,6 +97,16 @@ export interface StockDetailResponse {
   key_indicators: StockKeyIndicators;
   daily_bars: DailyBar[];
   indicators: StockIndicatorSeries;
+  has_more_before?: boolean;
+}
+
+export interface StockBarsRangeResponse {
+  stock_code: string;
+  months: number;
+  end_date?: string | null;
+  has_more_before: boolean;
+  daily_bars: DailyBar[];
+  indicators: StockIndicatorSeries;
 }
 
 // ---------------------------------------------------------------------------
@@ -138,7 +151,7 @@ export const ALL_MARKET_BOARDS: MarketBoard[] = ['主板', '创业板', '科创�
 // V2 Init types
 // ---------------------------------------------------------------------------
 
-export type TaskStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED';
+export type TaskStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'TERMINATED';
 
 export interface TaskResponse {
   task_id: string;
@@ -148,8 +161,6 @@ export interface TaskResponse {
   status: TaskStatus;
   total_days: number;
   processed_days: number;
-  trading_days: number;
-  done_trading_days: number;
   current_date: string;
   error_message: string;
   created_at: string;
@@ -160,7 +171,6 @@ export interface TaskResponse {
 
 export type DayStatus =
   | 'PENDING'
-  | 'SKIPPED_NON_TRADING'
   | 'FETCHING'
   | 'WRITING'
   | 'SUCCESS'
@@ -169,7 +179,6 @@ export type DayStatus =
 export interface TaskDayItem {
   task_id: string;
   trade_date: string;
-  is_trading_day: boolean;
   status: DayStatus;
   row_count: number;
   started_at: string;
@@ -236,6 +245,18 @@ export function getStockDetail(stockCode: string): Promise<StockDetailResponse> 
   return fetchJson<StockDetailResponse>(`/api/market/stocks/${encodeURIComponent(stockCode)}`);
 }
 
+export function getStockBarsRange(
+    stockCode: string,
+    months: number,
+    endDate?: string,
+): Promise<StockBarsRangeResponse> {
+  const query = new URLSearchParams({months: String(months)});
+  if (endDate) query.set('end_date', endDate);
+  return fetchJson<StockBarsRangeResponse>(
+      `/api/market/stocks/${encodeURIComponent(stockCode)}/bars?${query.toString()}`,
+  );
+}
+
 export function getInitStatus(): Promise<InitStatusResponse> {
   return fetchJson<InitStatusResponse>('/api/data-init/status');
 }
@@ -298,6 +319,14 @@ export function getInitTaskDays(
 
 export function reimportDay(tradeDate: string): Promise<TaskResponse> {
   return postJson<TaskResponse>('/api/data-init/reimport-day', { trade_date: tradeDate });
+}
+
+export function retryInitTask(taskId: string): Promise<TaskResponse> {
+  return postJson<TaskResponse>(`/api/data-init/tasks/${taskId}/retry`);
+}
+
+export function terminateInitTask(taskId: string): Promise<TaskResponse> {
+  return postJson<TaskResponse>(`/api/data-init/tasks/${taskId}/terminate`);
 }
 
 export function getInitV2Overview(): Promise<InitV2OverviewResponse> {

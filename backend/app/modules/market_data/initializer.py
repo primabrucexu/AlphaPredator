@@ -1,22 +1,18 @@
-"""
-Market data initialization V2.
+"""Market data initialization V2.
 
 Date-driven approach:
 1. Create a task with start_date / end_date (YYYYMMDD format).
 2. For each calendar date in the range (ascending order):
-   a. Check whether it is a Chinese stock-market trading day (via ChnCal).
-   b. Non-trading days -> mark SKIPPED_NON_TRADING, advance progress counter.
-   c. Trading days -> call tushare pro.daily(trade_date=YYYYMMDD), write the
-      result atomically to DuckDB ``daily_bars`` (delete-then-insert),
-      validate row count, then commit.
+   - call tushare pro.daily(trade_date=YYYYMMDD)
+   - atomically write rows to DuckDB ``daily_bars`` (delete-then-insert)
+   - mark day success even when Tushare returns empty rows
 3. Update task status and data-range metadata on completion.
 
 Key properties:
 - No CSV / file intermediaries; all data flows in-memory -> direct DB write.
-- Single-day atomicity: if write or integrity check fails, the day is rolled
-  back and the whole task is marked FAILED (resumable via reimport-day).
+- Single-day atomicity: if fetch/write fails, the day and task are marked FAILED.
 - One task may be RUNNING at a time (prevented by _task_lock + DB check).
-- Idempotent: reimporting a day deletes existing rows then rewrites them.
+- Supports explicit task termination and retry.
 """
 
 from __future__ import annotations
@@ -25,7 +21,7 @@ import logging
 import threading
 import time
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -43,20 +39,6 @@ _task_lock = threading.Lock()
 
 def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-
-
-def is_trading_day(d: date) -> bool:
-    """Return True if *d* is a Chinese A-share market trading day.
-
-    Uses ChnCal for supported years; falls back to weekday-only check for
-    years outside ChnCal's coverage window.
-    """
-    try:
-        import chncal
-        return chncal.is_tradeday(d)
-    except (NotImplementedError, Exception):
-        # ChnCal does not cover this year; weekday-only approximation.
-        return d.weekday() < 5  # Mon-Fri
 
 
 def _generate_date_list(start_date: str, end_date: str) -> list[str]:
@@ -117,10 +99,7 @@ def create_task(
 
     dates = _generate_date_list(start_date, end_date)
     total_days = len(dates)
-    trading_days = sum(
-        1 for d in dates
-        if is_trading_day(datetime.strptime(d, '%Y%m%d').date())
-    )
+    trading_days = total_days
 
     task_id = str(uuid.uuid4())
     created_at = _now_iso()
@@ -144,14 +123,7 @@ def create_task(
                  started_at, finished_at, error_message)
             VALUES (?, ?, ?, 'PENDING', 0, '', '', '')
             ''',
-            [
-                (
-                    task_id,
-                    d,
-                    1 if is_trading_day(datetime.strptime(d, '%Y%m%d').date()) else 0,
-                )
-                for d in dates
-            ],
+            [(task_id, d, 1) for d in dates],
         )
         conn.commit()
     finally:
@@ -179,7 +151,8 @@ def start_task(task_id: str, sqlite_path: Path | None = None, duckdb_path: Path 
             updated = conn.execute(
                 '''
                 UPDATE init_task SET status = 'RUNNING', started_at = ?
-                WHERE task_id = ? AND status IN ('PENDING', 'FAILED')
+                WHERE task_id = ?
+                  AND status IN ('PENDING', 'FAILED', 'TERMINATED')
                 ''',
                 (_now_iso(), task_id),
             ).rowcount
@@ -270,6 +243,89 @@ def reimport_day(trade_date: str, sqlite_path: Path | None = None, duckdb_path: 
     return get_task(task['task_id'], sqlite_path) or task
 
 
+def retry_task(task_id: str, sqlite_path: Path | None = None, duckdb_path: Path | None = None) -> dict[str, Any] | None:
+    """Reset a FAILED task and restart it.
+
+    Returns the updated task, or None when task doesn't exist / cannot be retried.
+    """
+    with _task_lock:
+        conn = _connect(sqlite_path)
+        try:
+            row = conn.execute(
+                'SELECT status FROM init_task WHERE task_id = ?',
+                (task_id,),
+            ).fetchone()
+            if not row or row['status'] != 'FAILED':
+                return None
+
+            running = conn.execute(
+                "SELECT task_id FROM init_task WHERE status = 'RUNNING' LIMIT 1"
+            ).fetchone()
+            if running:
+                return None
+
+            now = _now_iso()
+            conn.execute(
+                '''UPDATE init_task
+                   SET status            = 'PENDING',
+                       processed_days    = 0,
+                       done_trading_days = 0,
+                       current_date      = '',
+                       error_message     = '',
+                       started_at        = '',
+                       finished_at       = ''
+                   WHERE task_id = ?''',
+                (task_id,),
+            )
+            conn.execute(
+                '''UPDATE init_task_day
+                   SET status        = 'PENDING',
+                       row_count     = 0,
+                       started_at    = '',
+                       finished_at   = '',
+                       error_message = ''
+                   WHERE task_id = ?''',
+                (task_id,),
+            )
+            conn.execute(
+                "UPDATE init_task SET created_at = ? WHERE task_id = ?",
+                (now, task_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    started = start_task(task_id, sqlite_path=sqlite_path, duckdb_path=duckdb_path)
+    if not started:
+        return None
+    return get_task(task_id, sqlite_path)
+
+
+def terminate_task(task_id: str, sqlite_path: Path | None = None) -> dict[str, Any] | None:
+    """Terminate a RUNNING/FAILED/PENDING task and mark it TERMINATED."""
+    conn = _connect(sqlite_path)
+    try:
+        updated = conn.execute(
+            '''UPDATE init_task
+               SET status        = 'TERMINATED',
+                   finished_at   = ?,
+                   current_date  = '',
+                   error_message = CASE
+                                       WHEN error_message = '' THEN 'Terminated by user'
+                                       ELSE error_message
+                       END
+               WHERE task_id = ?
+                 AND status IN ('RUNNING', 'FAILED', 'PENDING')''',
+            (_now_iso(), task_id),
+        ).rowcount
+        conn.commit()
+        if not updated:
+            return None
+    finally:
+        conn.close()
+    return get_task(task_id, sqlite_path)
+
+
 def get_overview(sqlite_path: Path | None = None) -> dict[str, Any]:
     """Return high-level overview: running task, latest finished task, data range."""
     _ensure_schema(sqlite_path)
@@ -279,7 +335,7 @@ def get_overview(sqlite_path: Path | None = None) -> dict[str, Any]:
             "SELECT * FROM init_task WHERE status = 'RUNNING' ORDER BY started_at DESC LIMIT 1"
         ).fetchone()
         latest_row = conn.execute(
-            "SELECT * FROM init_task WHERE status IN ('SUCCESS', 'FAILED') "
+            "SELECT * FROM init_task WHERE status IN ('SUCCESS', 'FAILED', 'TERMINATED') "
             "ORDER BY finished_at DESC LIMIT 1"
         ).fetchone()
         meta_row = conn.execute(
@@ -330,6 +386,9 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
         )
 
         for date_str in dates:
+            if _is_task_terminated(task_id, sqlite_path):
+                logger.info('Task %s: terminated by user before processing %s', task_id, date_str)
+                return
             # Returns False when the task must be aborted due to a fatal error.
             if not _process_one_day(task_id, date_str, sqlite_path, duckdb_path):
                 return
@@ -337,15 +396,20 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
         # All dates processed
         conn = _connect(sqlite_path)
         try:
-            conn.execute(
-                '''UPDATE init_task
+            updated = conn.execute(
+                """UPDATE init_task
                    SET status = 'SUCCESS', finished_at = ?, current_date = ''
-                   WHERE task_id = ?''',
+                   WHERE task_id = ?
+                     AND status = 'RUNNING'""",
                 (_now_iso(), task_id),
-            )
+            ).rowcount
             conn.commit()
         finally:
             conn.close()
+
+        if not updated:
+            logger.info('Task %s: skipped SUCCESS finalization because task is no longer RUNNING', task_id)
+            return
 
         _update_data_range_meta(sqlite_path, duckdb_path)
 
@@ -374,15 +438,12 @@ def _process_one_day(
 ) -> bool:
     """Process a single calendar date for a running task.
 
-    Returns True on success (or skip for non-trading day).
+    Returns True on success (including empty fetch responses).
     Returns False when a fatal error occurred and the task must be aborted.
     """
-    d = datetime.strptime(date_str, '%Y%m%d').date()
-    trading = is_trading_day(d)
+    logger.debug('Task %s: processing %s', task_id, date_str)
 
-    logger.debug('Task %s: %s is_trading_day=%s', task_id, date_str, trading)
-
-    # Update current_date and day status
+    # Update current_date and set status to FETCHING
     conn = _connect(sqlite_path)
     try:
         conn.execute(
@@ -390,46 +451,16 @@ def _process_one_day(
             (date_str, task_id),
         )
         conn.execute(
-            '''UPDATE init_task_day SET started_at = ?, status = ?
-               WHERE task_id = ? AND trade_date = ?''',
-            (
-                _now_iso(),
-                'FETCHING' if trading else 'SKIPPED_NON_TRADING',
-                task_id,
-                date_str,
-            ),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    if not trading:
-        return _skip_non_trading_day(task_id, date_str, sqlite_path)
-
-    return _process_trading_day(task_id, date_str, sqlite_path, duckdb_path)
-
-
-def _skip_non_trading_day(
-    task_id: str,
-    date_str: str,
-    sqlite_path: Path | None,
-) -> bool:
-    """Mark a non-trading day as skipped and increment the processed counter."""
-    logger.debug('Task %s: %s skipped (non-trading day)', task_id, date_str)
-    conn = _connect(sqlite_path)
-    try:
-        conn.execute(
-            'UPDATE init_task_day SET finished_at = ? WHERE task_id = ? AND trade_date = ?',
+            "UPDATE init_task_day SET started_at = ?, status = 'FETCHING'"
+            ' WHERE task_id = ? AND trade_date = ?',
             (_now_iso(), task_id, date_str),
         )
-        conn.execute(
-            'UPDATE init_task SET processed_days = processed_days + 1 WHERE task_id = ?',
-            (task_id,),
-        )
         conn.commit()
     finally:
         conn.close()
-    return True
+
+
+    return _process_trading_day(task_id, date_str, sqlite_path, duckdb_path)
 
 
 def _process_trading_day(
@@ -438,8 +469,9 @@ def _process_trading_day(
     sqlite_path: Path | None,
     duckdb_path: Path | None = None,
 ) -> bool:
-    """Fetch data from Tushare and atomically write it for a single trading day.
+    """Fetch data from Tushare and atomically write it for a single calendar date.
 
+    Empty responses are treated as successful writes of zero rows.
     Returns True on success, False on any fatal error.
     """
     t0 = time.monotonic()
@@ -635,7 +667,7 @@ def _write_duckdb_day(
             float(r.get('change') or 0),
             float(r.get('pct_chg') or 0),
             float(r.get('vol') or 0),
-            round(float(r.get('amount') or 0) / 1e6, 4),  # 千元 → 亿元
+            round(float(r.get('amount') or 0)),  # 千元
             bool(r.get('is_limit_up', False)),              # is_up_limit
             bool(r.get('is_limit_down', False)),            # is_down_limit
         )
@@ -727,6 +759,18 @@ def _mark_task_failed(
         conn.close()
 
 
+def _is_task_terminated(task_id: str, sqlite_path: Path | None) -> bool:
+    conn = _connect(sqlite_path)
+    try:
+        row = conn.execute(
+            'SELECT status FROM init_task WHERE task_id = ?',
+            (task_id,),
+        ).fetchone()
+        return bool(row and row['status'] == 'TERMINATED')
+    finally:
+        conn.close()
+
+
 def _update_data_range_meta(sqlite_path: Path | None, duckdb_path: Path | None = None) -> None:
     """Refresh data_range_meta from DuckDB daily_bars contents."""
     dconn = _connect_duckdb(duckdb_path)
@@ -773,6 +817,7 @@ def read_init_status(status_dir: Any = None) -> dict[str, Any]:  # noqa: ARG001
             'RUNNING': 'running',
             'SUCCESS': 'done',
             'FAILED': 'error',
+            'TERMINATED': 'error',
         }
         return {
             'status': status_map.get(task['status'], 'idle'),

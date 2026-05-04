@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import {useEffect, useRef, useState} from 'react';
 import {
   Alert,
   Button,
@@ -25,19 +25,21 @@ import {
   UploadOutlined,
 } from '@ant-design/icons';
 import {
-  type InitV2OverviewResponse,
-  type StockListUploadResponse,
-  type TaskDayItem,
-  type TaskResponse,
-  type TokenConfigResponse,
-  type UpdateResult,
   createInitTask,
   getInitTask,
   getInitTaskDays,
   getInitV2Overview,
   getTokenConfig,
+  type InitV2OverviewResponse,
+  retryInitTask,
   saveTokenConfig,
+  type StockListUploadResponse,
+  type TaskDayItem,
+  type TaskResponse,
+  terminateInitTask,
+  type TokenConfigResponse,
   triggerDailyUpdate,
+  type UpdateResult,
   uploadStockList,
 } from '../lib/api';
 
@@ -65,6 +67,8 @@ function taskStatusColor(s: string): string {
       return '#52c41a';
     case 'FAILED':
       return '#ff4d4f';
+    case 'TERMINATED':
+      return '#fa8c16';
     case 'PENDING':
       return '#faad14';
     default:
@@ -80,6 +84,8 @@ function taskStatusLabel(s: string): string {
       return '已完成';
     case 'FAILED':
       return '失败';
+    case 'TERMINATED':
+      return '已终止';
     case 'PENDING':
       return '等待中';
     default:
@@ -91,7 +97,6 @@ function dayStatusTag(s: string) {
   const colors: Record<string, string> = {
     SUCCESS: 'success',
     FAILED: 'error',
-    SKIPPED_NON_TRADING: 'default',
     FETCHING: 'processing',
     WRITING: 'processing',
     PENDING: 'warning',
@@ -99,7 +104,6 @@ function dayStatusTag(s: string) {
   const labels: Record<string, string> = {
     SUCCESS: '成功',
     FAILED: '失败',
-    SKIPPED_NON_TRADING: '非交易日',
     FETCHING: '拉取中',
     WRITING: '写入中',
     PENDING: '等待',
@@ -138,6 +142,7 @@ export function InitializePage() {
   // Daily update
   const [updateLoading, setUpdateLoading] = useState(false);
   const [updateResult, setUpdateResult] = useState<UpdateResult | null>(null);
+  const [taskActionLoading, setTaskActionLoading] = useState(false);
 
   // Error
   const [error, setError] = useState<string | null>(null);
@@ -148,6 +153,7 @@ export function InitializePage() {
       .then(([token, overview]) => {
         setTokenConfig(token);
         setInitOverview(overview);
+        setCurrentTask(overview.running_task ?? overview.latest_task ?? null);
       })
       .catch(() => {});
   }, []);
@@ -275,9 +281,38 @@ export function InitializePage() {
     }
   };
 
+  const handleRetryTask = async () => {
+    if (!currentTask) return;
+    setError(null);
+    setTaskActionLoading(true);
+    try {
+      const task = await retryInitTask(currentTask.task_id);
+      setCurrentTask(task);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '重试任务失败');
+    } finally {
+      setTaskActionLoading(false);
+    }
+  };
+
+  const handleTerminateTask = async () => {
+    if (!currentTask) return;
+    setError(null);
+    setTaskActionLoading(true);
+    try {
+      const task = await terminateInitTask(currentTask.task_id);
+      setCurrentTask(task);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '终止任务失败');
+    } finally {
+      setTaskActionLoading(false);
+    }
+  };
+
   const isRunning = currentTask?.status === 'RUNNING';
   const isDone = currentTask?.status === 'SUCCESS';
   const isFailed = currentTask?.status === 'FAILED';
+  const isTerminated = currentTask?.status === 'TERMINATED';
 
   const progressPercent = currentTask && currentTask.total_days > 0
     ? Math.round(currentTask.progress_percent)
@@ -289,16 +324,6 @@ export function InitializePage() {
       dataIndex: 'trade_date',
       key: 'trade_date',
       width: 120,
-    },
-    {
-      title: '类型',
-      key: 'is_trading_day',
-      width: 90,
-      render: (_: unknown, r: TaskDayItem) => (
-        <Tag color={r.is_trading_day ? 'blue' : 'default'}>
-          {r.is_trading_day ? '交易日' : '非交易日'}
-        </Tag>
-      ),
     },
     {
       title: '状态',
@@ -530,7 +555,7 @@ export function InitializePage() {
                 prefix={
                   isRunning ? <SyncOutlined spin /> :
                   isDone ? <CheckCircleOutlined /> :
-                  isFailed ? <CloseCircleOutlined /> :
+                      (isFailed || isTerminated) ? <CloseCircleOutlined/> :
                   <DatabaseOutlined />
                 }
               />
@@ -544,9 +569,9 @@ export function InitializePage() {
             </Col>
             <Col xs={24} md={6}>
               <Statistic
-                title="交易日"
-                value={`${currentTask.done_trading_days} / ${currentTask.trading_days}`}
-                suffix="日"
+                  title="已处理"
+                  value={`${currentTask.processed_days} / ${currentTask.total_days}`}
+                  suffix="天"
               />
             </Col>
             <Col xs={24} md={6}>
@@ -576,21 +601,31 @@ export function InitializePage() {
               {currentTask.start_date} — {currentTask.end_date}
             </Descriptions.Item>
             <Descriptions.Item label="开始时间">{formatIso(currentTask.started_at)}</Descriptions.Item>
-            {(isDone || isFailed) && (
+            {(isDone || isFailed || isTerminated) && (
               <Descriptions.Item label="完成时间">{formatIso(currentTask.finished_at)}</Descriptions.Item>
             )}
-            {isFailed && (
+            {(isFailed || isTerminated) && (
               <Descriptions.Item label="错误信息" span={2}>
                 <Typography.Text type="danger">{currentTask.error_message}</Typography.Text>
               </Descriptions.Item>
             )}
           </Descriptions>
 
-          <div style={{ marginTop: 12 }}>
+          <Space style={{marginTop: 12}}>
             <Button size="small" onClick={handleToggleDays}>
               {showDays ? '收起日明细' : '查看日明细'}
             </Button>
-          </div>
+            {isFailed && (
+                <Button size="small" type="primary" loading={taskActionLoading} onClick={handleRetryTask}>
+                  重试任务
+                </Button>
+            )}
+            {(isRunning || isFailed) && (
+                <Button size="small" danger loading={taskActionLoading} onClick={handleTerminateTask}>
+                  终止任务
+                </Button>
+            )}
+          </Space>
 
           {showDays && (
             <Table

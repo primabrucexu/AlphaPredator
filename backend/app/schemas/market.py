@@ -39,6 +39,9 @@ class DailyBar(BaseModel):
     high_price: float
     low_price: float
     close_price: float
+    pre_close: float | None = None
+    change_amount: float | None = None
+    change_pct: float | None = None
     volume: int
     turnover_amount_billion: float | None = None
     turnover_rate: float | None = None
@@ -98,6 +101,16 @@ class StockDetailResponse(BaseModel):
     ai_quick_summary: str
     key_indicators: StockKeyIndicators
     daily_bars: list[DailyBar]
+    indicators: StockIndicatorSeries = Field(default_factory=StockIndicatorSeries)
+    has_more_before: bool = False
+
+
+class StockBarsRangeResponse(BaseModel):
+    stock_code: str
+    months: int
+    end_date: str | None = None
+    has_more_before: bool = False
+    daily_bars: list[DailyBar] = Field(default_factory=list)
     indicators: StockIndicatorSeries = Field(default_factory=StockIndicatorSeries)
 
 

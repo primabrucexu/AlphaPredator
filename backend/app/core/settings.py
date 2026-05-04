@@ -17,8 +17,8 @@ class Settings:
         'http://127.0.0.1:5174',
         'http://localhost:5174',
     )
-    sqlite_path: Path = DATA_DIR / 'sqlite' / 'alphapredator.db'
-    duckdb_path: Path = DATA_DIR / 'duckdb' / 'alphapredator.duckdb'
+    sqlite_path: Path = DATA_DIR / 'alphapredator.db'
+    duckdb_path: Path = DATA_DIR / 'alphapredator.duckdb'
     parquet_dir: Path = DATA_DIR / 'parquet'
     market_snapshot_path: Path = parquet_dir / 'market_snapshot.json'
     daily_bars_parquet_path: Path = parquet_dir / 'stock_daily_bars.parquet'
@@ -28,7 +28,7 @@ class Settings:
     # Tushare configuration
     tushare_token_path: Path = DATA_DIR / 'config' / 'tushare.token'
     stock_list_path: Path = DATA_DIR / 'config' / 'stock_list.csv'
-    tushare_rate_limit: int = 50  # max requests per minute
+    tushare_rate_limit: int = 45  # max requests per minute (strict upper bound)
     tushare_history_start: str = '2024-01-01'
 
 

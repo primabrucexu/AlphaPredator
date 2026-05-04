@@ -1,4 +1,5 @@
 import json
+from datetime import date, datetime
 from json import JSONDecodeError
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from app.schemas.market import (
     MarketSummary,
     StockCandidate,
     StockDetailResponse,
+    StockBarsRangeResponse,
     StockIndicatorSeries,
     StockKeyIndicators,
     StockResolveResponse,
@@ -48,7 +50,7 @@ class MarketDataService:
             or self._load_stock_detail_payload_from_snapshot(stock_code)
             or self._sample_stock_detail_payload(stock_code)
         )
-        daily_bars = self._load_stock_daily_bars(stock_code) or self._sample_daily_bars(stock_code)
+        daily_bars = self._load_stock_daily_bars_range(stock_code, months=6) or self._sample_daily_bars(stock_code)
         # Enrich daily bars with per-day turnover data from SQLite snapshots
         daily_bars = self._enrich_daily_bars_with_turnover(stock_code, daily_bars)
         payload['daily_bars'] = daily_bars
@@ -69,7 +71,34 @@ class MarketDataService:
         payload['tags'] = {'industry': list(payload.get('sectors', [])), 'concepts': [], 'region': []}
         # Compute indicator series
         payload['indicators'] = self._build_indicator_series(daily_bars)
+        payload['has_more_before'] = self._has_more_daily_bars_before(
+            stock_code,
+            daily_bars[0]['trade_date'] if daily_bars else None,
+        )
         return self._build_stock_detail_response(payload)
+
+    def get_stock_bars_range(
+            self,
+            stock_code: str,
+            months: int = 6,
+            end_date: str | None = None,
+    ) -> StockBarsRangeResponse:
+        target_months = max(1, min(months, 120))
+        daily_bars = self._load_stock_daily_bars_range(stock_code, months=target_months, end_date=end_date)
+        daily_bars = self._enrich_daily_bars_with_turnover(stock_code, daily_bars)
+        indicators = self._build_indicator_series(daily_bars)
+        has_more_before = self._has_more_daily_bars_before(
+            stock_code,
+            daily_bars[0]['trade_date'] if daily_bars else None,
+        )
+        return StockBarsRangeResponse(
+            stock_code=stock_code,
+            months=target_months,
+            end_date=end_date,
+            has_more_before=has_more_before,
+            daily_bars=[DailyBar(**daily_bar) for daily_bar in daily_bars],
+            indicators=StockIndicatorSeries(**indicators),
+        )
 
     def resolve_stock(self, query: str) -> StockResolveResponse:
         """
@@ -571,10 +600,94 @@ class MarketDataService:
     def _load_stock_daily_bars(self, stock_code: str) -> list[dict[str, Any]]:
         return self._load_stock_daily_bars_from_duckdb(stock_code)
 
+    def _shift_months(self, date_text: str, months: int) -> str:
+        target = datetime.strptime(date_text, '%Y-%m-%d').date()
+        year = target.year
+        month = target.month - months
+        while month <= 0:
+            year -= 1
+            month += 12
+        day = min(target.day, 28)
+        return date(year, month, day).strftime('%Y-%m-%d')
+
+    def _latest_trade_date_for_stock(self, stock_code: str) -> str | None:
+        if not self._duckdb_path.exists():
+            return None
+        connection = connect_duckdb(self._duckdb_path)
+        try:
+            row = connection.execute(
+                '''
+                SELECT MAX(trade_date)
+                FROM daily_bars
+                WHERE SPLIT_PART(ts_code, '.', 1) = ?
+                ''',
+                [stock_code],
+            ).fetchone()
+        finally:
+            connection.close()
+        return str(row[0]) if row and row[0] else None
+
+    def _load_stock_daily_bars_range(
+            self,
+            stock_code: str,
+            *,
+            months: int,
+            end_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        target_end_date = end_date or self._latest_trade_date_for_stock(stock_code)
+        if not target_end_date:
+            return []
+        start_date = self._shift_months(target_end_date, months)
+
+        if not self._duckdb_path.exists():
+            return []
+
+        connection = connect_duckdb(self._duckdb_path)
+        try:
+            rows = connection.execute(
+                '''
+                SELECT trade_date, open AS open_price, high AS high_price, low AS low_price, close AS close_price, pre_close, change AS change_amount, pct_chg AS change_pct, vol AS volume, amount AS turnover_amount_billion, COALESCE (is_up_limit, FALSE) AS is_up_limit, COALESCE (is_down_limit, FALSE) AS is_down_limit
+                FROM daily_bars
+                WHERE SPLIT_PART(ts_code
+                    , '.'
+                    , 1) = ?
+                  AND trade_date >= ?
+                  AND trade_date <= ?
+                ORDER BY trade_date
+                ''',
+                [stock_code, start_date, target_end_date],
+            ).fetchall()
+        except Exception:
+            return []
+        finally:
+            connection.close()
+
+        return self._serialize_daily_bar_rows(rows)
+
+    def _has_more_daily_bars_before(self, stock_code: str, oldest_trade_date: str | None) -> bool:
+        if not oldest_trade_date or not self._duckdb_path.exists():
+            return False
+        connection = connect_duckdb(self._duckdb_path)
+        try:
+            row = connection.execute(
+                '''
+                SELECT 1
+                FROM daily_bars
+                WHERE SPLIT_PART(ts_code, '.', 1) = ?
+                  AND trade_date < ? LIMIT 1
+                ''',
+                [stock_code, oldest_trade_date],
+            ).fetchone()
+            return bool(row)
+        except Exception:
+            return False
+        finally:
+            connection.close()
+
     def _enrich_daily_bars_with_turnover(
         self, stock_code: str, daily_bars: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        """Join daily bars with per-day turnover data from SQLite daily_stock_snapshots."""
+        """Join per-day turnover_rate from SQLite snapshots without changing DuckDB amount."""
         if not daily_bars or not self._sqlite_path.exists():
             return daily_bars
 
@@ -608,7 +721,7 @@ class MarketDataService:
             bar = dict(bar)
             td = bar.get('trade_date', '')
             if td in turnover_map:
-                bar['turnover_amount_billion'] = turnover_map[td]['turnover_amount_billion']
+                # Keep turnover_amount_billion exactly as stored in DuckDB.
                 bar['turnover_rate'] = turnover_map[td]['turnover_rate']
             enriched.append(bar)
         return enriched
@@ -625,7 +738,7 @@ class MarketDataService:
                        open AS open_price,
                        high AS high_price,
                        low AS low_price,
-                       close AS close_price,
+                       close AS close_price, pre_close, change AS change_amount, pct_chg AS change_pct,
                        vol AS volume,
                        amount AS turnover_amount_billion,
                        COALESCE(is_up_limit, FALSE) AS is_up_limit,
@@ -657,6 +770,9 @@ class MarketDataService:
                        high AS high_price,
                        low AS low_price,
                        close AS close_price,
+                       pre_close,
+                       change AS change_amount,
+                       pct_chg AS change_pct,
                        vol AS volume,
                        COALESCE(amount, 0.0) AS turnover_amount_billion,
                        COALESCE(is_up_limit, FALSE) AS is_up_limit,
@@ -725,12 +841,16 @@ class MarketDataService:
                 'high_price': high_price,
                 'low_price': low_price,
                 'close_price': close_price,
-                'volume': volume,
+                'pre_close': float(pre_close) if pre_close is not None else None,
+                'change_amount': float(change_amount) if change_amount is not None else None,
+                'change_pct': float(change_pct) if change_pct is not None else None,
+                'volume': int(round(float(volume or 0))),
                 'turnover_amount_billion': float(turnover_amount_billion or 0.0),
                 'is_up_limit': bool(is_up_limit),
                 'is_down_limit': bool(is_down_limit),
             }
-            for trade_date, open_price, high_price, low_price, close_price, volume,
+            for trade_date, open_price, high_price, low_price, close_price,
+            pre_close, change_amount, change_pct, volume,
                 turnover_amount_billion, is_up_limit, is_down_limit in rows
         ]
 
@@ -928,6 +1048,7 @@ class MarketDataService:
             key_indicators=StockKeyIndicators(**payload['key_indicators']),
             daily_bars=[DailyBar(**daily_bar) for daily_bar in payload['daily_bars']],
             indicators=StockIndicatorSeries(**payload.get('indicators', {})),
+            has_more_before=bool(payload.get('has_more_before', False)),
         )
 
     def _sample_market_overview_payload(self) -> dict[str, Any]:

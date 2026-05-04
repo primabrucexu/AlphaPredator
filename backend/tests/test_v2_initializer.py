@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-from datetime import date
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -19,13 +18,12 @@ from app.modules.market_data.initializer import (
     get_overview,
     get_task,
     get_task_days,
-    is_trading_day,
-    list_tasks,
     read_init_status,
     reimport_day,
+    retry_task,
     start_task,
+    terminate_task,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -84,33 +82,6 @@ def test_generate_date_list_empty_when_start_after_end() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Unit: trading-day detection
-# ---------------------------------------------------------------------------
-
-
-def test_is_trading_day_known_holiday() -> None:
-    assert is_trading_day(date(2024, 1, 1)) is False   # New Year
-    assert is_trading_day(date(2024, 10, 1)) is False  # National Day
-
-
-def test_is_trading_day_known_weekday() -> None:
-    assert is_trading_day(date(2024, 1, 2)) is True   # Tuesday
-
-
-def test_is_trading_day_weekend() -> None:
-    assert is_trading_day(date(2024, 1, 6)) is False   # Saturday
-    assert is_trading_day(date(2024, 1, 7)) is False   # Sunday
-
-
-def test_is_trading_day_fallback_for_unsupported_year() -> None:
-    # chncal does not cover years > 2025; should fall back to weekday check
-    # 2030-01-07 is a Monday
-    assert is_trading_day(date(2030, 1, 7)) is True
-    # 2030-01-05 is a Saturday
-    assert is_trading_day(date(2030, 1, 5)) is False
-
-
-# ---------------------------------------------------------------------------
 # Unit: create_task
 # ---------------------------------------------------------------------------
 
@@ -125,7 +96,7 @@ def test_create_task_creates_db_records(tmp_path: Path) -> None:
     assert task['end_date'] == '20240105'
     assert task['status'] == 'PENDING'
     assert task['total_days'] == 4
-    assert task['trading_days'] >= 0  # at least some trading days
+    assert task['trading_days'] == task['total_days']
 
 
 def test_create_task_raises_when_token_missing(tmp_path: Path) -> None:
@@ -329,12 +300,75 @@ def test_start_task_returns_false_when_already_running(tmp_path: Path) -> None:
     assert started is False
 
 
+def test_retry_task_restarts_failed_task(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / 'test.db'
+
+    with _patch_token():
+        task = create_task('20240102', '20240102', sqlite_path=sqlite_path)
+
+    task_id = task['task_id']
+
+    token_patcher = patch('app.modules.market_data.data_source._get_token', return_value='mock_token')
+    fail_fetch = patch(
+        'app.modules.market_data.initializer._fetch_daily_raw',
+        side_effect=RuntimeError('first run failed'),
+    )
+    token_patcher.start()
+    fail_fetch.start()
+    try:
+        started = start_task(task_id, sqlite_path=sqlite_path)
+        assert started is True
+        for _ in range(30):
+            time.sleep(0.2)
+            t = get_task(task_id, sqlite_path=sqlite_path)
+            if t and t['status'] == 'FAILED':
+                break
+    finally:
+        fail_fetch.stop()
+        token_patcher.stop()
+
+    success_fetch = patch(
+        'app.modules.market_data.initializer._fetch_daily_raw',
+        side_effect=_mock_fetch_daily_raw,
+    )
+    token_patcher = patch('app.modules.market_data.data_source._get_token', return_value='mock_token')
+    token_patcher.start()
+    success_fetch.start()
+    try:
+        retried = retry_task(task_id, sqlite_path=sqlite_path)
+        assert retried is not None
+        for _ in range(50):
+            time.sleep(0.2)
+            t = get_task(task_id, sqlite_path=sqlite_path)
+            if t and t['status'] in ('SUCCESS', 'FAILED'):
+                break
+    finally:
+        success_fetch.stop()
+        token_patcher.stop()
+
+    final_task = get_task(task_id, sqlite_path=sqlite_path)
+    assert final_task is not None
+    assert final_task['status'] == 'SUCCESS'
+
+
+def test_terminate_task_marks_task_terminated(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / 'test.db'
+
+    with _patch_token():
+        task = create_task('20240102', '20240102', sqlite_path=sqlite_path)
+
+    terminated = terminate_task(task['task_id'], sqlite_path=sqlite_path)
+    assert terminated is not None
+    assert terminated['status'] == 'TERMINATED'
+
+
 # ---------------------------------------------------------------------------
 # Integration: full task run (mocked tushare)
 # ---------------------------------------------------------------------------
 
 
 def _mock_fetch_daily_raw(date_str: str, sqlite_path: Any = None) -> list[dict[str, Any]]:
+    # 20240102 is a trading day; everything else returns empty (non-trading)
     if date_str == '20240102':
         return list(MOCK_DAILY_ROWS)
     return []

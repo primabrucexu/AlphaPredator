@@ -4,7 +4,7 @@ Tushare data source adapter.
 Fetches A-share market data via Tushare Pro and converts it into
 the internal batch format used by import_market_data_batch().
 
-Rate limiting: honours the settings.tushare_rate_limit cap (default 450 req/min).
+Rate limiting: strict cap at 45 req/min (or lower if configured).
 Stock universe: loaded from the CSV uploaded via the /api/data-init/upload-stock-list
 endpoint (settings.stock_list_path).
 """
@@ -36,26 +36,21 @@ _call_timestamps: deque[float] = deque()  # monotonic timestamps of recent calls
 
 def _rate_limited_call(func: Any, **kwargs: Any) -> Any:
     """Call *func* while enforcing the configured requests-per-minute limit."""
-    rate_limit = settings.tushare_rate_limit
+    rate_limit = max(1, min(int(settings.tushare_rate_limit), 45))
     window = 60.0  # seconds
 
     with _rate_lock:
-        now = time.monotonic()
-        # Drop timestamps older than the window
-        while _call_timestamps and now - _call_timestamps[0] >= window:
-            _call_timestamps.popleft()
-
-        if len(_call_timestamps) >= rate_limit:
-            # Wait until the oldest call falls outside the window
-            wait = window - (now - _call_timestamps[0])
-            if wait > 0:
-                time.sleep(wait)
-            # Refresh after sleeping
+        while True:
             now = time.monotonic()
             while _call_timestamps and now - _call_timestamps[0] >= window:
                 _call_timestamps.popleft()
+            if len(_call_timestamps) < rate_limit:
+                _call_timestamps.append(now)
+                break
 
-        _call_timestamps.append(time.monotonic())
+            wait = window - (now - _call_timestamps[0])
+            if wait > 0:
+                time.sleep(wait)
 
     return func(**kwargs)
 
@@ -272,6 +267,7 @@ def fetch_daily_bars_for_stock(
 
     # Tushare adj parameter: 'qfq' for forward-adjusted, 'hfq' for backward, None for raw
     adj: str | None = adjust if adjust in ('qfq', 'hfq') else None
+    df = None
 
     for attempt in range(retry + 1):
         try:

@@ -6,8 +6,8 @@ port = 8000
 origin = "http://127.0.0.1:5173"
 
 [data]
-sqlite_path = "data/sqlite/alphapredator.db"
-duckdb_path = "data/duckdb/alphapredator.duckdb"
+sqlite_path = "data/alphapredator.db"
+duckdb_path = "data/alphapredator.duckdb"
 parquet_dir = "data/parquet"
 market_snapshot_path = "data/parquet/market_snapshot.json"
 daily_bars_parquet_path = "data/parquet/stock_daily_bars.parquet"
