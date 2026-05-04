@@ -22,8 +22,11 @@ import {
   DatabaseOutlined,
   LockOutlined,
   SyncOutlined,
+  UploadOutlined,
 } from '@ant-design/icons';
 import {
+  type InitV2OverviewResponse,
+  type StockListUploadResponse,
   type TaskDayItem,
   type TaskResponse,
   type TokenConfigResponse,
@@ -31,9 +34,11 @@ import {
   createInitTask,
   getInitTask,
   getInitTaskDays,
+  getInitV2Overview,
   getTokenConfig,
   saveTokenConfig,
   triggerDailyUpdate,
+  uploadStockList,
 } from '../lib/api';
 
 const POLL_INTERVAL_MS = 2000;
@@ -109,6 +114,13 @@ export function InitializePage() {
   const [tokenSaving, setTokenSaving] = useState(false);
   const [tokenSuccess, setTokenSuccess] = useState(false);
 
+  // Stock list
+  const [initOverview, setInitOverview] = useState<InitV2OverviewResponse | null>(null);
+  const [stockListFile, setStockListFile] = useState<File | null>(null);
+  const [stockListUploading, setStockListUploading] = useState(false);
+  const [stockListResult, setStockListResult] = useState<StockListUploadResponse | null>(null);
+  const stockListInputRef = useRef<HTMLInputElement | null>(null);
+
   // Task
   const [startDate, setStartDate] = useState<string>(DEFAULT_START_DATE);
   const [endDate, setEndDate] = useState<string>(todayYYYYMMDD());
@@ -132,8 +144,11 @@ export function InitializePage() {
 
   // Initial load
   useEffect(() => {
-    getTokenConfig()
-      .then(setTokenConfig)
+    Promise.all([getTokenConfig(), getInitV2Overview()])
+      .then(([token, overview]) => {
+        setTokenConfig(token);
+        setInitOverview(overview);
+      })
       .catch(() => {});
   }, []);
 
@@ -240,6 +255,26 @@ export function InitializePage() {
     }
   };
 
+  const handleUploadStockList = async () => {
+    if (!stockListFile) return;
+    setError(null);
+    setStockListUploading(true);
+    try {
+      const result = await uploadStockList(stockListFile);
+      setStockListResult(result);
+      setStockListFile(null);
+      if (stockListInputRef.current) {
+        stockListInputRef.current.value = '';
+      }
+      const overview = await getInitV2Overview();
+      setInitOverview(overview);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '上传股票清单失败');
+    } finally {
+      setStockListUploading(false);
+    }
+  };
+
   const isRunning = currentTask?.status === 'RUNNING';
   const isDone = currentTask?.status === 'SUCCESS';
   const isFailed = currentTask?.status === 'FAILED';
@@ -319,6 +354,16 @@ export function InitializePage() {
         />
       )}
 
+      {stockListResult && (
+        <Alert
+          type="success"
+          showIcon
+          closable
+          message={`股票清单上传成功：共 ${stockListResult.total_stocks} 条，上市 ${stockListResult.active_stocks} 条`}
+          onClose={() => setStockListResult(null)}
+        />
+      )}
+
       {/* Token config */}
       <Card
         className="page-card"
@@ -361,6 +406,69 @@ export function InitializePage() {
           </Space>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             Token 保存在服务端，不会在页面上显示。也可以通过环境变量 TUSHARE_TOKEN 配置。
+          </Typography.Text>
+        </Space>
+      </Card>
+
+      {/* Stock list upload */}
+      <Card
+        className="page-card"
+        title={
+          <Space>
+            <UploadOutlined />
+            股票清单上传
+          </Space>
+        }
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Space>
+            <Typography.Text>当前状态：</Typography.Text>
+            {initOverview === null ? (
+              <Tag>检查中…</Tag>
+            ) : initOverview.stock_list_uploaded ? (
+              <Tag color="success" icon={<CheckCircleOutlined />}>已上传</Tag>
+            ) : (
+              <Tag color="warning" icon={<CloseCircleOutlined />}>未上传</Tag>
+            )}
+          </Space>
+
+          {initOverview?.stock_list_updated_at && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              最近上传：{formatIso(initOverview.stock_list_updated_at)}
+            </Typography.Text>
+          )}
+
+          <Space wrap>
+            <input
+              ref={stockListInputRef}
+              type="file"
+              accept=".csv"
+              onChange={(e) => setStockListFile(e.target.files?.[0] ?? null)}
+            />
+            <Button
+              type="primary"
+              icon={<UploadOutlined />}
+              loading={stockListUploading}
+              disabled={!stockListFile}
+              onClick={handleUploadStockList}
+            >
+              上传股票清单
+            </Button>
+            {stockListFile && (
+              <Typography.Text type="secondary">已选择：{stockListFile.name}</Typography.Text>
+            )}
+          </Space>
+
+          {!!initOverview && Object.keys(initOverview.board_counts).length > 0 && (
+            <Space wrap>
+              {Object.entries(initOverview.board_counts).map(([board, count]) => (
+                <Tag key={board}>{board}：{count}</Tag>
+              ))}
+            </Space>
+          )}
+
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            支持上传 Tushare 股票清单，用于首页搜索、代码解析与板块统计。
           </Typography.Text>
         </Space>
       </Card>

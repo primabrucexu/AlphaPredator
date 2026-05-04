@@ -211,6 +211,68 @@ class MarketDataService:
 
         return StockResolveResponse(status='not_found', message='未找到匹配股票')
 
+    def search_stocks(self, query: str, limit: int = 10) -> list[StockCandidate]:
+        """Return up to *limit* candidates matching the query prefix.
+
+        - Pure digits  → prefix match on symbol (stock code)
+        - Letters/mixed → prefix match on cnspell (pinyin abbreviation)
+
+        Only stocks that have local daily bars in DuckDB are returned.
+        """
+        q = query.strip().upper()
+        if not q or not self._sqlite_path.exists():
+            return []
+
+        conn = connect_sqlite(self._sqlite_path)
+        try:
+            if q.isdigit():
+                rows = conn.execute(
+                    "SELECT ts_code, name FROM stock_universe"
+                    " WHERE symbol LIKE ? AND list_status = 'L' LIMIT ?",
+                    [q + '%', limit * 3],
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT ts_code, name FROM stock_universe"
+                    " WHERE cnspell LIKE ? AND list_status = 'L' LIMIT ?",
+                    [q + '%', limit * 3],
+                ).fetchall()
+        finally:
+            conn.close()
+
+        if not rows:
+            return []
+
+        symbols = [str(r['ts_code']).split('.')[0] for r in rows]
+        stocks_with_data = self._get_stocks_with_data(symbols)
+
+        candidates = [
+            StockCandidate(
+                stock_code=str(r['ts_code']).split('.')[0],
+                stock_name=str(r['name']),
+            )
+            for r in rows
+            if str(r['ts_code']).split('.')[0] in stocks_with_data
+        ]
+        return candidates[:limit]
+
+    def _get_stocks_with_data(self, symbols: list[str]) -> set[str]:
+        """Return the subset of *symbols* that have at least one local daily bar."""
+        if not symbols or not self._duckdb_path.exists():
+            return set()
+        connection = connect_duckdb(self._duckdb_path)
+        try:
+            placeholders = ','.join(['?' for _ in symbols])
+            rows = connection.execute(
+                f'SELECT DISTINCT stock_code FROM daily_bars WHERE stock_code IN ({placeholders})',
+                symbols,
+            ).fetchall()
+            return {row[0] for row in rows}
+        except Exception:
+            return set()
+        finally:
+            connection.close()
+
     def _has_local_market_data(self, sqlite_conn: Any, stock_code: str) -> bool:
         """Return True when local daily bars exist in DuckDB for the stock."""
         return self._has_stock_daily_bars(stock_code)

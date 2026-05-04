@@ -336,6 +336,12 @@ export function resolveStockInput(query: string): Promise<StockResolveResponse> 
   return fetchJson<StockResolveResponse>(`/api/market/resolve?q=${encodeURIComponent(query)}`);
 }
 
+export function searchStocks(query: string, limit = 10): Promise<StockCandidate[]> {
+  return fetchJson<StockCandidate[]>(
+    `/api/market/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+  );
+}
+
 export function getInitOverview(): Promise<InitOverviewResponse> {
   return fetchJson<InitOverviewResponse>('/api/data-init/overview');
 }

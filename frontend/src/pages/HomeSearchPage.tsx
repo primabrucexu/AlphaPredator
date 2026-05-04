@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import {
   Alert,
+  AutoComplete,
   Button,
   Card,
   Input,
@@ -19,9 +20,9 @@ import {
 import { Link, useNavigate } from 'react-router-dom';
 import {
   type InitOverviewResponse,
-  type StockResolveResponse,
+  type StockCandidate,
   getInitOverview,
-  resolveStockInput,
+  searchStocks,
 } from '../lib/api';
 
 function formatIsoShort(iso: string | null | undefined): string {
@@ -43,8 +44,9 @@ export function HomeSearchPage() {
 
   const [query, setQuery] = useState('');
   const [searching, setSearching] = useState(false);
-  const [resolveResult, setResolveResult] = useState<StockResolveResponse | null>(null);
-  const [searchError, setSearchError] = useState<string | null>(null);
+  const [options, setOptions] = useState<{ value: string; label: ReactNode }[]>([]);
+  const [lastCandidates, setLastCandidates] = useState<StockCandidate[]>([]);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [overview, setOverview] = useState<InitOverviewResponse | null>(null);
   const [overviewLoading, setOverviewLoading] = useState(true);
@@ -56,31 +58,50 @@ export function HomeSearchPage() {
       .finally(() => setOverviewLoading(false));
   }, []);
 
-  const handleSearch = async () => {
-    const q = query.trim().toUpperCase();
+  const triggerSearch = (value: string) => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    const q = value.trim();
     if (!q) {
-      setSearchError('请输入股票代码或拼音简称');
+      setOptions([]);
+      setLastCandidates([]);
       return;
     }
-    setSearchError(null);
-    setResolveResult(null);
-    setSearching(true);
-    try {
-      const result = await resolveStockInput(q);
-      if (result.status === 'ok' && result.stock_code) {
-        navigate(`/stocks/${result.stock_code}`);
-        return;
+    debounceRef.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const candidates = await searchStocks(q.toUpperCase(), 10);
+        setLastCandidates(candidates);
+        setOptions(
+          candidates.map((c) => ({
+            value: c.stock_code,
+            label: (
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                <span style={{ fontWeight: 500 }}>{c.stock_name}</span>
+                <span style={{ color: '#8c8c8c', fontVariantNumeric: 'tabular-nums' }}>
+                  {c.stock_code}
+                </span>
+              </div>
+            ),
+          })),
+        );
+      } catch {
+        setOptions([]);
+      } finally {
+        setSearching(false);
       }
-      setResolveResult(result);
-    } catch {
-      setSearchError('服务暂不可用，请稍后重试');
-    } finally {
-      setSearching(false);
-    }
+    }, 250);
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') void handleSearch();
+  const handleSelect = (stockCode: string) => {
+    navigate(`/stocks/${stockCode}`);
+  };
+
+  const handleEnter = () => {
+    const q = query.trim();
+    if (!q) return;
+    if (lastCandidates.length === 1) {
+      navigate(`/stocks/${lastCandidates[0].stock_code}`);
+    }
   };
 
   const initReady = overview?.init_completed;
@@ -106,73 +127,35 @@ export function HomeSearchPage() {
       </Space>
 
       {/* Search */}
-      <Space.Compact style={{ width: '100%', maxWidth: 520 }}>
+      <AutoComplete
+        style={{ width: '100%', maxWidth: 520 }}
+        options={options}
+        value={query}
+        onChange={(val) => {
+          setQuery(val);
+          triggerSearch(val);
+        }}
+        onSelect={handleSelect}
+        notFoundContent={searching ? <Spin size="small" /> : null}
+      >
         <Input
           size="large"
-          placeholder="输入股票代码或拼音简称，按 Enter 搜索"
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setSearchError(null);
-            setResolveResult(null);
-          }}
-          onKeyDown={handleKeyDown}
-          allowClear
-          prefix={<SearchOutlined />}
-        />
-        <Button
-          size="large"
-          type="primary"
-          loading={searching}
-          onClick={() => void handleSearch()}
-          icon={<SearchOutlined />}
-        >
-          搜索
-        </Button>
-      </Space.Compact>
-
-      {/* Search result messages */}
-      {searchError && (
-        <Alert
-          type="warning"
-          showIcon
-          message={searchError}
-          style={{ width: '100%', maxWidth: 520 }}
-        />
-      )}
-      {resolveResult && resolveResult.status === 'not_found' && (
-        <Alert
-          type="info"
-          showIcon
-          message="未找到匹配股票"
-          description={resolveResult.message}
-          style={{ width: '100%', maxWidth: 520 }}
-        />
-      )}
-      {resolveResult && resolveResult.status === 'ambiguous' && (
-        <Alert
-          type="warning"
-          showIcon
-          message="匹配到多只股票，请输入更完整代码/简称"
-          description={
-            resolveResult.candidates && resolveResult.candidates.length > 0 ? (
-              <Space wrap size={4} style={{ marginTop: 4 }}>
-                {resolveResult.candidates.map((c) => (
-                  <Tag
-                    key={c.stock_code}
-                    color="blue"
-                    style={{ cursor: 'pointer' }}
-                    onClick={() => navigate(`/stocks/${c.stock_code}`)}
-                  >
-                    {c.stock_code} {c.stock_name}
-                  </Tag>
-                ))}
-              </Space>
-            ) : undefined
+          placeholder="输入股票代码或拼音简称搜索"
+          prefix={searching ? <Spin size="small" /> : <SearchOutlined />}
+          suffix={
+            <Button
+              type="primary"
+              size="small"
+              icon={<SearchOutlined />}
+              onClick={handleEnter}
+            >
+              搜索
+            </Button>
           }
-          style={{ width: '100%', maxWidth: 520 }}
+          onPressEnter={handleEnter}
+          allowClear
         />
-      )}
+      </AutoComplete>
 
       {/* Init status panel */}
       <Card
