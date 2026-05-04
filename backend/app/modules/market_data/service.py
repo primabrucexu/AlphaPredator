@@ -635,9 +635,9 @@ class MarketDataService:
         if row is None:
             return {}
         return {
-            'stock_name': str(row['stock_name']),
-            'sectors': self._parse_sectors_json(str(row['sectors_json'])),
-            'ai_quick_summary': str(row['ai_quick_summary']),
+            'stock_name': str(row['stock_name'] or ''),
+            'sectors': self._parse_sectors_json(str(row['sectors_json'] or '')),
+            'ai_quick_summary': str(row['ai_quick_summary'] or ''),
         }
 
     def _serialize_daily_bar_rows(self, rows: list[tuple[Any, ...]]) -> list[dict[str, Any]]:
