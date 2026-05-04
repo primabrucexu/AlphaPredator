@@ -117,7 +117,7 @@ async def upload_stock_list(file: UploadFile) -> StockListUploadResponse:
     ensure_sqlite_schema()
     conn = connect_sqlite()
     try:
-        conn.execute('DELETE FROM stock_universe')
+        conn.execute('DELETE FROM stock_list')
         fill_cols = {c: '' for c in ['cnspell', 'market', 'list_status', 'list_date', 'delist_date']
                      if c not in df.columns}
         for col, default in fill_cols.items():
@@ -139,7 +139,7 @@ async def upload_stock_list(file: UploadFile) -> StockListUploadResponse:
                           'list_status', 'list_date', 'delist_date']].itertuples(index=False)
         ]
         conn.executemany(
-            '''INSERT OR REPLACE INTO stock_universe
+            '''INSERT OR REPLACE INTO stock_list
                (ts_code, symbol, name, cnspell, market, list_status, list_date, delist_date, uploaded_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
             rows_to_insert,
@@ -294,14 +294,14 @@ def get_init_v2_overview() -> InitV2OverviewResponse:
         conn = connect_sqlite()
         try:
             row = conn.execute(
-                'SELECT MAX(uploaded_at) AS uploaded_at FROM stock_universe'
+                'SELECT MAX(uploaded_at) AS uploaded_at FROM stock_list'
             ).fetchone()
             if row and row['uploaded_at']:
                 stock_list_updated_at = str(row['uploaded_at'])
 
             board_rows = conn.execute(
                 '''SELECT market, COUNT(*) AS cnt
-                   FROM stock_universe
+                   FROM stock_list
                    WHERE list_status = 'L' AND market != ''
                    GROUP BY market'''
             ).fetchall()
@@ -386,14 +386,14 @@ def get_init_overview() -> InitOverviewResponse:
         conn = connect_sqlite()
         try:
             row = conn.execute(
-                'SELECT MAX(uploaded_at) AS uploaded_at FROM stock_universe'
+                'SELECT MAX(uploaded_at) AS uploaded_at FROM stock_list'
             ).fetchone()
             if row and row['uploaded_at']:
                 stock_list_updated_at = str(row['uploaded_at'])
 
             board_rows = conn.execute(
                 '''SELECT market, COUNT(*) AS cnt
-                   FROM stock_universe
+                   FROM stock_list
                    WHERE list_status = 'L' AND market != ''
                    GROUP BY market'''
             ).fetchall()

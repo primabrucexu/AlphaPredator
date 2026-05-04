@@ -529,14 +529,14 @@ def _fetch_daily_raw(
         return []
 
     # Load stock universe metadata (name, list_date) for limit-field enrichment.
-    # Gracefully skip when the stock_universe table is empty or unavailable.
+    # Gracefully skip when the stock_list table is empty or unavailable.
     name_map: dict[str, str] = {}
     list_date_map: dict[str, str] = {}
     try:
         conn = _connect(sqlite_path)
         try:
             univ_rows = conn.execute(
-                'SELECT ts_code, name, list_date FROM stock_universe'
+                'SELECT ts_code, name, list_date FROM stock_list'
             ).fetchall()
             for r in univ_rows:
                 ts = r['ts_code']
@@ -632,6 +632,8 @@ def _write_duckdb_day(
             float(r['close']),
             int(float(r['vol'])),
             round(float(r.get('amount') or 0) / 1e6, 4),
+            bool(r.get('is_limit_up', False)),   # is_up_limit
+            bool(r.get('is_limit_down', False)),  # is_down_limit
         )
         for r in rows
     ]
@@ -642,7 +644,7 @@ def _write_duckdb_day(
         conn.execute('DELETE FROM daily_bars WHERE trade_date = ?', [trade_date_str])
         if duckdb_rows:
             conn.executemany(
-                'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 duckdb_rows,
             )
         written = conn.execute(

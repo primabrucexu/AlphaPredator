@@ -141,7 +141,7 @@ def _upsert_duckdb(
             conn.execute('DELETE FROM daily_bars WHERE trade_date = ?', [td])
 
         conn.executemany(
-            'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [
                 (
                     r['stock_code'],
@@ -152,6 +152,8 @@ def _upsert_duckdb(
                     r['close_price'],
                     r['volume'],
                     r.get('turnover_amount_billion', 0.0),
+                    bool(r.get('is_up_limit', False)),
+                    bool(r.get('is_down_limit', False)),
                 )
                 for r in today_bars
             ],

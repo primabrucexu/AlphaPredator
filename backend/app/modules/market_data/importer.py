@@ -280,7 +280,7 @@ def _write_duckdb_data(*, duckdb_path: Path, daily_bars: list[dict[str, Any]], d
         connection.execute('DELETE FROM daily_bars')
         if daily_bars:
             connection.executemany(
-                'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [
                     (
                         row['stock_code'],
@@ -291,6 +291,8 @@ def _write_duckdb_data(*, duckdb_path: Path, daily_bars: list[dict[str, Any]], d
                         row['close_price'],
                         row['volume'],
                         row.get('turnover_amount_billion', 0.0),
+                        bool(row.get('is_up_limit', False)),
+                        bool(row.get('is_down_limit', False)),
                     )
                     for row in daily_bars
                 ],

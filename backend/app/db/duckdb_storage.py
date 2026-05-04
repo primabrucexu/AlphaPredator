@@ -13,7 +13,9 @@ CREATE TABLE IF NOT EXISTS daily_bars (
     low_price DOUBLE NOT NULL,
     close_price DOUBLE NOT NULL,
     volume BIGINT NOT NULL,
-    turnover_amount_billion DOUBLE NOT NULL DEFAULT 0.0
+    turnover_amount_billion DOUBLE NOT NULL DEFAULT 0.0,
+    is_up_limit BOOLEAN NOT NULL DEFAULT FALSE,
+    is_down_limit BOOLEAN NOT NULL DEFAULT FALSE
 )
 '''
 
@@ -39,6 +41,19 @@ def ensure_duckdb_schema(duckdb_path: Path | None = None) -> None:
         try:
             connection.execute(
                 'ALTER TABLE daily_bars ADD COLUMN turnover_amount_billion DOUBLE DEFAULT 0.0'
+            )
+        except Exception:  # noqa: BLE001
+            pass  # Column already exists
+        # Migration: add is_up_limit / is_down_limit if missing
+        try:
+            connection.execute(
+                'ALTER TABLE daily_bars ADD COLUMN is_up_limit BOOLEAN DEFAULT FALSE'
+            )
+        except Exception:  # noqa: BLE001
+            pass  # Column already exists
+        try:
+            connection.execute(
+                'ALTER TABLE daily_bars ADD COLUMN is_down_limit BOOLEAN DEFAULT FALSE'
             )
         except Exception:  # noqa: BLE001
             pass  # Column already exists

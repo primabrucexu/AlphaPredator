@@ -12,11 +12,11 @@ const UP_COLOR = '#E64B4B';          // up_normal fill
 const UP_BORDER_COLOR = '#C62828';   // up_normal border
 const DOWN_COLOR = '#2FA164';        // down_normal fill
 const DOWN_BORDER_COLOR = '#1E7A4C'; // down_normal border
-// Limit colors (P1: requires is_limit_up/is_limit_down fields from backend)
-// const UP_LIMIT_COLOR = '#8E24AA';
-// const UP_LIMIT_BORDER = '#6A1B9A';
-// const DOWN_LIMIT_COLOR = '#1565C0';
-// const DOWN_LIMIT_BORDER = '#0D47A1';
+// Limit colors (涨跌停专属颜色)
+const UP_LIMIT_COLOR = '#8E24AA';
+const UP_LIMIT_BORDER = '#6A1B9A';
+const DOWN_LIMIT_COLOR = '#1565C0';
+const DOWN_LIMIT_BORDER = '#0D47A1';
 
 const MA_COLORS: Record<string, string> = {
   MA5: '#f5a623',
@@ -399,7 +399,21 @@ function buildChartOption(data: StockDetailResponse) {
         type: 'candlestick' as const,
         xAxisIndex: 0,
         yAxisIndex: 0,
-        data: bars.map((b) => [b.open_price, b.close_price, b.low_price, b.high_price]),
+        data: bars.map((b) => {
+          if (b.is_up_limit) {
+            return {
+              value: [b.open_price, b.close_price, b.low_price, b.high_price],
+              itemStyle: { color: UP_LIMIT_COLOR, borderColor: UP_LIMIT_BORDER },
+            };
+          }
+          if (b.is_down_limit) {
+            return {
+              value: [b.open_price, b.close_price, b.low_price, b.high_price],
+              itemStyle: { color: DOWN_LIMIT_COLOR, borderColor: DOWN_LIMIT_BORDER },
+            };
+          }
+          return [b.open_price, b.close_price, b.low_price, b.high_price];
+        }),
         itemStyle: {
           color: UP_COLOR,
           color0: DOWN_COLOR,

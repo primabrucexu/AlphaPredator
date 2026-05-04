@@ -97,7 +97,7 @@ class MarketDataService:
         try:
             # 1. Exact ts_code match (e.g. '000001.SZ')
             row = conn.execute(
-                "SELECT ts_code, name FROM stock_universe WHERE UPPER(ts_code) = ? AND list_status = 'L' LIMIT 1",
+                "SELECT ts_code, name FROM stock_list WHERE UPPER(ts_code) = ? AND list_status = 'L' LIMIT 1",
                 [q],
             ).fetchone()
             if row:
@@ -117,7 +117,7 @@ class MarketDataService:
 
             # 2. Exact 6-digit symbol match (e.g. '000001')
             rows = conn.execute(
-                "SELECT ts_code, name FROM stock_universe WHERE symbol = ? AND list_status = 'L'",
+                "SELECT ts_code, name FROM stock_list WHERE symbol = ? AND list_status = 'L'",
                 [q.zfill(6)],
             ).fetchall()
             raw_rows = rows
@@ -148,7 +148,7 @@ class MarketDataService:
 
             # 3. Exact cnspell match
             rows = conn.execute(
-                "SELECT ts_code, name FROM stock_universe WHERE cnspell = ? AND list_status = 'L'",
+                "SELECT ts_code, name FROM stock_list WHERE cnspell = ? AND list_status = 'L'",
                 [q],
             ).fetchall()
             raw_rows = rows
@@ -178,7 +178,7 @@ class MarketDataService:
 
             # 4. cnspell prefix match
             rows = conn.execute(
-                "SELECT ts_code, name FROM stock_universe WHERE cnspell LIKE ? AND list_status = 'L' LIMIT 20",
+                "SELECT ts_code, name FROM stock_list WHERE cnspell LIKE ? AND list_status = 'L' LIMIT 20",
                 [q + '%'],
             ).fetchall()
             raw_rows = rows
@@ -227,13 +227,13 @@ class MarketDataService:
         try:
             if q.isdigit():
                 rows = conn.execute(
-                    "SELECT ts_code, name FROM stock_universe"
+                    "SELECT ts_code, name FROM stock_list"
                     " WHERE symbol LIKE ? AND list_status = 'L' LIMIT ?",
                     [q + '%', limit * 3],
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT ts_code, name FROM stock_universe"
+                    "SELECT ts_code, name FROM stock_list"
                     " WHERE cnspell LIKE ? AND list_status = 'L' LIMIT ?",
                     [q + '%', limit * 3],
                 ).fetchall()
@@ -621,7 +621,9 @@ class MarketDataService:
             rows = connection.execute(
                 '''
                 SELECT trade_date, open_price, high_price, low_price, close_price, volume,
-                       turnover_amount_billion
+                       turnover_amount_billion,
+                       COALESCE(is_up_limit, FALSE) AS is_up_limit,
+                       COALESCE(is_down_limit, FALSE) AS is_down_limit
                 FROM daily_bars
                 WHERE stock_code = ?
                 ORDER BY trade_date
@@ -645,7 +647,9 @@ class MarketDataService:
             rows = connection.execute(
                 f'''
                 SELECT trade_date, open_price, high_price, low_price, close_price, volume,
-                       COALESCE(turnover_amount_billion, 0.0) AS turnover_amount_billion
+                       COALESCE(turnover_amount_billion, 0.0) AS turnover_amount_billion,
+                       COALESCE(is_up_limit, FALSE) AS is_up_limit,
+                       COALESCE(is_down_limit, FALSE) AS is_down_limit
                 FROM read_parquet('{parquet_path}')
                 WHERE stock_code = ?
                 ORDER BY trade_date
@@ -671,9 +675,9 @@ class MarketDataService:
                 for row in profile_rows
                 if row['stock_code'] and row['stock_name']
             }
-            # stock_universe holds the authoritative full-universe names; override
+            # stock_list holds the authoritative full-universe names; override
             universe_rows = connection.execute(
-                "SELECT symbol, name FROM stock_universe WHERE list_status = 'L'"
+                "SELECT symbol, name FROM stock_list WHERE list_status = 'L'"
             ).fetchall()
             for row in universe_rows:
                 if row['symbol'] and row['name']:
@@ -712,8 +716,11 @@ class MarketDataService:
                 'close_price': close_price,
                 'volume': volume,
                 'turnover_amount_billion': float(turnover_amount_billion or 0.0),
+                'is_up_limit': bool(is_up_limit),
+                'is_down_limit': bool(is_down_limit),
             }
-            for trade_date, open_price, high_price, low_price, close_price, volume, turnover_amount_billion in rows
+            for trade_date, open_price, high_price, low_price, close_price, volume,
+                turnover_amount_billion, is_up_limit, is_down_limit in rows
         ]
 
     def _parse_sectors_json(self, sectors_json: str | None) -> list[str]:

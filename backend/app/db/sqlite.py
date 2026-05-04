@@ -121,7 +121,7 @@ CREATE TABLE IF NOT EXISTS focus_stock_entries (
     FOREIGN KEY (stock_code) REFERENCES stock_profiles(stock_code)
 );
 
-CREATE TABLE IF NOT EXISTS stock_universe (
+CREATE TABLE IF NOT EXISTS stock_list (
     ts_code TEXT PRIMARY KEY,
     symbol TEXT NOT NULL,
     name TEXT NOT NULL,
@@ -133,9 +133,9 @@ CREATE TABLE IF NOT EXISTS stock_universe (
     uploaded_at TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_stock_universe_symbol ON stock_universe (symbol);
-CREATE INDEX IF NOT EXISTS idx_stock_universe_cnspell ON stock_universe (cnspell);
-CREATE INDEX IF NOT EXISTS idx_stock_universe_market ON stock_universe (market);
+CREATE INDEX IF NOT EXISTS idx_stock_list_symbol ON stock_list (symbol);
+CREATE INDEX IF NOT EXISTS idx_stock_list_cnspell ON stock_list (cnspell);
+CREATE INDEX IF NOT EXISTS idx_stock_list_market ON stock_list (market);
 
 -- V2 init tables ----------------------------------------------------------
 
@@ -229,12 +229,26 @@ def connect_sqlite(sqlite_path: Path | None = None) -> sqlite3.Connection:
 def ensure_sqlite_schema(sqlite_path: Path | None = None) -> None:
     connection = connect_sqlite(sqlite_path)
     try:
+        _migrate_stock_universe_to_stock_list(connection)
         connection.executescript(SCHEMA_SQL)
         connection.commit()
         _migrate_market_daily_quote(connection)
         connection.commit()
     finally:
         connection.close()
+
+
+def _migrate_stock_universe_to_stock_list(connection: sqlite3.Connection) -> None:
+    """Rename stock_universe to stock_list for existing databases.
+
+    Checks for the old table name via sqlite_master and renames it when found
+    (idempotent: no-op if stock_universe does not exist).
+    """
+    row = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='stock_universe'"
+    ).fetchone()
+    if row is not None:
+        connection.execute('ALTER TABLE stock_universe RENAME TO stock_list')
 
 
 def _migrate_market_daily_quote(connection: sqlite3.Connection) -> None:

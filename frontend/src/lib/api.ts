@@ -39,6 +39,8 @@ export interface DailyBar {
   volume: number;
   turnover_amount_billion?: number;
   turnover_rate?: number;
+  is_up_limit?: boolean;
+  is_down_limit?: boolean;
 }
 
 export interface StockKeyIndicators {
