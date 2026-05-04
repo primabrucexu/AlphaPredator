@@ -283,7 +283,7 @@ def _write_duckdb_data(*, duckdb_path: Path, daily_bars: list[dict[str, Any]], d
                 'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [
                     (
-                        row['stock_code'],               # ts_code: store symbol as-is
+                        row['stock_code'],               # ts_code: CSV uses 6-digit stock_code; stored as-is (without exchange suffix)
                         row['trade_date'],
                         row['open_price'],               # open
                         row['high_price'],               # high

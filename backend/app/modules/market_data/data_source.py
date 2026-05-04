@@ -375,8 +375,8 @@ def fetch_daily_bars_by_date(
                 'vol': float(row.get('vol') or 0),
                 # Tushare amount is in 千元 (thousand yuan); store in 亿元 (100M yuan)
                 'amount': round(float(row.get('amount') or 0) / 1e6, 4),
-                'is_up_limit': False,
-                'is_down_limit': False,
+                'is_up_limit': False,   # limit detection requires stock metadata; use initializer path
+                'is_down_limit': False, # for accurate is_up_limit/is_down_limit values
             })
         except (ValueError, TypeError):
             continue
