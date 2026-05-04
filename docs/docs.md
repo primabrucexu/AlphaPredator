@@ -20,4 +20,9 @@
 - [Agent Guide](../agent.md)：AI/编码 agent 在本仓库协作时必须遵守的约束。
 - [docs/agent 使用说明](agent/README.md)：agent 工作文档的目录职责、命名规范与推荐模板。
 
+## Agent 工作文档（docs/agent）
+
+- [Phase 1 待优化项](agent/phase1-pending-optimizations.md)：Phase 1 已识别但暂不阻塞达成标准的优化点（分时图、FocusPage
+  真实功能）。
+
 
