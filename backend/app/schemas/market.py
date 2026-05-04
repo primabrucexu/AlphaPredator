@@ -42,6 +42,8 @@ class DailyBar(BaseModel):
     volume: int
     turnover_amount_billion: float | None = None
     turnover_rate: float | None = None
+    is_up_limit: bool = False
+    is_down_limit: bool = False
 
 
 class StockKeyIndicators(BaseModel):

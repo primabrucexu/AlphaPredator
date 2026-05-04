@@ -529,14 +529,14 @@ def _fetch_daily_raw(
         return []
 
     # Load stock universe metadata (name, list_date) for limit-field enrichment.
-    # Gracefully skip when the stock_universe table is empty or unavailable.
+    # Gracefully skip when the stock_list table is empty or unavailable.
     name_map: dict[str, str] = {}
     list_date_map: dict[str, str] = {}
     try:
         conn = _connect(sqlite_path)
         try:
             univ_rows = conn.execute(
-                'SELECT ts_code, name, list_date FROM stock_universe'
+                'SELECT ts_code, name, list_date FROM stock_list'
             ).fetchall()
             for r in univ_rows:
                 ts = r['ts_code']
@@ -611,12 +611,13 @@ def _write_duckdb_day(
 ) -> None:
     """Write *rows* for *date_str* into DuckDB's ``daily_bars`` table.
 
-    Maps fetched Tushare daily quote fields to the daily_bars schema:
-    - ts_code (e.g. '000001.SZ') → stock_code ('000001')
-    - trade_date 'YYYYMMDD' → 'YYYY-MM-DD'
-    - open/high/low/close → open_price/high_price/low_price/close_price
-    - vol (lots) → volume (integer)
-    - amount (千元) / 1e6 → turnover_amount_billion
+    Stores all 13 spec-defined columns:
+    - ts_code (e.g. '000001.SZ') stored as-is
+    - trade_date 'YYYYMMDD' → 'YYYY-MM-DD' for consistent internal format
+    - open, high, low, close, pre_close, change, pct_chg from Tushare row
+    - vol stored as float (lots)
+    - amount (千元) / 1e6 stored in units matching turnover_amount_billion display
+    - is_up_limit / is_down_limit from compute_limit_fields output
 
     Deletes existing rows for the date before inserting (idempotent).
     """
@@ -624,14 +625,19 @@ def _write_duckdb_day(
 
     duckdb_rows = [
         (
-            str(r['ts_code']).split('.')[0].zfill(6),  # stock_code
+            str(r['ts_code']),                            # ts_code (full format)
             trade_date_str,
             float(r['open']),
             float(r['high']),
             float(r['low']),
             float(r['close']),
-            int(float(r['vol'])),
-            round(float(r.get('amount') or 0) / 1e6, 4),
+            float(r.get('pre_close') or 0),
+            float(r.get('change') or 0),
+            float(r.get('pct_chg') or 0),
+            float(r.get('vol') or 0),
+            round(float(r.get('amount') or 0) / 1e6, 4),  # 千元 → 亿元
+            bool(r.get('is_limit_up', False)),              # is_up_limit
+            bool(r.get('is_limit_down', False)),            # is_down_limit
         )
         for r in rows
     ]
@@ -642,7 +648,7 @@ def _write_duckdb_day(
         conn.execute('DELETE FROM daily_bars WHERE trade_date = ?', [trade_date_str])
         if duckdb_rows:
             conn.executemany(
-                'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 duckdb_rows,
             )
         written = conn.execute(
@@ -676,7 +682,7 @@ def _export_parquet(duckdb_path: Path | None = None) -> None:
         parquet_path.unlink(missing_ok=True)
         parquet_str = str(parquet_path).replace('\\', '/').replace("'", "''")
         conn.execute(
-            f"COPY (SELECT * FROM daily_bars ORDER BY stock_code, trade_date) "
+            f"COPY (SELECT * FROM daily_bars ORDER BY ts_code, trade_date) "
             f"TO '{parquet_str}' (FORMAT PARQUET)"
         )
         logger.info('_export_parquet: Parquet file regenerated at %s', parquet_path)

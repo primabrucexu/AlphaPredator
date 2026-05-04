@@ -135,23 +135,28 @@ def _upsert_duckdb(
     conn = connect_duckdb(duckdb_path)
     try:
         conn.execute('BEGIN TRANSACTION')
-        # Delete existing rows for the same (stock_code, trade_date) then insert
+        # Delete existing rows for the same trade_date then insert
         trade_dates = {r['trade_date'] for r in today_bars}
         for td in trade_dates:
             conn.execute('DELETE FROM daily_bars WHERE trade_date = ?', [td])
 
         conn.executemany(
-            'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [
                 (
-                    r['stock_code'],
+                    r['ts_code'],
                     r['trade_date'],
-                    r['open_price'],
-                    r['high_price'],
-                    r['low_price'],
-                    r['close_price'],
-                    r['volume'],
-                    r.get('turnover_amount_billion', 0.0),
+                    r['open'],
+                    r['high'],
+                    r['low'],
+                    r['close'],
+                    r.get('pre_close', 0.0),
+                    r.get('change', 0.0),
+                    r.get('pct_chg', 0.0),
+                    r.get('vol', 0.0),
+                    r.get('amount', 0.0),
+                    bool(r.get('is_up_limit', False)),
+                    bool(r.get('is_down_limit', False)),
                 )
                 for r in today_bars
             ],
@@ -161,7 +166,7 @@ def _upsert_duckdb(
         daily_bars_parquet_path.unlink(missing_ok=True)
         parquet_path = str(daily_bars_parquet_path).replace('\\', '/').replace("'", "''")
         conn.execute(
-            f"COPY (SELECT * FROM daily_bars ORDER BY stock_code, trade_date) TO '{parquet_path}' (FORMAT PARQUET)"
+            f"COPY (SELECT * FROM daily_bars ORDER BY ts_code, trade_date) TO '{parquet_path}' (FORMAT PARQUET)"
         )
         conn.commit()
     except Exception:

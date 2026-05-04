@@ -332,9 +332,9 @@ def fetch_daily_bars_by_date(
     Uses a single bulk API call (pro.daily(trade_date=...)) instead of per-stock loops.
     Optionally filters to the uploaded stock universe.
 
-    Returns a list of dicts with keys:
-        stock_code, trade_date, open_price, high_price, low_price,
-        close_price, volume, turnover_amount_billion
+    Returns a list of dicts with keys matching the daily_bars DB schema:
+        ts_code, trade_date, open, high, low, close, pre_close, change, pct_chg,
+        vol, amount (千元/1e6 → 亿元), is_up_limit, is_down_limit
     """
     pro = _get_tushare_api()
     ts_date = trade_date.replace('-', '')
@@ -343,12 +343,10 @@ def fetch_daily_bars_by_date(
     if df is None or df.empty:
         return []
 
-    symbol_map: dict[str, str] = {}
     if use_uploaded_universe:
         try:
             universe_df = load_stock_universe(market_filters)
             ts_code_set = set(universe_df['ts_code'].tolist())
-            symbol_map = dict(zip(universe_df['ts_code'], universe_df['symbol']))
             df = df[df['ts_code'].isin(ts_code_set)].copy()
         except FileNotFoundError:
             # No universe uploaded; keep all stocks from Tushare response
@@ -361,24 +359,24 @@ def fetch_daily_bars_by_date(
             close = float(row.get('close') or 0)
             if close <= 0:
                 continue
-            # Convert ts_code to 6-digit symbol
-            if ts_code in symbol_map:
-                stock_code = str(symbol_map[ts_code]).zfill(6)
-            else:
-                stock_code = ts_code.split('.')[0].zfill(6)
             # Tushare trade_date column is 'YYYYMMDD'; convert to 'YYYY-MM-DD'
             td = str(row['trade_date'])
             trade_date_str = f'{td[:4]}-{td[4:6]}-{td[6:8]}'
             rows.append({
-                'stock_code': stock_code,
+                'ts_code': ts_code,
                 'trade_date': trade_date_str,
-                'open_price': round(float(row['open']), 4),
-                'high_price': round(float(row['high']), 4),
-                'low_price': round(float(row['low']), 4),
-                'close_price': close,
-                'volume': int(float(row['vol'])),
-                # Tushare amount is in 千元 (thousand yuan); convert to 亿元 (100M yuan)
-                'turnover_amount_billion': round(float(row.get('amount') or 0) / 1e6, 4),
+                'open': round(float(row['open']), 4),
+                'high': round(float(row['high']), 4),
+                'low': round(float(row['low']), 4),
+                'close': close,
+                'pre_close': round(float(row.get('pre_close') or 0), 4),
+                'change': round(float(row.get('change') or 0), 4),
+                'pct_chg': round(float(row.get('pct_chg') or 0), 4),
+                'vol': float(row.get('vol') or 0),
+                # Tushare amount is in 千元 (thousand yuan); store in 亿元 (100M yuan)
+                'amount': round(float(row.get('amount') or 0) / 1e6, 4),
+                'is_up_limit': False,   # limit detection requires stock metadata; use initializer path
+                'is_down_limit': False, # for accurate is_up_limit/is_down_limit values
             })
         except (ValueError, TypeError):
             continue

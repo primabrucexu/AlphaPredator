@@ -23,7 +23,7 @@ uploaded_at = datetime.now(timezone.utc).isoformat()
 ensure_sqlite_schema()
 conn = connect_sqlite()
 try:
-    conn.execute('DELETE FROM stock_universe')
+    conn.execute('DELETE FROM stock_list')
 
     # 补充缺失的列
     fill_cols = {c: '' for c in ['cnspell', 'market', 'list_status', 'list_date', 'delist_date']
@@ -53,7 +53,7 @@ try:
 
     # 批量插入
     conn.executemany(
-        '''INSERT OR REPLACE INTO stock_universe
+        '''INSERT OR REPLACE INTO stock_list
            (ts_code, symbol, name, cnspell, market, list_status, list_date, delist_date, uploaded_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
         rows_to_insert,
@@ -61,8 +61,8 @@ try:
     conn.commit()
 
     # 验证导入结果
-    count = conn.execute('SELECT COUNT(*) FROM stock_universe').fetchone()[0]
-    print(f"Successfully imported {count} stocks to SQLite stock_universe")
+    count = conn.execute('SELECT COUNT(*) FROM stock_list').fetchone()[0]
+    print(f"Successfully imported {count} stocks to SQLite stock_list")
 
 finally:
     conn.close()
