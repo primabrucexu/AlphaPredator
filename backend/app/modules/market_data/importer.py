@@ -280,17 +280,20 @@ def _write_duckdb_data(*, duckdb_path: Path, daily_bars: list[dict[str, Any]], d
         connection.execute('DELETE FROM daily_bars')
         if daily_bars:
             connection.executemany(
-                'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [
                     (
-                        row['stock_code'],
+                        row['stock_code'],               # ts_code: store symbol as-is
                         row['trade_date'],
-                        row['open_price'],
-                        row['high_price'],
-                        row['low_price'],
-                        row['close_price'],
-                        row['volume'],
-                        row.get('turnover_amount_billion', 0.0),
+                        row['open_price'],               # open
+                        row['high_price'],               # high
+                        row['low_price'],                # low
+                        row['close_price'],              # close
+                        0.0,                             # pre_close (not in CSV)
+                        0.0,                             # change (not in CSV)
+                        0.0,                             # pct_chg (not in CSV)
+                        float(row['volume']),            # vol
+                        float(row.get('turnover_amount_billion', 0.0)),  # amount
                         bool(row.get('is_up_limit', False)),
                         bool(row.get('is_down_limit', False)),
                     )
@@ -299,7 +302,7 @@ def _write_duckdb_data(*, duckdb_path: Path, daily_bars: list[dict[str, Any]], d
             )
         daily_bars_parquet_path.unlink(missing_ok=True)
         parquet_path = str(daily_bars_parquet_path).replace('\\', '/').replace("'", "''")
-        connection.execute(f"COPY (SELECT * FROM daily_bars ORDER BY stock_code, trade_date) TO '{parquet_path}' (FORMAT PARQUET)")
+        connection.execute(f"COPY (SELECT * FROM daily_bars ORDER BY ts_code, trade_date) TO '{parquet_path}' (FORMAT PARQUET)")
     finally:
         connection.close()
 

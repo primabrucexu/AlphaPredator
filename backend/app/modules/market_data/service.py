@@ -264,7 +264,8 @@ class MarketDataService:
         try:
             placeholders = ','.join(['?' for _ in symbols])
             rows = connection.execute(
-                f'SELECT DISTINCT stock_code FROM daily_bars WHERE stock_code IN ({placeholders})',
+                f"SELECT DISTINCT SPLIT_PART(ts_code, '.', 1) AS stock_code "
+                f'FROM daily_bars WHERE SPLIT_PART(ts_code, \'.\', 1) IN ({placeholders})',
                 symbols,
             ).fetchall()
             return {row[0] for row in rows}
@@ -282,7 +283,7 @@ class MarketDataService:
             connection = connect_duckdb(self._duckdb_path)
             try:
                 row = connection.execute(
-                    'SELECT 1 FROM daily_bars WHERE stock_code = ? LIMIT 1',
+                    'SELECT 1 FROM daily_bars WHERE SPLIT_PART(ts_code, \'.\', 1) = ? LIMIT 1',
                     [stock_code],
                 ).fetchone()
                 if row:
@@ -310,14 +311,14 @@ class MarketDataService:
             stock_rows = connection.execute(
                 '''
                 SELECT
-                    stock_code,
+                    SPLIT_PART(ts_code, '.', 1) AS stock_code,
                     trade_date,
-                    close_price,
-                    turnover_amount_billion,
-                    LAG(close_price) OVER (PARTITION BY stock_code ORDER BY trade_date) AS prev_close
+                    close,
+                    amount,
+                    LAG(close) OVER (PARTITION BY ts_code ORDER BY trade_date) AS prev_close
                 FROM daily_bars
                 QUALIFY trade_date = ?
-                ORDER BY turnover_amount_billion DESC, stock_code ASC
+                ORDER BY amount DESC, ts_code ASC
                 ''',
                 [latest_trade_date],
             ).fetchall()
@@ -469,14 +470,14 @@ class MarketDataService:
                 '''
                 SELECT
                     trade_date,
-                    open_price,
-                    high_price,
-                    low_price,
-                    close_price,
-                    turnover_amount_billion,
-                    LAG(close_price) OVER (PARTITION BY stock_code ORDER BY trade_date) AS prev_close
+                    open AS open_price,
+                    high AS high_price,
+                    low AS low_price,
+                    close AS close_price,
+                    amount AS turnover_amount_billion,
+                    LAG(close) OVER (PARTITION BY ts_code ORDER BY trade_date) AS prev_close
                 FROM daily_bars
-                WHERE stock_code = ?
+                WHERE SPLIT_PART(ts_code, '.', 1) = ?
                 ORDER BY trade_date DESC
                 LIMIT 1
                 ''',
@@ -620,12 +621,17 @@ class MarketDataService:
         try:
             rows = connection.execute(
                 '''
-                SELECT trade_date, open_price, high_price, low_price, close_price, volume,
-                       turnover_amount_billion,
+                SELECT trade_date,
+                       open AS open_price,
+                       high AS high_price,
+                       low AS low_price,
+                       close AS close_price,
+                       vol AS volume,
+                       amount AS turnover_amount_billion,
                        COALESCE(is_up_limit, FALSE) AS is_up_limit,
                        COALESCE(is_down_limit, FALSE) AS is_down_limit
                 FROM daily_bars
-                WHERE stock_code = ?
+                WHERE SPLIT_PART(ts_code, '.', 1) = ?
                 ORDER BY trade_date
                 ''',
                 [stock_code],
@@ -646,12 +652,17 @@ class MarketDataService:
         try:
             rows = connection.execute(
                 f'''
-                SELECT trade_date, open_price, high_price, low_price, close_price, volume,
-                       COALESCE(turnover_amount_billion, 0.0) AS turnover_amount_billion,
+                SELECT trade_date,
+                       open AS open_price,
+                       high AS high_price,
+                       low AS low_price,
+                       close AS close_price,
+                       vol AS volume,
+                       COALESCE(amount, 0.0) AS turnover_amount_billion,
                        COALESCE(is_up_limit, FALSE) AS is_up_limit,
                        COALESCE(is_down_limit, FALSE) AS is_down_limit
                 FROM read_parquet('{parquet_path}')
-                WHERE stock_code = ?
+                WHERE SPLIT_PART(ts_code, '.', 1) = ?
                 ORDER BY trade_date
                 ''',
                 [stock_code],

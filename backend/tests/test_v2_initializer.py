@@ -193,24 +193,24 @@ def test_atomic_write_day_also_writes_duckdb(tmp_path: Path) -> None:
 
     conn = connect_duckdb(duckdb_path)
     rows = conn.execute(
-        "SELECT stock_code, trade_date, open_price, close_price, volume, turnover_amount_billion "
-        "FROM daily_bars WHERE trade_date = '2024-01-02' ORDER BY stock_code"
+        "SELECT ts_code, trade_date, open, close, vol, amount "
+        "FROM daily_bars WHERE trade_date = '2024-01-02' ORDER BY ts_code"
     ).fetchall()
     conn.close()
 
     assert len(rows) == 2, f'Expected 2 DuckDB rows, got {len(rows)}'
-    # First row: 000001 (from 000001.SZ)
-    assert rows[0][0] == '000001'
+    # First row: 000001.SZ stored as-is
+    assert rows[0][0] == '000001.SZ'
     assert rows[0][1] == '2024-01-02'
-    assert rows[0][2] == pytest.approx(11.0)   # open_price
-    assert rows[0][3] == pytest.approx(11.2)   # close_price
-    assert rows[0][4] == 50000000              # volume = int(vol)
-    # turnover_amount_billion = amount / 1e6 = 560000 / 1e6 = 0.56
+    assert rows[0][2] == pytest.approx(11.0)    # open
+    assert rows[0][3] == pytest.approx(11.2)    # close
+    assert rows[0][4] == pytest.approx(50000000.0)   # vol (float)
+    # amount = 560000 千元 / 1e6 = 0.56
     assert rows[0][5] == pytest.approx(0.56, abs=0.001)
 
 
 def test_write_duckdb_day_direct(tmp_path: Path) -> None:
-    """_write_duckdb_day correctly maps ts_code → stock_code and date format."""
+    """_write_duckdb_day stores full ts_code and converts trade_date to YYYY-MM-DD."""
     from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_schema
     duckdb_path = tmp_path / 'test.duckdb'
     ensure_duckdb_schema(duckdb_path)
@@ -219,14 +219,14 @@ def test_write_duckdb_day_direct(tmp_path: Path) -> None:
 
     conn = connect_duckdb(duckdb_path)
     rows = conn.execute(
-        "SELECT stock_code, trade_date FROM daily_bars ORDER BY stock_code"
+        "SELECT ts_code, trade_date FROM daily_bars ORDER BY ts_code"
     ).fetchall()
     conn.close()
 
     assert len(rows) == 2
-    assert rows[0][0] == '000001'
+    assert rows[0][0] == '000001.SZ'
     assert rows[0][1] == '2024-01-02'
-    assert rows[1][0] == '600036'
+    assert rows[1][0] == '600036.SH'
     assert rows[1][1] == '2024-01-02'
 
 
@@ -266,8 +266,8 @@ def test_atomic_write_day_persists_limit_fields(tmp_path: Path) -> None:
 
     dconn = connect_duckdb(duckdb_path)
     row = dconn.execute(
-        "SELECT stock_code, trade_date, close_price FROM daily_bars "
-        "WHERE stock_code = '000001' AND trade_date = '2024-01-02'"
+        "SELECT ts_code, trade_date, close FROM daily_bars "
+        "WHERE ts_code = '000001.SZ' AND trade_date = '2024-01-02'"
     ).fetchone()
     dconn.close()
     assert row is not None
