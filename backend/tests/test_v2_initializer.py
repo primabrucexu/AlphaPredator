@@ -533,10 +533,10 @@ MOCK_STOCK_LIST_CSV = (
 )
 
 
-def test_load_stock_universe_filters_by_market(tmp_path: Path) -> None:
+def test_load_stock_list_filters_by_market(tmp_path: Path) -> None:
     from unittest.mock import MagicMock
 
-    from app.modules.market_data.data_source import load_stock_universe
+    from app.modules.market_data.data_source import load_stock_list
 
     stock_list_path = tmp_path / 'config' / 'stock_list.csv'
     stock_list_path.parent.mkdir(parents=True, exist_ok=True)
@@ -546,10 +546,10 @@ def test_load_stock_universe_filters_by_market(tmp_path: Path) -> None:
     mock_settings.stock_list_path = stock_list_path
 
     with patch('app.modules.market_data.data_source.settings', mock_settings):
-        df_all = load_stock_universe()
+        df_all = load_stock_list()
         assert len(df_all) == 2
 
-        df_main = load_stock_universe(market_filters=['主板'])
+        df_main = load_stock_list(market_filters=['主板'])
         assert len(df_main) == 1
         assert df_main.iloc[0]['symbol'] == '000001'
 

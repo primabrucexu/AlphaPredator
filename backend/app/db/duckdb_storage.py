@@ -1,4 +1,8 @@
+import argparse
+import json
+import sys
 from pathlib import Path
+from typing import Any
 
 import duckdb
 
@@ -66,8 +70,78 @@ def ensure_duckdb_schema(duckdb_path: Path | None = None) -> None:
     finally:
         connection.close()
 
+
+def _parse_sql_params(params_text: str | None) -> Any:
+    if not params_text:
+        return None
+    try:
+        return json.loads(params_text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            'Invalid --params JSON. Example: --params "[\"000001\", \"2026-04-30\"]"'
+        ) from exc
+
+
+def run_sql(sql: str, *, params: Any = None, duckdb_path: Path | None = None) -> list[tuple[Any, ...]]:
+    connection = connect_duckdb(duckdb_path)
+    try:
+        if params is None:
+            cursor = connection.execute(sql)
+        else:
+            cursor = connection.execute(sql, params)
+        if cursor.description is None:
+            return []
+        return cursor.fetchall()
+    finally:
+        connection.close()
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description='DuckDB helper (UI mode or execute SQL).')
+    parser.add_argument(
+        '--sql',
+        help='SQL to execute. If omitted, starts DuckDB UI mode.',
+    )
+    parser.add_argument(
+        '--params',
+        help='SQL parameters in JSON format, e.g. ["000001", "2026-04-30"] or {"code":"000001"}.',
+    )
+    parser.add_argument(
+        '--duckdb-path',
+        help='Optional DuckDB file path. Defaults to app settings.',
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_arg_parser()
+    args = parser.parse_args(argv)
+
+    target_path = Path(args.duckdb_path) if args.duckdb_path else settings.duckdb_path
+
+    if not args.sql:
+        duck = connect_duckdb(target_path)
+        try:
+            duck.execute('CALL start_ui();')
+            print('duckdb ui启动完成')
+            input('按任意键退出...')
+        finally:
+            duck.close()
+        return 0
+
+    try:
+        parsed_params = _parse_sql_params(args.params)
+        rows = run_sql(args.sql, params=parsed_params, duckdb_path=target_path)
+    except Exception as exc:  # noqa: BLE001
+        print(f'SQL execution failed: {exc}', file=sys.stderr)
+        return 1
+
+    if rows:
+        for row in rows:
+            print(row)
+    else:
+        print('SQL executed successfully (no result rows).')
+    return 0
+
 if __name__ == '__main__':
-    duck = connect_duckdb(settings.duckdb_path)
-    duck.execute("CALL start_ui();")
-    print("duckdb ui启动完成")
-    input("按任意键退出...")
+    raise SystemExit(main())

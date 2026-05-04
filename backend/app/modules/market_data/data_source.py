@@ -85,7 +85,7 @@ def _get_tushare_api() -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Stock universe helpers
+# Stock list helpers
 # ---------------------------------------------------------------------------
 
 # Required columns in the user-uploaded stock list CSV
@@ -105,16 +105,16 @@ def _to_ts_code(symbol: str) -> str:
     return s + '.SZ'
 
 
-def load_stock_universe(market_filters: list[str] | None = None) -> pd.DataFrame:
+def load_stock_list(market_filters: list[str] | None = None) -> pd.DataFrame:
     """
-    Load the uploaded stock universe CSV and optionally filter by market board.
+    Load the uploaded stock list CSV and optionally filter by market board.
 
     Raises FileNotFoundError if the stock list has not been uploaded yet.
     """
     path = settings.stock_list_path
     if not path.exists():
         raise FileNotFoundError(
-            'Stock universe CSV not found. '
+            'Stock list CSV not found. '
             'Please upload it via the initialization page (上传股票清单 CSV).'
         )
 
@@ -145,7 +145,7 @@ def fetch_spot_snapshot(
     """
     Fetch A-share snapshot data from Tushare for a given trade date.
 
-    Loads the stock universe from the uploaded CSV, optionally filtered by
+    Loads the stock list from the uploaded CSV, optionally filtered by
     *market_filters*, then fetches that day's daily data from Tushare.
 
     Returns a list of dicts with keys:
@@ -154,10 +154,10 @@ def fetch_spot_snapshot(
     """
     pro = _get_tushare_api()
 
-    universe_df = load_stock_universe(market_filters)
-    ts_code_set = set(universe_df['ts_code'].tolist())
-    name_map = dict(zip(universe_df['ts_code'], universe_df['name']))
-    symbol_map = dict(zip(universe_df['ts_code'], universe_df['symbol']))
+    stock_list_df = load_stock_list(market_filters)
+    ts_code_set = set(stock_list_df['ts_code'].tolist())
+    name_map = dict(zip(stock_list_df['ts_code'], stock_list_df['name']))
+    symbol_map = dict(zip(stock_list_df['ts_code'], stock_list_df['symbol']))
 
     effective_date = trade_date or date.today().strftime('%Y-%m-%d')
     ts_date = effective_date.replace('-', '')
@@ -182,7 +182,7 @@ def fetch_spot_snapshot(
         logger.warning('fetch_spot_snapshot: failed to fetch turnover_rate from daily_basic: %s', exc)
         daily_df['turnover_rate'] = 0.0
 
-    # Filter to the stock universe
+    # Filter to the uploaded stock list
     daily_df = daily_df[daily_df['ts_code'].isin(ts_code_set)].copy()
 
     rows: list[dict[str, Any]] = []
@@ -231,8 +231,8 @@ def fetch_stock_pool(
             for row in snapshot_rows
         ]
 
-    # Fallback for non-trading days or empty snapshot responses: use uploaded stock universe
-    universe_df = load_stock_universe(market_filters)
+    # Fallback for non-trading days or empty snapshot responses: use uploaded stock list
+    stock_list_df = load_stock_list(market_filters)
     return [
         {
             'stock_code': str(row['symbol']).zfill(6),
@@ -240,7 +240,7 @@ def fetch_stock_pool(
             'sectors': '',
             'ai_quick_summary': '',
         }
-        for _, row in universe_df.iterrows()
+        for _, row in stock_list_df.iterrows()
     ]
 
 
@@ -326,7 +326,7 @@ def fetch_daily_bars_by_date(
     Fetch daily K-line bars for the whole market for a given trade_date.
 
     Uses a single bulk API call (pro.daily(trade_date=...)) instead of per-stock loops.
-    Optionally filters to the uploaded stock universe.
+    Optionally filters to the uploaded stock list.
 
     Returns a list of dicts with keys matching the daily_bars DB schema:
         ts_code, trade_date, open, high, low, close, pre_close, change, pct_chg,
@@ -341,11 +341,11 @@ def fetch_daily_bars_by_date(
 
     if use_uploaded_universe:
         try:
-            universe_df = load_stock_universe(market_filters)
-            ts_code_set = set(universe_df['ts_code'].tolist())
+            stock_list_df = load_stock_list(market_filters)
+            ts_code_set = set(stock_list_df['ts_code'].tolist())
             df = df[df['ts_code'].isin(ts_code_set)].copy()
         except FileNotFoundError:
-            # No universe uploaded; keep all stocks from Tushare response
+            # No stock list uploaded; keep all stocks from Tushare response
             pass
 
     rows: list[dict[str, Any]] = []

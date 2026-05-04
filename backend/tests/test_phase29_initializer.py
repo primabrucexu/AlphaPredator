@@ -4,7 +4,7 @@ Tests migrated from the old Phase 2.9 initializer.
 The V2 initializer replaces the old CSV-based approach.  This file retains
 the following tests that remain relevant after the V2 refactor:
 - Updater (run_daily_update): unmodified, still uses the same API.
-- Data source helpers (load_stock_universe, _to_ts_code): unchanged utilities.
+- Data source helpers (load_stock_list, _to_ts_code): unchanged utilities.
 
 Tests removed (exercised old CSV-based V1 initializer only):
 - test_read_init_status_returns_idle_when_no_file
@@ -150,10 +150,10 @@ def test_run_daily_update_succeeds(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_load_stock_universe_filters_by_market(tmp_path: Path) -> None:
+def test_load_stock_list_filters_by_market(tmp_path: Path) -> None:
     from unittest.mock import MagicMock
 
-    from app.modules.market_data.data_source import load_stock_universe
+    from app.modules.market_data.data_source import load_stock_list
 
     stock_list_path = tmp_path / 'config' / 'stock_list.csv'
     stock_list_path.parent.mkdir(parents=True, exist_ok=True)
@@ -163,29 +163,29 @@ def test_load_stock_universe_filters_by_market(tmp_path: Path) -> None:
     mock_settings.stock_list_path = stock_list_path
 
     with patch('app.modules.market_data.data_source.settings', mock_settings):
-        df_all = load_stock_universe()
+        df_all = load_stock_list()
         assert len(df_all) == 2
 
-        df_main = load_stock_universe(market_filters=['主板'])
+        df_main = load_stock_list(market_filters=['主板'])
         assert len(df_main) == 1
         assert df_main.iloc[0]['symbol'] == '000001'
 
-        df_cyb = load_stock_universe(market_filters=['创业板'])
+        df_cyb = load_stock_list(market_filters=['创业板'])
         assert len(df_cyb) == 1
         assert df_cyb.iloc[0]['symbol'] == '300308'
 
 
-def test_load_stock_universe_raises_when_file_missing(tmp_path: Path) -> None:
+def test_load_stock_list_raises_when_file_missing(tmp_path: Path) -> None:
     from unittest.mock import MagicMock
 
-    from app.modules.market_data.data_source import load_stock_universe
+    from app.modules.market_data.data_source import load_stock_list
 
     mock_settings = MagicMock()
     mock_settings.stock_list_path = tmp_path / 'no_such_file.csv'
 
     with patch('app.modules.market_data.data_source.settings', mock_settings):
         with pytest.raises(FileNotFoundError):
-            load_stock_universe()
+            load_stock_list()
 
 
 def test_to_ts_code_conversion() -> None:

@@ -229,7 +229,7 @@ def connect_sqlite(sqlite_path: Path | None = None) -> sqlite3.Connection:
 def ensure_sqlite_schema(sqlite_path: Path | None = None) -> None:
     connection = connect_sqlite(sqlite_path)
     try:
-        _migrate_stock_universe_to_stock_list(connection)
+        _migrate_legacy_stock_list_table(connection)
         connection.executescript(SCHEMA_SQL)
         connection.commit()
         _migrate_market_daily_quote(connection)
@@ -238,11 +238,11 @@ def ensure_sqlite_schema(sqlite_path: Path | None = None) -> None:
         connection.close()
 
 
-def _migrate_stock_universe_to_stock_list(connection: sqlite3.Connection) -> None:
-    """Rename stock_universe to stock_list for existing databases.
+def _migrate_legacy_stock_list_table(connection: sqlite3.Connection) -> None:
+    """Rename legacy stock table to stock_list for existing databases.
 
-    Checks for the old table name via sqlite_master and renames it when found
-    (idempotent: no-op if stock_universe does not exist).
+    Checks for the legacy table name via sqlite_master and renames it when found
+    (idempotent: no-op when the legacy table does not exist).
     """
     row = connection.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='stock_universe'"
