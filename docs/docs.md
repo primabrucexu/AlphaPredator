@@ -18,5 +18,6 @@
 ## Agent 协作文档
 
 - [Agent Guide](../agent.md)：AI/编码 agent 在本仓库协作时必须遵守的约束。
+- [docs/agent 使用说明](agent/README.md)：agent 工作文档的目录职责、命名规范与推荐模板。
 
 
