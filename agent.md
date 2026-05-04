@@ -14,6 +14,20 @@
 - 当需要给更细颗粒的目标输出文档时，请按照如下格式输出：phase-<阶段名称>-<目标名称>.md
 - agent除非用户明确指出需要进行代码改动，否则永远只输出方案设计文档和计划文档，不要直接输出代码改动。
 
+## 额外工具
+
+### DuckDB 工具脚本使用说明（`backend/app/db/duckdb_storage.py`）
+
+- 默认（无参数）启动 DuckDB UI：
+  - `python backend/app/db/duckdb_storage.py`
+- 执行 SQL（无参数）：
+  - `python backend/app/db/duckdb_storage.py --sql "SELECT 1 AS ok"`
+- 执行 SQL（带参数，`--params` 为 JSON）：
+  - `python backend/app/db/duckdb_storage.py --sql "SELECT ? AS a, ? AS b" --params "[1, 2]"`
+- 参数说明：
+  - `--sql`：要执行的 SQL 语句。
+  - `--params`：SQL 参数（JSON 字符串，可为数组或对象）。
+
 ## 每次会话开始时必须执行
 
 1. 读取 `docs/agent/current-progress.md`，了解当前阶段、上次完成内容、待做任务与已知阻塞。

@@ -106,10 +106,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         '--params',
         help='SQL parameters in JSON format, e.g. ["000001", "2026-04-30"] or {"code":"000001"}.',
     )
-    parser.add_argument(
-        '--duckdb-path',
-        help='Optional DuckDB file path. Defaults to app settings.',
-    )
     return parser
 
 
@@ -117,10 +113,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
 
-    target_path = Path(args.duckdb_path) if args.duckdb_path else settings.duckdb_path
-
     if not args.sql:
-        duck = connect_duckdb(target_path)
+        duck = connect_duckdb(settings.duckdb_path)
         try:
             duck.execute('CALL start_ui();')
             print('duckdb ui启动完成')
