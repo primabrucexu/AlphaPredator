@@ -22,7 +22,10 @@
 
 ## Agent 工作文档（docs/agent）
 
+- [当前执行进度](agent/current-progress.md)：**每次会话开始前必读**，记录当前阶段、上一步完成内容、下一步待做任务与已知阻塞。
 - [Phase 1 待优化项](agent/phase1-pending-optimizations.md)：Phase 1 已识别但暂不阻塞达成标准的优化点（分时图、FocusPage
   真实功能）。
+  真实功能）。
+
 
 
