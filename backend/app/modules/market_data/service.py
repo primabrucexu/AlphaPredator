@@ -290,6 +290,8 @@ class MarketDataService:
                 }
             )
 
+        hot_sectors = self._load_hot_sectors_from_sqlite(latest_trade_date)
+
         return {
             'summary': {
                 'trade_date': latest_trade_date,
@@ -300,9 +302,48 @@ class MarketDataService:
                     2,
                 ),
             },
-            'hot_sectors': [],
+            'hot_sectors': hot_sectors,
             'stocks': stocks,
         }
+
+    def _load_hot_sectors_from_sqlite(self, trade_date: str) -> list[dict[str, Any]]:
+        """Load hot sectors for *trade_date* from SQLite.
+
+        Priority:
+        1. Image pipeline tables (hot_sector_daily_aggregates + hot_sector_recent_3d)
+        2. hot_sector_snapshots fallback
+        """
+        if not self._sqlite_path.exists():
+            return []
+
+        connection = connect_sqlite(self._sqlite_path)
+        try:
+            hot_sectors = self._load_hot_sectors_from_image_pipeline(connection, trade_date)
+            if not hot_sectors:
+                rows = connection.execute(
+                    '''
+                    SELECT trade_date, name, trend_label, heat_score
+                    FROM hot_sector_snapshots
+                    WHERE trade_date = (
+                        SELECT MAX(trade_date) FROM hot_sector_snapshots WHERE trade_date <= ?
+                    )
+                    ORDER BY heat_score DESC
+                    ''',
+                    [trade_date],
+                ).fetchall()
+                hot_sectors = [
+                    {
+                        'trade_date': str(row['trade_date']),
+                        'name': str(row['name']),
+                        'trend_label': str(row['trend_label']),
+                        'heat_score': int(row['heat_score']),
+                    }
+                    for row in rows
+                ]
+        finally:
+            connection.close()
+
+        return hot_sectors
 
     def _load_hot_sectors_from_image_pipeline(self, connection: Any, trade_date: str) -> list[dict[str, Any]]:
         preferred_trade_date_row = connection.execute(
@@ -386,6 +427,7 @@ class MarketDataService:
             return None
 
         stock_name = self._load_stock_name_map().get(stock_code, stock_code)
+        stock_profile = self._load_stock_profile_from_sqlite(stock_code)
         current_price = float(row[4])
         prev_close = float(row[6]) if row[6] is not None else current_price
         change_amount = round(current_price - prev_close, 4)
@@ -394,7 +436,7 @@ class MarketDataService:
         return {
             'trade_date': str(row[0]),
             'stock_code': stock_code,
-            'stock_name': stock_name,
+            'stock_name': stock_profile.get('stock_name') or stock_name,
             'current_price': current_price,
             'change_amount': change_amount,
             'change_pct': change_pct,
@@ -403,8 +445,8 @@ class MarketDataService:
             'low_price': float(row[3]),
             'turnover_amount_billion': float(row[5] or 0.0),
             'turnover_rate': 0.0,
-            'sectors': [],
-            'ai_quick_summary': '',
+            'sectors': stock_profile.get('sectors', []),
+            'ai_quick_summary': stock_profile.get('ai_quick_summary', ''),
         }
 
     def _load_market_overview_payload_from_snapshot(self) -> dict[str, Any] | None:
@@ -558,15 +600,44 @@ class MarketDataService:
             return {}
         connection = connect_sqlite(self._sqlite_path)
         try:
-            rows = connection.execute(
+            # stock_profiles holds names from the batch import path
+            profile_rows = connection.execute(
+                'SELECT stock_code, stock_name FROM stock_profiles'
+            ).fetchall()
+            name_map: dict[str, str] = {
+                str(row['stock_code']): str(row['stock_name'])
+                for row in profile_rows
+                if row['stock_code'] and row['stock_name']
+            }
+            # stock_universe holds the authoritative full-universe names; override
+            universe_rows = connection.execute(
                 "SELECT symbol, name FROM stock_universe WHERE list_status = 'L'"
             ).fetchall()
+            for row in universe_rows:
+                if row['symbol'] and row['name']:
+                    name_map[str(row['symbol']).zfill(6)] = str(row['name'])
         finally:
             connection.close()
+        return name_map
+
+    def _load_stock_profile_from_sqlite(self, stock_code: str) -> dict[str, Any]:
+        """Load stock profile (name, sectors, ai_summary) from SQLite stock_profiles table."""
+        if not self._sqlite_path.exists():
+            return {}
+        connection = connect_sqlite(self._sqlite_path)
+        try:
+            row = connection.execute(
+                'SELECT stock_name, sectors_json, ai_quick_summary FROM stock_profiles WHERE stock_code = ?',
+                [stock_code],
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            return {}
         return {
-            str(row['symbol']).zfill(6): str(row['name'])
-            for row in rows
-            if row['symbol'] and row['name']
+            'stock_name': str(row['stock_name']),
+            'sectors': self._parse_sectors_json(str(row['sectors_json'])),
+            'ai_quick_summary': str(row['ai_quick_summary']),
         }
 
     def _serialize_daily_bar_rows(self, rows: list[tuple[Any, ...]]) -> list[dict[str, Any]]:
