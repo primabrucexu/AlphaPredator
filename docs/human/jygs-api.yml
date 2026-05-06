@@ -1,0 +1,242 @@
+openapi: 3.0.0
+info:
+  title: 韭研公社API
+  version: 1.0.0
+servers:
+  - url: https://app.jiuyangongshe.com/jystock-app
+
+paths:
+  /api/v1/action/diagram-url:
+    post:
+      summary: 每日涨停简图
+      operationId: getDiagramUrl
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DiagramUrlRequest'
+            example:
+              date: "2026-04-30"
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiagramUrlResponse'
+
+  /api/v1/action/list:
+    post:
+      summary: 一字涨停股票解析
+      operationId: getActionList
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActionListRequest'
+            example:
+              action_field_id: "recommend,2026-04-30"
+              pc: 1
+              start: 1
+              limit: 30
+              sort_price: 0
+              sort_range: 0
+              sort_time: 0
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionListResponse'
+
+  /api/v1/action/field:
+    post:
+      summary: 全量涨停股票解析
+      operationId: getActionFieldList
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActionFieldRequest'
+            example:
+              date: "2026-04-30"
+              pc: 1
+      responses:
+        '200':
+          description: 成功响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionFieldResponse'
+
+components:
+  schemas:
+    # ========== 接口1：走势图URL ==========
+    DiagramUrlRequest:
+      type: object
+      required:
+        - date
+      properties:
+        date:
+          type: string
+          description: 日期，格式 YYYY-MM-DD
+          example: "2026-04-30"
+
+    DiagramUrlResponse:
+      type: object
+      properties:
+        data:
+          type: string
+          nullable: true
+          description: 图片完整URL
+        errCode:
+          type: string
+          description: 状态码，"0" 表示成功
+
+    # ========== 接口2：异动列表 ==========
+    ActionListRequest:
+      type: object
+      required:
+        - action_field_id
+        - pc
+        - start
+        - limit
+        - sort_price
+        - sort_range
+        - sort_time
+      properties:
+        action_field_id:
+          type: string
+          description: 筛选标识，格式 "字段,日期"，如 "recommend,2026-04-30"。其中字段固定为 "recommend"，日期格式为 YYYY-MM-DD。
+        pc:
+          type: integer
+          description: 分页标识
+        start:
+          type: integer
+          description: 起始索引（从1开始）
+        limit:
+          type: integer
+          description: 每页记录数
+        sort_price:
+          type: integer
+          description: 价格排序（0-不排序，1-升序，2-降序）
+        sort_range:
+          type: integer
+          description: 涨跌幅区间排序（0-不排序）
+        sort_time:
+          type: integer
+          description: 涨停时间排序（0-不排序）
+
+    ActionListResponse:
+      type: object
+      properties:
+        msg:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/StockItem'
+        errCode:
+          type: string
+        serverTime:
+          type: integer
+
+    # ========== 接口3：题材分类列表 ==========
+    ActionFieldRequest:
+      type: object
+      required:
+        - date
+        - pc
+      properties:
+        date:
+          type: string
+          description: 日期 YYYY-MM-DD
+        pc:
+          type: integer
+          description: 页码
+
+    ActionFieldResponse:
+      type: object
+      properties:
+        msg:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/CategoryItem'
+        errCode:
+          type: string
+        serverTime:
+          type: integer
+
+    CategoryItem:
+      type: object
+      properties:
+        name:
+          type: string
+          description: 题材名称
+        date:
+          type: string
+          description: 交易日，格式YYYY-MM-DD
+        count:
+          type: integer
+          description: 该题材下涨停股票数量
+        list:
+          type: array
+          description: 涨停股票列表（某些题材可能不返回）
+          items:
+            $ref: '#/components/schemas/StockItem'
+
+    # ========== 公共实体（接口2和接口3共用） ==========
+    StockItem:
+      type: object
+      properties:
+        code:
+          type: string
+          description: 股票代码，如 "sz000609"，不是常见的6位数字代码，而是包含市场前缀的代码。格式：{市场代码}{股票代码}。
+        name:
+          type: string
+          description: 股票简称
+        article:
+          $ref: '#/components/schemas/Article'
+
+    Article:
+      type: object
+      properties:
+        action_info:
+          $ref: '#/components/schemas/ActionInfo'
+        title:
+          type: string
+
+    ActionInfo:
+      type: object
+      properties:
+        time:
+          type: string
+          description: 涨停时间 HH:MM:SS
+        num:
+          type: string
+          nullable: true
+          description: 连板情况，如 "14天10板"，null表示首次涨停
+        price:
+          type: integer
+          description: 价格（单位：分）
+        day:
+          type: integer
+          nullable: true
+          description: 累计天数，null表示首次涨停
+        edition:
+          type: integer
+          nullable: true
+          description: 涨停次数数，null表示首次涨停
+        shares_range:
+          type: number
+          format: float
+          description: 涨幅，除以100后可以得到百分比。如1002表示10.02%。
+        expound:
+          type: string
+          description: 详细解析（换行分隔要点）

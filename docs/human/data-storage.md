@@ -104,3 +104,40 @@ CREATE TABLE pick_models (
     description TEXT
 );
 ```
+
+## 5. 韭研公社每日复盘数据
+
+- 存储方式：SQLite
+- 用途：用于从韭研公社中获取的每日复盘数据，供AI学习市场热点信息
+- 数据来源：通过API调用自动获取
+
+### 5.1 每日涨停简图存储表
+
+- sqlite表结构设计：
+
+```sql
+CREATE TABLE daily_hot_pic
+(
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  trade_date        VARCHAR NOT NULL,
+  summary_image_url VARCHAR NOT NULL,
+  source            VARCHAR NOT NULL -- 数据来源，目前只有韭研公社，填写为jygs
+);
+```
+
+### 5.2 每日涨停解析存储表
+
+```sql
+CREATE TABLE daily_hot_info
+(
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  trade_date    TEXT    NOT NULL,            -- 交易日期
+  limit_up_time TEXT    NOT NULL DEFAULT '', -- HH:MM:SS格式的涨停时间
+  stock_code    INTEGER NOT NULL,            -- 6位数字的股票代码
+  name          VARCHAR NOT NULL,            -- 股票名称
+  streak_text   VARCHAR NOT NULL,            -- 连板信息文本，如“两天两板”，无内容则表示首次涨停
+  hot_theme     VARCHAR NOT NULL,            -- 涨停题材
+  reason        TEXT    NOT NULL,            -- 涨停解析内容
+  source        VARCHAR NOT NULL             -- 数据来源，目前只有韭研公社，填写为jygs
+);
+```
