@@ -13,7 +13,7 @@
 
 ## 3. 数据存储
 
-参照 [data-storage.md](data-storage.md) 文档中的
+参照 [data-storage.md](data-storage.md) 文档中的 韭研公社每日复盘数据
 
 ## 4. 数据使用
 
