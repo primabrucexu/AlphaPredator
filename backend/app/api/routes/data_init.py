@@ -168,10 +168,14 @@ async def upload_stock_list(file: UploadFile) -> StockListUploadResponse:
 
 @router.post('/tasks', response_model=TaskResponse, status_code=status.HTTP_202_ACCEPTED)
 def create_init_task(body: CreateTaskRequest) -> TaskResponse:
-    """Create and immediately start a market data initialization task.
+    """Create and immediately start an initialization task.
+
+    Supports two task types:
+    - MARKET_DATA: Market data initialization (requires Tushare token)
+    - JYGS_REVIEW: JYGS review data fetch (requires JYGS credentials)
 
     Preconditions (returns 400 if not met):
-    - Tushare token must be configured.
+    - Credentials must be configured based on task_type.
 
     Returns 202 if started, 409 if another task is already running.
     """
@@ -182,7 +186,12 @@ def create_init_task(body: CreateTaskRequest) -> TaskResponse:
         )
 
     try:
-        task = create_task(body.start_date, body.end_date, mode=body.mode)
+        task = create_task(
+            body.start_date,
+            body.end_date,
+            mode=body.mode,
+            task_type=body.task_type,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 

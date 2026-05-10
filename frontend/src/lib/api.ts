@@ -153,8 +153,11 @@ export const ALL_MARKET_BOARDS: MarketBoard[] = ['主板', '创业板', '科创�
 
 export type TaskStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'TERMINATED';
 
+export type TaskType = 'MARKET_DATA' | 'JYGS_REVIEW';
+
 export interface TaskResponse {
   task_id: string;
+  task_type: TaskType;
   mode: string;
   start_date: string;
   end_date: string;
@@ -209,6 +212,39 @@ export interface InitV2OverviewResponse {
   stock_list_updated_at: string | null;
   daily_quote_cutoff_time: string | null;
   board_counts: Record<string, number>;
+}
+
+export interface HotSectorHistorySector {
+  name: string;
+  heat_score: number;
+  trend_tag?: string;
+  trend_label?: string;
+  rank_today?: number;
+  max_board_count?: number;
+}
+
+export interface HotSectorHistoryDay {
+  trade_date: string;
+  sectors: HotSectorHistorySector[];
+}
+
+export interface HotSectorHistoryResponse {
+  trade_dates: string[];
+  days: HotSectorHistoryDay[];
+}
+
+export interface LimitUpStreakItem {
+  trade_date: string;
+  stock_code: string;
+  stock_name: string;
+  board_count: number;
+  limit_up_time: string;
+  hot_theme: string;
+}
+
+export interface LimitUpStreaksResponse {
+  trade_date: string;
+  streaks: LimitUpStreakItem[];
 }
 
 // ---------------------------------------------------------------------------
@@ -295,11 +331,13 @@ export function createInitTask(
   startDate: string,
   endDate: string,
   mode: string = 'RANGE',
+  taskType: TaskType = 'MARKET_DATA',
 ): Promise<TaskResponse> {
   return postJson<TaskResponse>('/api/data-init/tasks', {
     start_date: startDate,
     end_date: endDate,
     mode,
+    task_type: taskType,
   });
 }
 
@@ -375,4 +413,56 @@ export function searchStocks(query: string, limit = 10): Promise<StockCandidate[
 
 export function getInitOverview(): Promise<InitOverviewResponse> {
   return fetchJson<InitOverviewResponse>('/api/data-init/overview');
+}
+
+// ---------------------------------------------------------------------------
+// 韭研公社鉴权
+// ---------------------------------------------------------------------------
+
+export interface JygsAuthStatus {
+  configured: boolean;
+  valid: boolean;
+  saved_at: string | null;
+  expires_at: string | null;
+}
+
+export function getJygsAuthStatus(): Promise<JygsAuthStatus> {
+  return fetchJson<JygsAuthStatus>('/api/jygs/auth/status');
+}
+
+export async function saveJygsSession(session: string): Promise<void> {
+  const resp = await fetch(`${API_BASE_URL}/api/jygs/auth/session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session }),
+  });
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(data.error ?? '保存失败');
+  }
+}
+
+export async function clearJygsSession(): Promise<void> {
+  await fetch(`${API_BASE_URL}/api/jygs/auth/session`, { method: 'DELETE' });
+}
+
+// ---------------------------------------------------------------------------
+// Sentiment API functions
+// ---------------------------------------------------------------------------
+
+export function getHotSectorHistory(days: number = 7): Promise<HotSectorHistoryResponse> {
+  return fetchJson<HotSectorHistoryResponse>(
+    `/api/market/hot-sector-history?days=${days}`,
+  );
+}
+
+export function getLimitUpStreaks(
+  tradeDate?: string,
+  minBoards: number = 2,
+): Promise<LimitUpStreaksResponse> {
+  const query = new URLSearchParams({ min_boards: String(minBoards) });
+  if (tradeDate) query.set('trade_date', tradeDate);
+  return fetchJson<LimitUpStreaksResponse>(
+    `/api/market/limit-up-streaks?${query.toString()}`,
+  );
 }

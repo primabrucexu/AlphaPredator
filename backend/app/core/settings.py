@@ -30,6 +30,10 @@ class Settings:
     stock_list_path: Path = DATA_DIR / 'config' / 'stock_list.csv'
     tushare_rate_limit: int = 45  # max requests per minute (strict upper bound)
     tushare_history_start: str = '2024-01-01'
+    # 韭研公社配置
+    jygs_site_url: str = 'https://www.jiuyangongshe.com'
+    jygs_api_url: str = 'https://app.jiuyangongshe.com/jystock-app'
+    jygs_credentials_path: Path = DATA_DIR / 'config' / 'jygs.credentials'
 
 
 settings = Settings()

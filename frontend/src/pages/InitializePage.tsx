@@ -1,4 +1,5 @@
 import {useEffect, useRef, useState} from 'react';
+import {useSearchParams} from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -9,33 +10,43 @@ import {
   Input,
   Progress,
   Row,
+  Select,
   Space,
   Statistic,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import dayjs from 'dayjs';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
+  CopyOutlined,
   DatabaseOutlined,
+  DisconnectOutlined,
+  LinkOutlined,
   LockOutlined,
   SyncOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
 import {
+  clearJygsSession,
   createInitTask,
   getInitTask,
   getInitTaskDays,
   getInitV2Overview,
+  getJygsAuthStatus,
   getTokenConfig,
   type InitV2OverviewResponse,
+  type JygsAuthStatus,
   retryInitTask,
+  saveJygsSession,
   saveTokenConfig,
   type StockListUploadResponse,
   type TaskDayItem,
   type TaskResponse,
+  type TaskType,
   terminateInitTask,
   type TokenConfigResponse,
   triggerDailyUpdate,
@@ -97,6 +108,7 @@ function dayStatusTag(s: string) {
   const colors: Record<string, string> = {
     SUCCESS: 'success',
     FAILED: 'error',
+    RUNNING: 'processing',
     FETCHING: 'processing',
     WRITING: 'processing',
     PENDING: 'warning',
@@ -104,6 +116,7 @@ function dayStatusTag(s: string) {
   const labels: Record<string, string> = {
     SUCCESS: '成功',
     FAILED: '失败',
+    RUNNING: '执行中',
     FETCHING: '拉取中',
     WRITING: '写入中',
     PENDING: '等待',
@@ -111,12 +124,28 @@ function dayStatusTag(s: string) {
   return <Tag color={colors[s] ?? 'default'}>{labels[s] ?? s}</Tag>;
 }
 
+function taskTypeLabel(taskType: string | undefined): string {
+  return taskType === 'JYGS_REVIEW' ? '韭研复盘抓取' : '行情初始化';
+}
+
 export function InitializePage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+
   // Token
   const [tokenConfig, setTokenConfig] = useState<TokenConfigResponse | null>(null);
   const [tokenInput, setTokenInput] = useState('');
   const [tokenSaving, setTokenSaving] = useState(false);
   const [tokenSuccess, setTokenSuccess] = useState(false);
+
+  // JYGS auth
+  const [jygsStatus, setJygsStatus] = useState<JygsAuthStatus | null>(null);
+  const [jygsConnecting, setJygsConnecting] = useState(false);
+  const [jygsError, setJygsError] = useState<string | null>(null);
+  const [jygsManualSession, setJygsManualSession] = useState('');
+  const [jygsManualSaving, setJygsManualSaving] = useState(false);
+  const [showManualFallback, setShowManualFallback] = useState(false);
+  const jygsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const jygsPopupRef = useRef<Window | null>(null);
 
   // Stock list
   const [initOverview, setInitOverview] = useState<InitV2OverviewResponse | null>(null);
@@ -130,6 +159,7 @@ export function InitializePage() {
   const [endDate, setEndDate] = useState<string>(todayYYYYMMDD());
   const [startLoading, setStartLoading] = useState(false);
   const [currentTask, setCurrentTask] = useState<TaskResponse | null>(null);
+  const [selectedTaskType, setSelectedTaskType] = useState<TaskType>('MARKET_DATA');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Day details
@@ -149,13 +179,20 @@ export function InitializePage() {
 
   // Initial load
   useEffect(() => {
-    Promise.all([getTokenConfig(), getInitV2Overview()])
-      .then(([token, overview]) => {
+    Promise.all([getTokenConfig(), getInitV2Overview(), getJygsAuthStatus()])
+      .then(([token, overview, jygs]) => {
         setTokenConfig(token);
         setInitOverview(overview);
         setCurrentTask(overview.running_task ?? overview.latest_task ?? null);
+        setJygsStatus(jygs);
       })
       .catch(() => {});
+
+    // 代理登录成功后会跳转回 /initialize?jygs_login=success
+    if (searchParams.get('jygs_login') === 'success') {
+      setSearchParams({}, { replace: true });
+      getJygsAuthStatus().then(setJygsStatus).catch(() => {});
+    }
   }, []);
 
   // Polling when task is running
@@ -229,7 +266,7 @@ export function InitializePage() {
     setCurrentTask(null);
     setShowDays(false);
     try {
-      const task = await createInitTask(startDate, endDate, 'RANGE');
+      const task = await createInitTask(startDate, endDate, 'RANGE', selectedTaskType);
       setCurrentTask(task);
     } catch (e) {
       setError(e instanceof Error ? e.message : '启动初始化失败');
@@ -309,10 +346,88 @@ export function InitializePage() {
     }
   };
 
+  // ── 韭研公社连接 handlers ───────────────────────────────────────────────
+
+  const stopJygsPoll = () => {
+    if (jygsPollRef.current) {
+      clearInterval(jygsPollRef.current);
+      jygsPollRef.current = null;
+    }
+  };
+
+  const handleJygsConnect = () => {
+    setJygsError(null);
+    setJygsConnecting(true);
+    setShowManualFallback(false);
+
+    // 弹出代理登录窗口
+    const proxyUrl = `${window.location.origin}/api/jygs/proxy/`;
+    jygsPopupRef.current = window.open(proxyUrl, 'jygs-login', 'width=520,height=860,left=200,top=80');
+
+    // 每 2 秒轮询鉴权状态
+    jygsPollRef.current = setInterval(async () => {
+      try {
+        const status = await getJygsAuthStatus();
+        if (status.valid) {
+          setJygsStatus(status);
+          setJygsConnecting(false);
+          stopJygsPoll();
+          jygsPopupRef.current?.close();
+          jygsPopupRef.current = null;
+        }
+        // 若弹窗被用户手动关闭，停止轮询
+        if (jygsPopupRef.current?.closed) {
+          stopJygsPoll();
+          setJygsConnecting(false);
+          // 再检查一次，弹窗可能是被代理成功后转到 initialize?success 触发的关闭
+          const finalStatus = await getJygsAuthStatus();
+          setJygsStatus(finalStatus);
+          if (!finalStatus.valid) {
+            setShowManualFallback(true);
+            setJygsError('代理登录未能捕获到凭据，请使用下方手动方式。');
+          }
+        }
+      } catch {
+        // ignore network errors during polling
+      }
+    }, 2000);
+  };
+
+  const handleJygsManualSave = async () => {
+    if (!jygsManualSession.trim()) return;
+    setJygsManualSaving(true);
+    setJygsError(null);
+    try {
+      await saveJygsSession(jygsManualSession.trim());
+      const status = await getJygsAuthStatus();
+      setJygsStatus(status);
+      setJygsManualSession('');
+      setShowManualFallback(false);
+    } catch (e) {
+      setJygsError(e instanceof Error ? e.message : '保存失败');
+    } finally {
+      setJygsManualSaving(false);
+    }
+  };
+
+  const handleJygsDisconnect = async () => {
+    await clearJygsSession();
+    setJygsStatus({ configured: false, valid: false, saved_at: null, expires_at: null });
+  };
+
+  const jygsConsoleSnippet =
+    `fetch("${window.location.origin}/api/jygs/auth/session",` +
+    `{method:"POST",headers:{"Content-Type":"application/json"},` +
+    `body:JSON.stringify({session:document.cookie.split(";")` +
+    `.find(c=>c.trim().startsWith("SESSION=")).trim().split("=")[1]})})` +
+    `.then(r=>r.json()).then(d=>alert(d.ok?"✅ 已同步到 AlphaPredator！":"❌ "+d.error))`;
+
   const isRunning = currentTask?.status === 'RUNNING';
   const isDone = currentTask?.status === 'SUCCESS';
   const isFailed = currentTask?.status === 'FAILED';
   const isTerminated = currentTask?.status === 'TERMINATED';
+  const isMarketTask = selectedTaskType === 'MARKET_DATA';
+  const canStartTask = isMarketTask ? !!tokenConfig?.is_configured : !!jygsStatus?.valid;
 
   const progressPercent = currentTask && currentTask.total_days > 0
     ? Math.round(currentTask.progress_percent)
@@ -388,6 +503,130 @@ export function InitializePage() {
           onClose={() => setStockListResult(null)}
         />
       )}
+
+      {/* 韭研公社连接 */}
+      <Card
+        className="page-card"
+        title={
+          <Space>
+            <LinkOutlined />
+            韭研公社连接
+          </Space>
+        }
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          {/* 当前连接状态 */}
+          <Space>
+            <Typography.Text>当前状态：</Typography.Text>
+            {jygsStatus === null ? (
+              <Tag>检查中…</Tag>
+            ) : jygsStatus.valid ? (
+              <Tag color="success" icon={<CheckCircleOutlined />}>已连接</Tag>
+            ) : (
+              <Tag color="warning" icon={<CloseCircleOutlined />}>未连接</Tag>
+            )}
+            {jygsStatus?.valid && jygsStatus.saved_at && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                凭据保存于 {new Date(jygsStatus.saved_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}
+              </Typography.Text>
+            )}
+          </Space>
+
+          {/* 连接 / 断开 操作 */}
+          {!jygsStatus?.valid ? (
+            <Space wrap>
+              <Button
+                type="primary"
+                icon={jygsConnecting ? <SyncOutlined spin /> : <LinkOutlined />}
+                loading={jygsConnecting}
+                onClick={handleJygsConnect}
+              >
+                {jygsConnecting ? '等待登录中…' : '一键代理登录'}
+              </Button>
+              {jygsConnecting && (
+                <Typography.Text type="secondary">
+                  请在弹出的窗口中完成登录，登录后将自动关闭
+                </Typography.Text>
+              )}
+              <Button
+                type="link"
+                size="small"
+                onClick={() => setShowManualFallback(v => !v)}
+              >
+                {showManualFallback ? '收起手动方式' : '代理登录失败？使用手动方式'}
+              </Button>
+            </Space>
+          ) : (
+            <Button
+              icon={<DisconnectOutlined />}
+              danger
+              onClick={handleJygsDisconnect}
+            >
+              断开连接
+            </Button>
+          )}
+
+          {/* JYGS 错误提示 */}
+          {jygsError && (
+            <Alert type="warning" showIcon closable message={jygsError} onClose={() => setJygsError(null)} />
+          )}
+
+          {/* 手动 SESSION 回退方式 */}
+          {showManualFallback && (
+            <Card size="small" style={{ background: '#fafafa' }}>
+              <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                <Typography.Text strong>手动方式（控制台）</Typography.Text>
+                <ol style={{ margin: 0, paddingLeft: 20, fontSize: 13 }}>
+                  <li>
+                    <Typography.Link href="https://www.jiuyangongshe.com" target="_blank">
+                      点此打开韭研公社
+                    </Typography.Link>
+                    ，完成登录
+                  </li>
+                  <li>按 <Typography.Text code>F12</Typography.Text> 打开开发者工具 → 切到 <Typography.Text code>Console</Typography.Text> 标签</li>
+                  <li>复制下方代码并粘贴到控制台后回车</li>
+                </ol>
+                <Space.Compact style={{ width: '100%' }}>
+                  <Input
+                    value={jygsConsoleSnippet}
+                    readOnly
+                    style={{ fontFamily: 'monospace', fontSize: 11 }}
+                  />
+                  <Tooltip title="复制">
+                    <Button
+                      icon={<CopyOutlined />}
+                      onClick={() => navigator.clipboard.writeText(jygsConsoleSnippet)}
+                    />
+                  </Tooltip>
+                </Space.Compact>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  执行后弹出"✅ 已同步"即表示成功，本页将自动刷新连接状态。
+                </Typography.Text>
+
+                <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
+                  或直接粘贴 SESSION Cookie 的值：
+                </Typography.Text>
+                <Space.Compact style={{ width: '100%' }}>
+                  <Input.Password
+                    placeholder="粘贴 SESSION Cookie 值"
+                    value={jygsManualSession}
+                    onChange={e => setJygsManualSession(e.target.value)}
+                    onPressEnter={handleJygsManualSave}
+                  />
+                  <Button
+                    type="primary"
+                    loading={jygsManualSaving}
+                    disabled={!jygsManualSession.trim()}
+                    onClick={handleJygsManualSave}
+                  >
+                    验证并保存
+                  </Button>
+                </Space.Compact>
+              </Space>
+            </Card>
+          )}
+        </Space>
+      </Card>
 
       {/* Token config */}
       <Card
@@ -504,15 +743,28 @@ export function InitializePage() {
         title={
           <Space>
             <DatabaseOutlined />
-            全量初始化
+            任务创建
           </Space>
         }
       >
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <Typography.Text type="secondary">
-            按日期区间逐日拉取 Tushare 全市场行情，直接写入本地数据库（无 CSV 中转）。
+            支持两类任务：行情全量初始化（Tushare）和韭研复盘抓取（JYGS）。
           </Typography.Text>
           <Space wrap>
+            <Space direction="vertical" size={4}>
+              <Typography.Text>任务类型：</Typography.Text>
+              <Select<TaskType>
+                value={selectedTaskType}
+                onChange={setSelectedTaskType}
+                disabled={isRunning}
+                style={{ width: 220 }}
+                options={[
+                  { label: '行情全量初始化', value: 'MARKET_DATA' },
+                  { label: '韭研复盘抓取', value: 'JYGS_REVIEW' },
+                ]}
+              />
+            </Space>
             <Space direction="vertical" size={4}>
               <Typography.Text>导入区间：</Typography.Text>
               <DatePicker.RangePicker
@@ -533,13 +785,24 @@ export function InitializePage() {
               type="primary"
               icon={<DatabaseOutlined />}
               loading={startLoading}
-              disabled={isRunning}
+              disabled={isRunning || !canStartTask}
               onClick={handleStartInit}
               style={{ marginTop: 20 }}
             >
-              {isRunning ? '初始化中…' : '开始全量初始化'}
+              {isRunning ? '任务运行中…' : `开始${selectedTaskType === 'JYGS_REVIEW' ? '韭研复盘抓取' : '全量初始化'}`}
             </Button>
           </Space>
+          {!canStartTask && (
+            <Alert
+              type="warning"
+              showIcon
+              message={
+                selectedTaskType === 'JYGS_REVIEW'
+                  ? '请先完成韭研公社连接，再启动复盘抓取任务。'
+                  : '请先配置 Tushare Token，再启动行情初始化任务。'
+              }
+            />
+          )}
         </Space>
       </Card>
 
@@ -596,6 +859,7 @@ export function InitializePage() {
 
           <Descriptions style={{ marginTop: 16 }} column={2} size="small">
             <Descriptions.Item label="任务 ID">{currentTask.task_id}</Descriptions.Item>
+            <Descriptions.Item label="任务类型">{taskTypeLabel(currentTask.task_type)}</Descriptions.Item>
             <Descriptions.Item label="模式">{currentTask.mode}</Descriptions.Item>
             <Descriptions.Item label="日期区间">
               {currentTask.start_date} — {currentTask.end_date}

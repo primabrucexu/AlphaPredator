@@ -9,7 +9,12 @@ from app.db.duckdb_storage import connect_duckdb
 from app.db.sqlite import connect_sqlite
 from app.schemas.market import (
     DailyBar,
+    HotSectorHistoryDay,
+    HotSectorHistoryResponse,
+    HotSectorHistorySector,
     HotSectorItem,
+    LimitUpStreakItem,
+    LimitUpStreaksResponse,
     MarketListRow,
     MarketOverviewResponse,
     MarketSummary,
@@ -99,6 +104,129 @@ class MarketDataService:
             daily_bars=[DailyBar(**daily_bar) for daily_bar in daily_bars],
             indicators=StockIndicatorSeries(**indicators),
         )
+
+    def get_hot_sector_history(self, days: int = 7) -> HotSectorHistoryResponse:
+        if not self._sqlite_path.exists():
+            return HotSectorHistoryResponse()
+
+        target_days = max(1, min(days, 60))
+        connection = connect_sqlite(self._sqlite_path)
+        try:
+            date_rows = connection.execute(
+                '''
+                SELECT trade_date
+                FROM hot_sector_daily_aggregates
+                GROUP BY trade_date
+                ORDER BY trade_date DESC
+                LIMIT ?
+                ''',
+                [target_days],
+            ).fetchall()
+            trade_dates = [str(row['trade_date']) for row in reversed(date_rows)]
+            if not trade_dates:
+                return HotSectorHistoryResponse()
+
+            days_payload: list[HotSectorHistoryDay] = []
+            for trade_date in trade_dates:
+                rows = connection.execute(
+                    '''
+                    SELECT
+                        daily.sector_name_canonical AS name,
+                        daily.heat_score,
+                        daily.rank_today,
+                        daily.max_board_count,
+                        recent.trend_tag,
+                        recent.days_present_3d
+                    FROM hot_sector_daily_aggregates AS daily
+                    LEFT JOIN hot_sector_recent_3d AS recent
+                      ON recent.trade_date = daily.trade_date
+                     AND recent.sector_name_canonical = daily.sector_name_canonical
+                    WHERE daily.trade_date = ?
+                    ORDER BY daily.rank_today ASC, daily.sector_name_canonical ASC
+                    ''',
+                    [trade_date],
+                ).fetchall()
+
+                sectors = [
+                    HotSectorHistorySector(
+                        name=str(row['name']),
+                        heat_score=int(row['heat_score']),
+                        trend_tag=str(row['trend_tag']) if row['trend_tag'] is not None else None,
+                        trend_label=self._build_trend_label(
+                            str(row['trend_tag']) if row['trend_tag'] is not None else None,
+                            int(row['days_present_3d']) if row['days_present_3d'] is not None else None,
+                        ),
+                        rank_today=int(row['rank_today']) if row['rank_today'] is not None else None,
+                        max_board_count=int(row['max_board_count']) if row['max_board_count'] is not None else None,
+                    )
+                    for row in rows
+                ]
+                days_payload.append(HotSectorHistoryDay(trade_date=trade_date, sectors=sectors))
+        finally:
+            connection.close()
+
+        return HotSectorHistoryResponse(trade_dates=trade_dates, days=days_payload)
+
+    def get_limit_up_streaks(
+        self,
+        trade_date: str | None = None,
+        min_boards: int = 2,
+    ) -> LimitUpStreaksResponse:
+        if not self._sqlite_path.exists():
+            return LimitUpStreaksResponse(trade_date=trade_date or '', streaks=[])
+
+        target_min_boards = max(1, min(min_boards, 20))
+        connection = connect_sqlite(self._sqlite_path)
+        try:
+            target_trade_date = trade_date
+            if not target_trade_date:
+                row = connection.execute(
+                    'SELECT MAX(trade_date) AS trade_date FROM hot_sector_stock_facts'
+                ).fetchone()
+                target_trade_date = str(row['trade_date'] or '') if row else ''
+
+            if not target_trade_date:
+                return LimitUpStreaksResponse(trade_date='', streaks=[])
+
+            rows = connection.execute(
+                '''
+                SELECT
+                    facts.trade_date,
+                    facts.stock_code,
+                    facts.stock_name,
+                    COALESCE(facts.board_count, 0) AS board_count,
+                    facts.limit_up_time,
+                    COALESCE(primary_map.sector_name_canonical, '') AS hot_theme
+                FROM hot_sector_stock_facts AS facts
+                LEFT JOIN hot_sector_sector_mappings AS primary_map
+                  ON primary_map.trade_date = facts.trade_date
+                 AND primary_map.source_file = facts.source_file
+                 AND primary_map.stock_code = facts.stock_code
+                 AND primary_map.is_primary_sector = 1
+                WHERE facts.trade_date = ?
+                  AND COALESCE(facts.board_count, 0) >= ?
+                ORDER BY COALESCE(facts.board_count, 0) DESC,
+                         facts.limit_up_time ASC,
+                         facts.stock_code ASC
+                ''',
+                [target_trade_date, target_min_boards],
+            ).fetchall()
+
+            streaks = [
+                LimitUpStreakItem(
+                    trade_date=str(row['trade_date']),
+                    stock_code=str(row['stock_code']),
+                    stock_name=str(row['stock_name']),
+                    board_count=int(row['board_count']),
+                    limit_up_time=str(row['limit_up_time'] or ''),
+                    hot_theme=str(row['hot_theme'] or ''),
+                )
+                for row in rows
+            ]
+        finally:
+            connection.close()
+
+        return LimitUpStreaksResponse(trade_date=target_trade_date, streaks=streaks)
 
     def resolve_stock(self, query: str) -> StockResolveResponse:
         """

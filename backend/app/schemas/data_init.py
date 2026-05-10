@@ -82,10 +82,12 @@ class CreateTaskRequest(BaseModel):
         description='导入截止日期（YYYYMMDD）',
     )
     mode: str = Field('RANGE', description='任务模式：RANGE | REIMPORT_DAY')
+    task_type: str = Field('MARKET_DATA', description='任务类型：MARKET_DATA | JYGS_REVIEW')
 
 
 class TaskResponse(BaseModel):
     task_id: str
+    task_type: str = Field('MARKET_DATA', description='任务类型：MARKET_DATA | JYGS_REVIEW')
     mode: str
     start_date: str
     end_date: str
@@ -106,6 +108,7 @@ class TaskResponse(BaseModel):
         pct = round(processed / total * 100, 1) if total > 0 else 0.0
         return cls(
             task_id=row['task_id'],
+            task_type=row.get('task_type', 'MARKET_DATA'),
             mode=row.get('mode', 'RANGE'),
             start_date=row.get('start_date', ''),
             end_date=row.get('end_date', ''),

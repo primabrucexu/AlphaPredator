@@ -20,3 +20,5 @@ conf/*.local.toml
 /data/**
 !/data/.gitkeep
 !/data/**/.gitkeep
+
+backend/jygs_auth_sniff_result.json

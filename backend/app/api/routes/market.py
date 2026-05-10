@@ -2,6 +2,8 @@ from fastapi import APIRouter, Query
 
 from app.modules.market_data.service import market_data_service
 from app.schemas.market import (
+    HotSectorHistoryResponse,
+    LimitUpStreaksResponse,
     MarketOverviewResponse,
     StockBarsRangeResponse,
     StockCandidate,
@@ -49,3 +51,18 @@ def resolve_stock(q: str = Query(..., min_length=1, description='股票代码或
     status='not_found' when no match, or status='ambiguous' with candidates.
     """
     return market_data_service.resolve_stock(q)
+
+
+@router.get('/hot-sector-history', response_model=HotSectorHistoryResponse)
+def get_hot_sector_history(
+    days: int = Query(7, ge=1, le=60, description='回看最近交易日数量'),
+) -> HotSectorHistoryResponse:
+    return market_data_service.get_hot_sector_history(days=days)
+
+
+@router.get('/limit-up-streaks', response_model=LimitUpStreaksResponse)
+def get_limit_up_streaks(
+    trade_date: str | None = Query(None, description='交易日（YYYY-MM-DD），默认最新有数据交易日'),
+    min_boards: int = Query(2, ge=1, le=20, description='最小连板数阈值'),
+) -> LimitUpStreaksResponse:
+    return market_data_service.get_limit_up_streaks(trade_date=trade_date, min_boards=min_boards)

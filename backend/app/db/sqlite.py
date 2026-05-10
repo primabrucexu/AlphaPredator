@@ -115,6 +115,26 @@ CREATE TABLE IF NOT EXISTS hot_sector_recent_3d (
 
 CREATE INDEX IF NOT EXISTS idx_hot_sector_recent_3d_trade_date ON hot_sector_recent_3d (trade_date);
 
+CREATE TABLE IF NOT EXISTS jygs_auth (
+    id INTEGER PRIMARY KEY,
+    auth_cookie TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT '',
+    last_checked_at TEXT NOT NULL DEFAULT '',
+    is_valid INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS jygs_sync_log (
+    slot_key TEXT PRIMARY KEY,
+    trade_date TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    message TEXT NOT NULL DEFAULT '',
+    triggered_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_jygs_sync_log_trade_date ON jygs_sync_log (trade_date);
+
 CREATE TABLE IF NOT EXISTS focus_stock_entries (
     stock_code TEXT PRIMARY KEY,
     created_at TEXT NOT NULL,
@@ -141,6 +161,7 @@ CREATE INDEX IF NOT EXISTS idx_stock_list_market ON stock_list (market);
 
 CREATE TABLE IF NOT EXISTS init_task (
     task_id TEXT PRIMARY KEY,
+    task_type TEXT NOT NULL DEFAULT 'MARKET_DATA',
     mode TEXT NOT NULL DEFAULT 'RANGE',
     start_date TEXT NOT NULL,
     end_date TEXT NOT NULL,
@@ -233,6 +254,7 @@ def ensure_sqlite_schema(sqlite_path: Path | None = None) -> None:
         connection.executescript(SCHEMA_SQL)
         connection.commit()
         _migrate_market_daily_quote(connection)
+        _migrate_init_task_table(connection)
         connection.commit()
     finally:
         connection.close()
@@ -284,6 +306,29 @@ def _migrate_market_daily_quote(connection: sqlite3.Connection) -> None:
             connection.execute(
                 f'ALTER TABLE market_daily_quote ADD COLUMN {col_name} {col_def}'
             )
+
+
+def _migrate_init_task_table(connection: sqlite3.Connection) -> None:
+    """Add task_type column/index to init_task for existing databases."""
+    init_task_exists = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='init_task'"
+    ).fetchone()
+    if init_task_exists is None:
+        return
+
+    existing_cols = {
+        row[1]
+        for row in connection.execute('PRAGMA table_info(init_task)')
+    }
+    if 'task_type' not in existing_cols:
+        connection.execute(
+            "ALTER TABLE init_task ADD COLUMN task_type TEXT NOT NULL DEFAULT 'MARKET_DATA'"
+        )
+
+    # Ensure index exists for task type filtering.
+    connection.execute(
+        'CREATE INDEX IF NOT EXISTS idx_init_task_type ON init_task (task_type)'
+    )
 
 
 def get_sqlite_engine(sqlite_path: Path | None = None):

@@ -131,3 +131,41 @@ class StockResolveResponse(BaseModel):
     match_type: str | None = Field(None, description='code | cnspell | cnspell_prefix (status=ok only)')
     message: str | None = Field(None, description='Error message (non-ok status)')
     candidates: list[StockCandidate] = Field(default_factory=list, description='Candidates (status=ambiguous only)')
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Sentiment overview
+# ---------------------------------------------------------------------------
+
+
+class HotSectorHistorySector(BaseModel):
+    name: str
+    heat_score: int
+    trend_tag: str | None = None
+    trend_label: str | None = None
+    rank_today: int | None = None
+    max_board_count: int | None = None
+
+
+class HotSectorHistoryDay(BaseModel):
+    trade_date: str
+    sectors: list[HotSectorHistorySector] = Field(default_factory=list)
+
+
+class HotSectorHistoryResponse(BaseModel):
+    trade_dates: list[str] = Field(default_factory=list)
+    days: list[HotSectorHistoryDay] = Field(default_factory=list)
+
+
+class LimitUpStreakItem(BaseModel):
+    trade_date: str
+    stock_code: str
+    stock_name: str
+    board_count: int
+    limit_up_time: str
+    hot_theme: str
+
+
+class LimitUpStreaksResponse(BaseModel):
+    trade_date: str
+    streaks: list[LimitUpStreakItem] = Field(default_factory=list)

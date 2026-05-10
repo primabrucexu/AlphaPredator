@@ -80,22 +80,36 @@ def create_task(
     start_date: str,
     end_date: str,
     mode: str = 'RANGE',
+    task_type: str = 'MARKET_DATA',
     sqlite_path: Path | None = None,
 ) -> dict[str, Any]:
     """Create a new init task record in SQLite and return it as a dict.
 
     *start_date* / *end_date*: YYYYMMDD format.
     *mode*: ``'RANGE'`` for a range import; ``'REIMPORT_DAY'`` for a single day.
-    Raises ValueError if the Tushare token is not configured.
+    *task_type*: ``'MARKET_DATA'`` or ``'JYGS_REVIEW'``.
+
+    Raises ValueError if credentials not configured (Tushare for MARKET_DATA, JYGS for JYGS_REVIEW).
     """
     _ensure_schema(sqlite_path)
 
-    from app.modules.market_data.data_source import _get_token
-    if not _get_token():
-        raise ValueError(
-            'Tushare token not configured. '
-            'Please set it via the initialization page before starting.'
-        )
+    # Validate credentials based on task type
+    if task_type == 'MARKET_DATA':
+        from app.modules.market_data.data_source import _get_token
+        if not _get_token():
+            raise ValueError(
+                'Tushare token not configured. '
+                'Please set it via the initialization page before starting.'
+            )
+    elif task_type == 'JYGS_REVIEW':
+        from app.modules.jygs.auth import load_credentials
+        if not load_credentials():
+            raise ValueError(
+                'JYGS credentials not configured. '
+                'Please login via韭研公社 connection page before starting.'
+            )
+    else:
+        raise ValueError(f'Unknown task_type: {task_type}')
 
     dates = _generate_date_list(start_date, end_date)
     total_days = len(dates)
@@ -109,12 +123,12 @@ def create_task(
         conn.execute(
             '''
             INSERT INTO init_task (
-                task_id, mode, start_date, end_date, status,
+                task_id, task_type, mode, start_date, end_date, status,
                 total_days, processed_days, trading_days, done_trading_days,
                 current_date, error_message, created_at, started_at, finished_at
-            ) VALUES (?, ?, ?, ?, 'PENDING', ?, 0, ?, 0, '', '', ?, '', '')
+            ) VALUES (?, ?, ?, ?, ?, 'PENDING', ?, 0, ?, 0, '', '', ?, '', '')
             ''',
-            (task_id, mode, start_date, end_date, total_days, trading_days, created_at),
+            (task_id, task_type, mode, start_date, end_date, total_days, trading_days, created_at),
         )
         conn.executemany(
             '''
@@ -379,10 +393,12 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
             logger.error('Task %s: not found in DB', task_id)
             return
 
-        dates = _generate_date_list(task_row['start_date'], task_row['end_date'])
+        task = dict(task_row)
+        task_type = task.get('task_type', 'MARKET_DATA')
+        dates = _generate_date_list(task['start_date'], task['end_date'])
         logger.info(
-            'Task %s: processing %d calendar days (%s → %s)',
-            task_id, len(dates), task_row['start_date'], task_row['end_date'],
+            'Task %s: started for type=%s, processing %d calendar days (%s → %s)',
+            task_id, task_type, len(dates), task['start_date'], task['end_date'],
         )
 
         for date_str in dates:
@@ -390,7 +406,7 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
                 logger.info('Task %s: terminated by user before processing %s', task_id, date_str)
                 return
             # Returns False when the task must be aborted due to a fatal error.
-            if not _process_one_day(task_id, date_str, sqlite_path, duckdb_path):
+            if not _process_one_day(task_id, date_str, sqlite_path, duckdb_path, task_type):
                 return
 
         # All dates processed
@@ -411,13 +427,14 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
             logger.info('Task %s: skipped SUCCESS finalization because task is no longer RUNNING', task_id)
             return
 
-        _update_data_range_meta(sqlite_path, duckdb_path)
+        # Only update data_range_meta and export parquet for MARKET_DATA tasks
+        if task_type == 'MARKET_DATA':
+            _update_data_range_meta(sqlite_path, duckdb_path)
+            try:
+                _export_parquet(duckdb_path)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning('Task %s: Parquet export failed (non-fatal): %s', task_id, exc)
 
-        # Regenerate Parquet from DuckDB so the fallback read path is also up to date.
-        try:
-            _export_parquet(duckdb_path)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning('Task %s: Parquet export failed (non-fatal): %s', task_id, exc)
         logger.info('Task %s: completed successfully', task_id)
 
     except Exception as exc:
@@ -435,15 +452,16 @@ def _process_one_day(
     date_str: str,
     sqlite_path: Path | None,
     duckdb_path: Path | None = None,
+    task_type: str = 'MARKET_DATA',
 ) -> bool:
     """Process a single calendar date for a running task.
 
     Returns True on success (including empty fetch responses).
     Returns False when a fatal error occurred and the task must be aborted.
     """
-    logger.debug('Task %s: processing %s', task_id, date_str)
+    logger.debug('Task %s: processing %s (type=%s)', task_id, date_str, task_type)
 
-    # Update current_date and set status to FETCHING
+    # Update current_date and set status to RUNNING
     conn = _connect(sqlite_path)
     try:
         conn.execute(
@@ -451,7 +469,7 @@ def _process_one_day(
             (date_str, task_id),
         )
         conn.execute(
-            "UPDATE init_task_day SET started_at = ?, status = 'FETCHING'"
+            "UPDATE init_task_day SET started_at = ?, status = 'RUNNING'"
             ' WHERE task_id = ? AND trade_date = ?',
             (_now_iso(), task_id, date_str),
         )
@@ -459,8 +477,11 @@ def _process_one_day(
     finally:
         conn.close()
 
-
-    return _process_trading_day(task_id, date_str, sqlite_path, duckdb_path)
+    # Dispatch to appropriate processor based on task_type
+    if task_type == 'JYGS_REVIEW':
+        return _process_jygs_review_day(task_id, date_str, sqlite_path)
+    else:  # Default to MARKET_DATA
+        return _process_trading_day(task_id, date_str, sqlite_path, duckdb_path)
 
 
 def _process_trading_day(
@@ -842,3 +863,79 @@ def _idle_status() -> dict[str, Any]:
         'finished_at': '',
         'error_message': '',
     }
+
+
+def _process_jygs_review_day(
+    task_id: str,
+    date_str: str,
+    sqlite_path: Path | None,
+) -> bool:
+    """Fetch and parse JYGS review data for a single date.
+
+    Returns True on success (including empty responses).
+    Returns False on fatal error.
+    """
+    t0 = time.monotonic()
+
+    try:
+        # Import here to avoid circular dependency
+        from app.modules.market_data.jygs_review import fetch_and_parse_jygs_review_for_date
+
+        review_count = fetch_and_parse_jygs_review_for_date(date_str)
+        elapsed = time.monotonic() - t0
+
+        # Mark day as SUCCESS and advance overall task progress.
+        conn = _connect(sqlite_path)
+        try:
+            conn.execute(
+                "UPDATE init_task_day"
+                " SET status = 'SUCCESS', finished_at = ?, row_count = ?"
+                " WHERE task_id = ? AND trade_date = ?",
+                (_now_iso(), review_count, task_id, date_str),
+            )
+            conn.execute(
+                '''UPDATE init_task
+                   SET processed_days = processed_days + 1,
+                       done_trading_days = done_trading_days + 1
+                   WHERE task_id = ?''',
+                (task_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        logger.info(
+            'Task %s: %s SUCCESS (parsed %d reviews in %.1fs)',
+            task_id, date_str, review_count, elapsed,
+        )
+        return True
+
+    except Exception as exc:
+        elapsed = time.monotonic() - t0
+        error_msg = str(exc)[:500]
+
+        conn = _connect(sqlite_path)
+        try:
+            conn.execute(
+                "UPDATE init_task_day"
+                " SET status = 'FAILED', finished_at = ?, error_message = ?"
+                " WHERE task_id = ? AND trade_date = ?",
+                (_now_iso(), error_msg, task_id, date_str),
+            )
+            conn.execute(
+                '''UPDATE init_task
+                   SET processed_days = processed_days + 1
+                   WHERE task_id = ?''',
+                (task_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        logger.error(
+            'Task %s: %s FAILED in %.1fs: %s',
+            task_id, date_str, elapsed, error_msg,
+        )
+        # Return True to continue processing other days, only False for fatal errors
+        return True
+
