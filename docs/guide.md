@@ -18,6 +18,7 @@
 - [hot-review.md](human/hot-review.md)：热点复盘设计文档
 - [jygs-api.yml](human/api-docs/jygs-api.yml)：韭研公社api文档
 - [mysj.yaml](human/api-docs/mysj.yaml)：麦蕊数据api文档
+- [AlphaPredator.dbml](human/data-model/AlphaPredator.dbml): 数据模型设计
 
 ## Agent 协作文档
 
