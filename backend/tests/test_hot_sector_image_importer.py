@@ -16,17 +16,6 @@ STOCK_POOL_ROWS = [
     }
 ]
 
-DAILY_SNAPSHOT_ROWS = [
-    {
-        'trade_date': '2026-04-30',
-        'stock_code': '300308',
-        'current_price': '167.53',
-        'change_amount': '5.93',
-        'change_pct': '3.66',
-        'turnover_amount_billion': '82.40',
-        'turnover_rate': '5.24',
-    }
-]
 
 DAILY_BAR_ROWS = [
     {'stock_code': '300308', 'trade_date': '2026-04-24', 'open_price': '157.60', 'high_price': '160.20', 'low_price': '156.80', 'close_price': '159.40', 'volume': '18320000'},
@@ -80,11 +69,6 @@ def _write_csv(file_path: Path, fieldnames: list[str], rows: list[dict[str, str]
 def _prepare_market_batch(batch_dir: Path) -> None:
     batch_dir.mkdir(parents=True, exist_ok=True)
     _write_csv(batch_dir / 'stock_pool.csv', ['stock_code', 'stock_name', 'sectors', 'ai_quick_summary'], STOCK_POOL_ROWS)
-    _write_csv(
-        batch_dir / 'daily_stock_snapshots.csv',
-        ['trade_date', 'stock_code', 'current_price', 'change_amount', 'change_pct', 'turnover_amount_billion', 'turnover_rate'],
-        DAILY_SNAPSHOT_ROWS,
-    )
     _write_csv(
         batch_dir / 'daily_bars.csv',
         ['stock_code', 'trade_date', 'open_price', 'high_price', 'low_price', 'close_price', 'volume'],
@@ -197,7 +181,8 @@ def test_import_hot_sector_images_populates_layered_tables_and_overrides_manual_
     assert [sector.trade_date for sector in overview.hot_sectors] == ['2026-04-30', '2026-04-30']
     assert [sector.name for sector in overview.hot_sectors] == ['AI硬件', '国产芯片']
     assert [sector.trend_label for sector in overview.hot_sectors] == ['持续 3 日', '新晋热点']
-    assert overview.hot_sectors[0].heat_score > overview.hot_sectors[1].heat_score
+    assert overview.hot_sectors[0].heat_score == 2
+    assert overview.hot_sectors[1].heat_score == 2
 
 
 def test_market_overview_uses_latest_available_image_date_when_snapshot_date_is_newer(

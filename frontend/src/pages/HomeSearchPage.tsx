@@ -1,29 +1,15 @@
-import { type ReactNode, useEffect, useRef, useState } from 'react';
+import {type ReactNode, useEffect, useRef, useState} from 'react';
+import {Alert, AutoComplete, Button, Card, Input, Space, Spin, Tag, Typography,} from 'antd';
 import {
-  Alert,
-  AutoComplete,
-  Button,
-  Card,
-  Input,
-  Space,
-  Spin,
-  Tag,
-  Typography,
-} from 'antd';
-import {
-  CheckCircleOutlined,
-  CloseCircleOutlined,
-  DatabaseOutlined,
-  SearchOutlined,
-  SettingOutlined,
+    CheckCircleOutlined,
+    CloseCircleOutlined,
+    DatabaseOutlined,
+    FireOutlined,
+    SearchOutlined,
+    SettingOutlined,
 } from '@ant-design/icons';
-import { Link, useNavigate } from 'react-router-dom';
-import {
-  type InitOverviewResponse,
-  type StockCandidate,
-  getInitOverview,
-  searchStocks,
-} from '../lib/api';
+import {Link, useNavigate} from 'react-router-dom';
+import {getInitOverview, type InitOverviewResponse, searchStocks, type StockCandidate,} from '../lib/api';
 
 function formatIsoShort(iso: string | null | undefined): string {
   if (!iso) return '—';
@@ -168,11 +154,18 @@ export function HomeSearchPage() {
           </Space>
         }
         extra={
-          <Link to="/initialize">
-            <Button size="small" icon={<SettingOutlined />}>
-              去初始化
-            </Button>
-          </Link>
+            <Space>
+                <Link to="/sentiment">
+                    <Button size="small" icon={<FireOutlined/>}>
+                        热点复盘
+                    </Button>
+                </Link>
+                <Link to="/initialize">
+                    <Button size="small" icon={<SettingOutlined/>}>
+                        去初始化
+                    </Button>
+                </Link>
+            </Space>
         }
       >
         {overviewLoading ? (

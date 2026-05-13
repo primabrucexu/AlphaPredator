@@ -247,6 +247,16 @@ export interface LimitUpStreaksResponse {
   streaks: LimitUpStreakItem[];
 }
 
+export interface HotReviewImageItem {
+    url: string;
+    source_file: string;
+}
+
+export interface HotReviewImagesResponse {
+    trade_date: string;
+    images: HotReviewImageItem[];
+}
+
 // ---------------------------------------------------------------------------
 // HTTP helpers
 // ---------------------------------------------------------------------------
@@ -442,6 +452,18 @@ export async function saveJygsSession(session: string): Promise<void> {
   }
 }
 
+export async function loginJygsWithPlaywright(timeoutSeconds = 300): Promise<void> {
+    const resp = await fetch(`${API_BASE_URL}/api/jygs/auth/login/playwright`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({timeout_seconds: timeoutSeconds}),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || data.ok === false) {
+        throw new Error(data.error ?? 'Playwright 登录失败');
+    }
+}
+
 export async function clearJygsSession(): Promise<void> {
   await fetch(`${API_BASE_URL}/api/jygs/auth/session`, { method: 'DELETE' });
 }
@@ -466,3 +488,13 @@ export function getLimitUpStreaks(
     `/api/market/limit-up-streaks?${query.toString()}`,
   );
 }
+
+export function getHotReviewImages(tradeDate?: string): Promise<HotReviewImagesResponse> {
+    const query = new URLSearchParams();
+    if (tradeDate) query.set('trade_date', tradeDate);
+    const suffix = query.toString();
+    return fetchJson<HotReviewImagesResponse>(
+        `/api/market/hot-review-images${suffix ? `?${suffix}` : ''}`,
+    );
+}
+

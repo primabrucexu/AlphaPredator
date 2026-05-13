@@ -1,9 +1,9 @@
-import { useQuery } from '@tanstack/react-query';
+import {useQuery} from '@tanstack/react-query';
 import ReactECharts from 'echarts-for-react';
-import { Alert, Card, Col, Empty, List, Row, Space, Spin, Statistic, Table, Tag, Typography } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { Link } from 'react-router-dom';
-import { getMarketOverview, type MarketListRow } from '../lib/api';
+import {Alert, Card, Col, Empty, List, Row, Space, Spin, Statistic, Table, Tag, Typography} from 'antd';
+import type {ColumnsType} from 'antd/es/table';
+import {Link} from 'react-router-dom';
+import {getMarketOverview, type MarketListRow} from '../lib/api';
 
 function extractTrendDays(label: string): number {
   const match = label.match(/(\d+)/);
@@ -85,11 +85,11 @@ export function MarketOverviewPage() {
 
   const hotSectorOption = {
     tooltip: { trigger: 'axis' },
-    legend: { data: ['热度', '持续天数'] },
+      legend: {data: ['涨停家数', '持续天数']},
     xAxis: { type: 'category', data: data.hot_sectors.map((sector) => sector.name) },
     yAxis: [{ type: 'value' }, { type: 'value' }],
     series: [
-      { name: '热度', type: 'bar', data: data.hot_sectors.map((sector) => sector.heat_score) },
+        {name: '涨停家数', type: 'bar', data: data.hot_sectors.map((sector) => sector.heat_score)},
       {
         name: '持续天数',
         type: 'line',
@@ -149,7 +149,7 @@ export function MarketOverviewPage() {
                     <Space>
                       <Typography.Text strong>{item.name}</Typography.Text>
                       <Tag color="processing">{item.trend_label}</Tag>
-                      <Typography.Text type="secondary">热度 {item.heat_score}</Typography.Text>
+                        <Typography.Text type="secondary">涨停家数 {item.heat_score}</Typography.Text>
                     </Space>
                   </List.Item>
                 )}

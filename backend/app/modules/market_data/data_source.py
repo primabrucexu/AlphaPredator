@@ -52,7 +52,19 @@ def _rate_limited_call(func: Any, **kwargs: Any) -> Any:
             if wait > 0:
                 time.sleep(wait)
 
-    return func(**kwargs)
+    try:
+        return func(**kwargs)
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            'Tushare call failed. func=%s trade_date=%s ts_code=%s start_date=%s end_date=%s error=%s',
+            getattr(func, '__name__', str(func)),
+            kwargs.get('trade_date'),
+            kwargs.get('ts_code'),
+            kwargs.get('start_date'),
+            kwargs.get('end_date'),
+            exc,
+        )
+        raise
 
 
 # ---------------------------------------------------------------------------

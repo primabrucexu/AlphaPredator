@@ -16,6 +16,8 @@ class Settings:
         'http://localhost:5173',
         'http://127.0.0.1:5174',
         'http://localhost:5174',
+        'https://www.jiuyangongshe.com',
+        'https://app.jiuyangongshe.com',
     )
     sqlite_path: Path = DATA_DIR / 'alphapredator.db'
     duckdb_path: Path = DATA_DIR / 'alphapredator.duckdb'
@@ -34,6 +36,8 @@ class Settings:
     jygs_site_url: str = 'https://www.jiuyangongshe.com'
     jygs_api_url: str = 'https://app.jiuyangongshe.com/jystock-app'
     jygs_credentials_path: Path = DATA_DIR / 'config' / 'jygs.credentials'
+    jygs_flow_trace_path: Path = DATA_DIR / 'status' / 'jygs-flow-trace.jsonl'
+    jygs_flow_trace_enabled: bool = True
 
 
 settings = Settings()

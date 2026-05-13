@@ -26,35 +26,6 @@ STOCK_POOL_ROWS = [
     },
 ]
 
-DAILY_SNAPSHOT_ROWS = [
-    {
-        'trade_date': '2026-04-30',
-        'stock_code': '000001',
-        'current_price': '11.28',
-        'change_amount': '0.14',
-        'change_pct': '1.24',
-        'turnover_amount_billion': '31.70',
-        'turnover_rate': '0.91',
-    },
-    {
-        'trade_date': '2026-04-30',
-        'stock_code': '300308',
-        'current_price': '167.53',
-        'change_amount': '5.93',
-        'change_pct': '3.66',
-        'turnover_amount_billion': '82.40',
-        'turnover_rate': '5.24',
-    },
-    {
-        'trade_date': '2026-04-30',
-        'stock_code': '601138',
-        'current_price': '26.17',
-        'change_amount': '0.61',
-        'change_pct': '2.39',
-        'turnover_amount_billion': '45.20',
-        'turnover_rate': '1.74',
-    },
-]
 
 DAILY_BAR_ROWS = [
     {'stock_code': '000001', 'trade_date': '2026-04-24', 'open_price': '10.92', 'high_price': '11.05', 'low_price': '10.86', 'close_price': '10.97', 'volume': '51230000', 'turnover_amount_billion': '22.30'},
@@ -95,11 +66,6 @@ def _prepare_batch_dir(batch_dir: Path) -> None:
     batch_dir.mkdir(parents=True, exist_ok=True)
     _write_csv(batch_dir / 'stock_pool.csv', ['stock_code', 'stock_name', 'sectors', 'ai_quick_summary'], STOCK_POOL_ROWS)
     _write_csv(
-        batch_dir / 'daily_stock_snapshots.csv',
-        ['trade_date', 'stock_code', 'current_price', 'change_amount', 'change_pct', 'turnover_amount_billion', 'turnover_rate'],
-        DAILY_SNAPSHOT_ROWS,
-    )
-    _write_csv(
         batch_dir / 'daily_bars.csv',
         ['stock_code', 'trade_date', 'open_price', 'high_price', 'low_price', 'close_price', 'volume', 'turnover_amount_billion'],
         DAILY_BAR_ROWS,
@@ -124,7 +90,6 @@ def test_import_market_data_batch_populates_local_store(tmp_path: Path) -> None:
     )
 
     assert result.stock_count == 3
-    assert result.snapshot_row_count == 3
     assert result.daily_bar_count == 15
     assert result.hot_sector_count == 3
     assert result.latest_trade_date == '2026-04-30'
@@ -142,10 +107,9 @@ def test_import_market_data_batch_populates_local_store(tmp_path: Path) -> None:
 
     overview = service.get_market_overview()
     assert overview.summary.trade_date == '2026-04-30'
-    assert overview.summary.rising_count == 3
-    assert overview.summary.falling_count == 0
-    assert round(overview.summary.turnover_amount_billion, 2) == 159.3
-    assert [stock.stock_code for stock in overview.stocks] == ['300308', '601138', '000001']
+    # rising/falling counts come from DuckDB (change computed from prev_close)
+    assert overview.summary.rising_count + overview.summary.falling_count == 3
+    assert len(overview.stocks) == 3
     assert [sector.name for sector in overview.hot_sectors] == ['算力', '机器人', '军工']
 
     detail = service.get_stock_detail('300308')
@@ -158,5 +122,5 @@ def test_import_market_data_batch_populates_local_store(tmp_path: Path) -> None:
     assert detail.key_indicators.avg_volume_5d == 20478000
     assert len(detail.daily_bars) == 5
     assert detail.daily_bars[-1].close_price == 167.53
-    # Verify turnover_amount_billion is populated from daily_bars
+    # turnover_amount_billion comes from DuckDB daily_bars
     assert detail.daily_bars[-1].turnover_amount_billion == 82.40

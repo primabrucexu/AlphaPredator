@@ -12,19 +12,19 @@
 
 ## 人类维护规范（docs/human）
 
-- [数据存储设计](human/data-storage.md)：核心数据类型、存储介质与表结构约定。
+- [AlphaPredator.dbml](human/data-model/AlphaPredator.dbml)：数据模型涉及
 - [A股涨跌停计算规则](human/price-limit-rule.md)：按市场板块区分的涨跌停计算口径。
 
 ## Agent 协作文档
 
-- [Agent Guide](../agent.md)：AI/编码 agent 在本仓库协作时必须遵守的约束。
+- [Agent Guide](../AGENTS.md)：AI/编码 agent 在本仓库协作时必须遵守的约束。
 - [docs/agent 使用说明](agent/README.md)：agent 工作文档的目录职责、命名规范与推荐模板。
 
 ## Agent 工作文档（docs/agent）
 
 - [当前执行进度](agent/current-progress.md)：**每次会话开始前必读**，记录当前阶段、上一步完成内容、下一步待做任务与已知阻塞。
-- [Phase 1 待优化项](agent/phase1-pending-optimizations.md)：Phase 1 已识别但暂不阻塞达成标准的优化点（分时图、FocusPage 真实功能）。
-- [Phase 2 短线情绪总览方案](agent/phase2-sentiment-overview-plan.md)：Phase 2 当前进展、缺口分析、任务设计与执行计划。
+- [数据模型文档](agent/data-model.md)：所有 SQLite 表的字段说明、枚举值速查与表间关系图，基于 `AlphaPredator.sql` /
+  `AlphaPredator.dbml` 生成。
 
 
 

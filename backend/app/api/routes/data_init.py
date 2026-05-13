@@ -14,6 +14,7 @@ from app.modules.market_data.initializer import (
     terminate_task,
 )
 from app.modules.market_data.updater import run_daily_update
+from app.repositories.stock_list_repo import StockListRepo
 from app.schemas.data_init import (
     CreateTaskRequest,
     DataRangeInfo,
@@ -52,6 +53,26 @@ def _read_stock_list_csv(contents: bytes):
         'Failed to parse CSV with supported encodings '
         f"{encodings}. Last error: {last_error}"
     )
+
+
+def _load_stock_list_status(stock_list_uploaded: bool) -> tuple[str | None, dict[str, int]]:
+    """Load stock_list status from repo/query layer with file-mtime fallback."""
+    if not stock_list_uploaded:
+        return None, {}
+
+    from datetime import datetime, timezone
+
+    from app.db.sqlite import ensure_sqlite_schema
+
+    ensure_sqlite_schema()
+    repo = StockListRepo()
+    updated_at = repo.get_latest_uploaded_at()
+    board_counts = repo.get_active_board_counts()
+    if updated_at:
+        return updated_at, board_counts
+
+    mtime = settings.stock_list_path.stat().st_mtime
+    return datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(), board_counts
 
 
 # ---------------------------------------------------------------------------
@@ -113,42 +134,30 @@ async def upload_stock_list(file: UploadFile) -> StockListUploadResponse:
 
     from datetime import datetime, timezone
 
-    from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
+    from app.db.sqlite import ensure_sqlite_schema
 
     uploaded_at = datetime.now(timezone.utc).isoformat()
     ensure_sqlite_schema()
-    conn = connect_sqlite()
-    try:
-        conn.execute('DELETE FROM stock_list')
-        fill_cols = {c: '' for c in ['cnspell', 'market', 'list_status', 'list_date', 'delist_date']
-                     if c not in df.columns}
-        for col, default in fill_cols.items():
-            df[col] = default
-        df['cnspell'] = df['cnspell'].fillna('').astype(str).str.strip().str.upper()
-        rows_to_insert = [
-            (
-                str(r.ts_code or '').strip(),
-                str(r.symbol or '').strip(),
-                str(r.name or '').strip(),
-                str(r.cnspell or ''),
-                str(r.market or '').strip(),
-                str(r.list_status or '').strip(),
-                str(r.list_date or '').strip(),
-                str(r.delist_date or '').strip(),
-                uploaded_at,
-            )
-            for r in df[['ts_code', 'symbol', 'name', 'cnspell', 'market',
-                          'list_status', 'list_date', 'delist_date']].itertuples(index=False)
-        ]
-        conn.executemany(
-            '''INSERT OR REPLACE INTO stock_list
-               (ts_code, symbol, name, cnspell, market, list_status, list_date, delist_date, uploaded_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-            rows_to_insert,
+    fill_cols = {c: '' for c in ['cnspell', 'market', 'list_status', 'list_date', 'delist_date'] if c not in df.columns}
+    for col, default in fill_cols.items():
+        df[col] = default
+    df['cnspell'] = df['cnspell'].fillna('').astype(str).str.strip().str.upper()
+    rows_to_insert = [
+        (
+            str(r.ts_code or '').strip(),
+            str(r.symbol or '').strip(),
+            str(r.name or '').strip(),
+            str(r.cnspell or ''),
+            str(r.market or '').strip(),
+            str(r.list_status or '').strip(),
+            str(r.list_date or '').strip(),
+            str(r.delist_date or '').strip(),
+            uploaded_at,
         )
-        conn.commit()
-    finally:
-        conn.close()
+        for r in df[['ts_code', 'symbol', 'name', 'cnspell', 'market',
+                     'list_status', 'list_date', 'delist_date']].itertuples(index=False)
+    ]
+    StockListRepo().replace_all(rows_to_insert)
 
     total = len(df)
     active_df = df[df['list_status'].fillna('') == 'L']
@@ -324,41 +333,13 @@ def get_init_v2_overview() -> InitV2OverviewResponse:
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
-    from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
     from app.modules.market_data.data_source import _get_token
 
     token_configured = bool(_get_token())
     stock_list_path = settings.stock_list_path
     stock_list_uploaded = stock_list_path.exists()
 
-    stock_list_updated_at: str | None = None
-    board_counts: dict[str, int] = {}
-
-    if stock_list_uploaded:
-        ensure_sqlite_schema()
-        conn = connect_sqlite()
-        try:
-            row = conn.execute(
-                'SELECT MAX(uploaded_at) AS uploaded_at FROM stock_list'
-            ).fetchone()
-            if row and row['uploaded_at']:
-                stock_list_updated_at = str(row['uploaded_at'])
-
-            board_rows = conn.execute(
-                '''SELECT market, COUNT(*) AS cnt
-                   FROM stock_list
-                   WHERE list_status = 'L' AND market != ''
-                   GROUP BY market'''
-            ).fetchall()
-            for br in board_rows:
-                board_counts[str(br['market'])] = int(br['cnt'])
-        finally:
-            conn.close()
-
-        if not stock_list_updated_at:
-            from datetime import timezone
-            mtime = stock_list_path.stat().st_mtime
-            stock_list_updated_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+    stock_list_updated_at, board_counts = _load_stock_list_status(stock_list_uploaded)
 
     cst = ZoneInfo('Asia/Shanghai')
     now_cst = datetime.now(cst)
@@ -407,9 +388,8 @@ def daily_update() -> UpdateResult:
 @router.get('/overview', response_model=InitOverviewResponse)
 def get_init_overview() -> InitOverviewResponse:
     """Return a lightweight overview of the initialization state for the homepage."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
     from app.modules.market_data.data_source import _get_token
 
     token_configured = bool(_get_token())
@@ -423,33 +403,7 @@ def get_init_overview() -> InitOverviewResponse:
     )
     data_range = v2.get('data_range', {})
 
-    stock_list_updated_at: str | None = None
-    board_counts: dict[str, int] = {}
-
-    if stock_list_uploaded:
-        ensure_sqlite_schema()
-        conn = connect_sqlite()
-        try:
-            row = conn.execute(
-                'SELECT MAX(uploaded_at) AS uploaded_at FROM stock_list'
-            ).fetchone()
-            if row and row['uploaded_at']:
-                stock_list_updated_at = str(row['uploaded_at'])
-
-            board_rows = conn.execute(
-                '''SELECT market, COUNT(*) AS cnt
-                   FROM stock_list
-                   WHERE list_status = 'L' AND market != ''
-                   GROUP BY market'''
-            ).fetchall()
-            for br in board_rows:
-                board_counts[str(br['market'])] = int(br['cnt'])
-        finally:
-            conn.close()
-
-        if not stock_list_updated_at:
-            mtime = stock_list_path.stat().st_mtime
-            stock_list_updated_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+    stock_list_updated_at, board_counts = _load_stock_list_status(stock_list_uploaded)
 
     from zoneinfo import ZoneInfo
     cst = ZoneInfo('Asia/Shanghai')

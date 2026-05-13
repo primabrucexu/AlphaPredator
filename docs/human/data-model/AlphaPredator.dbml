@@ -1,0 +1,154 @@
+Table stock_list [headercolor: #175e7a] {
+	full_code varchar(255) [ pk, unique, note: '带交易所的完整股票代码。如000001.SZ' ]
+	code varchar(255) [ note: '6位数字股票代码（6位，如 `000001`）' ]
+	name varchar(255) [ note: '股票名称' ]
+	is_st boolean [ note: '是否ST，获取方式：通过name字段中包含`ST``。' ]
+	cnspell varchar(255) [ note: '股票名称拼音简称' ]
+	market varchar(255) [ note: '所属市场，有且仅有四个：主板、创业板、科创板、北交所' ]
+
+	indexes {
+		(symbol, name, cnspell) [ name: 'stock_list_index_0' ]
+	}
+
+	Note: '股票列表'
+}
+
+Table pick_models [headercolor: #175e7a] {
+	id integer [ pk, increment ]
+	name varchar [ not null, note: '模式名' ]
+	description text [ note: '模式描述' ]
+
+	Note: '选股模式'
+}
+
+Table user_pick_stock_samples [headercolor: #175e7a] {
+	id integer [ pk, increment ]
+	stock_code varchar [ not null, note: '6位数字股票代码' ]
+	pick_date date [ not null, note: '选股日期，YYYYMMDD' ]
+	pick_model_id integer [ not null ]
+}
+
+Table daily_hot_pic [headercolor: #175e7a] {
+	id integer [ pk, increment ]
+	trade_date varchar [ not null, note: '交易日期，也就是图片复盘的是那天的涨停' ]
+	summary_image_url varchar [ not null, note: '简图外部url访问地址' ]
+	source varchar [ not null, note: '数据来源，目前只有韭研公社，填写为jygs' ]
+
+	Note: '涨停复盘简图'
+}
+
+Table daily_hot_info [headercolor: #175e7a] {
+	id integer [ pk, increment ]
+	trade_date date [ not null, note: '交易日期 YYYYMMDD' ]
+	limit_up_time text [ not null, note: '涨停时间' ]
+	stock_code integer [ not null, note: '6位数字的股票代码' ]
+	name varchar [ not null, note: '股票名称' ]
+	streak_text varchar [ not null, note: '连板信息文本，如“两天两板”，无内容则表示首次涨停' ]
+	hot_theme varchar [ not null, note: '涨停题材' ]
+	reason text [ not null, note: '涨停解析内容' ]
+	source varchar [ not null, note: '数据来源，目前只有韭研公社，填写为jygs' ]
+	short_reason text(65535) [ not null, note: '从涨停简图中OCR识别得到的一句话涨停原因' ]
+
+	Note: '涨停解析'
+}
+
+Table task_info [headercolor: #175e7a] {
+	id integer [ pk, increment, unique ]
+	task_id varchar(255) [ unique ]
+	start_date date [ not null, note: '数据起始日期 YYYYMMDD' ]
+	end_date date [ not null, note: '数据截至日期 YYYYMMDD' ]
+	status varchar(255) [ not null, default: 'PENDING', note: '任务状态。PENDING、RUNNING、FAILED、SUCCESS、TERMINATED' ]
+	total_days integer [ not null, default: 0 ]
+	processed_days integer [ not null, default: 0 ]
+	trading_days integer [ not null, default: 0 ]
+	done_trading_days integer [ not null, default: 0 ]
+	current_date varchar(255) [ not null ]
+	error_message text [ not null ]
+	task_type varchar(255) [ not null, default: 'MARKET_DATA', note: '任务类型。当前仅有JYGS_REVIEW（韭研公社涨停信信息复盘）MARKET_DATA_LOAD（市场天级交易数据拉取）' ]
+	task_start_date datetime [ note: '任务开始时间 YYYYMMDD HH:mm:ss' ]
+	task_end_date datetime [ note: '任务结束时间 YYYYMMDD HH:mm:ss' ]
+}
+
+Table daily_task_info [headercolor: #175e7a] {
+	task_id varchar(255) [ pk, not null ]
+	trade_date date [ pk, not null, note: '天级别子任务获取的是哪一天的数据 YYYYMMDD' ]
+	is_trading_day boolean [ not null, note: '是否是交易日。如果能解析到数据则为true，如果不能则false' ]
+	status varchar(255) [ not null, default: 'PENDING', note: 'PENDING, RUNNING, SKIP（非交易日标记为跳过）, SUCCESS, FAILED' ]
+	row_count integer [ not null, default: 0, note: '获取到的数据有多少行' ]
+	started_at datetime [ not null, note: '开始时间 YYYYMMDD HH:mm:ss' ]
+	finished_at datetime [ not null, note: '结束时间 YYYYMMDD HH:mm:ss' ]
+	error_message text [ not null ]
+
+	Note: '日级别子任务信息'
+}
+
+Table user_trade_history [headercolor: #175e7a] {
+	id integer [ pk, increment, not null ]
+	trade_date date [ note: '交易日期 YYYYMMDD格式' ]
+	stock_code varchar(255) [ note: '6位数字股票代码' ]
+	stock_name varchar(255) [ note: '股票名称' ]
+	operate_price numeric [ not null, note: '买入价格' ]
+	operate_type integer [ note: '操作类型，0买入，1卖出' ]
+	amount integer [ note: '买入或者卖出的股票数量' ]
+	reason text(65535) [ not null, note: '操作原因' ]
+	create_time datetime [ not null, note: '个人分析评价' ]
+
+	indexes {
+		(stock_code, stock_name) [ name: 'user_trade_history_index_0' ]
+	}
+
+	Note: '用户交易历史'
+}
+
+Table model_info [headercolor: #175e7a] {
+	id integer [ pk, increment, not null ]
+	provider varchar(255) [ note: '大模型提供商' ]
+	model_name varchar(255) [ note: '模型名称' ]
+	api_url text(65535) [ note: 'api访问地址' ]
+	sk text(65535) [ note: 'api key' ]
+	api_type varchar(255) [ note: 'api模式，是open ai格式的还是anthropic格式的api' ]
+
+	Note: '大模型信息'
+}
+
+Table day_level_trade_data [headercolor: #175e7a] {
+	stock_code varchar [ not null, note: '6位数字格式股票代码，如 000001' ]
+	trade_date date [ not null, note: '交易日期，YYYYMMDD' ]
+	open numeric [ not null, note: '开盘价' ]
+	high numeric [ not null, note: '最高价' ]
+	low numeric [ not null, note: '最低价' ]
+	close numeric [ not null, note: '收盘价' ]
+	pre_close numeric [ not null, note: '昨日收盘价' ]
+	change numeric [ not null, note: '涨跌额' ]
+	pct_chg numeric [ not null, note: '涨跌幅（%）' ]
+	vol numeric [ not null, note: '成交量，单位是手，也就是100股' ]
+	amount numeric [ not null, note: '成交额，单位是元' ]
+	is_up_limit boolean [ not null, note: '该日是否涨停' ]
+	is_down_limit boolean [ not null, note: '该日是否跌停' ]
+	is_stop boolean [ not null, note: '是否停牌' ]
+
+	Note: '股票日级别交易数据，采用duckdb存储'
+}
+
+Table review_note [headercolor: #175e7a] {
+	id integer [ pk, increment, not null ]
+	trade_id integer
+	analyse text(65535) [ not null, note: '用户分析' ]
+	score integer [ not null, note: '操作评价，1-10' ]
+	is_model_analyse boolean [ note: '是否为模型生成的复盘内容' ]
+	model_id integer [ not null, note: '模型id，空表示用户输入的复盘内容' ]
+
+	Note: '复盘笔记'
+}
+
+Ref fk_user_stock_samples_pick_model_id_pick_models {
+	user_pick_stock_samples.pick_model_id > pick_models.id [ delete: no action, update: no action ]
+}
+
+Ref fk_task_info_task_id_daily_task_info {
+	task_info.task_id - daily_task_info.task_id [ delete: no action, update: no action ]
+}
+
+Ref fk_user_trade_history_id_review_note {
+	user_trade_history.id < review_note.trade_id [ delete: no action, update: no action ]
+}

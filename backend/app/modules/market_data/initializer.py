@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.settings import settings
+from app.repositories.init_task_repo import InitTaskRepo
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,10 @@ def _connect_duckdb(duckdb_path: Path | None = None):
 def _ensure_schema(sqlite_path: Path | None = None) -> None:
     from app.db.sqlite import ensure_sqlite_schema
     ensure_sqlite_schema(sqlite_path)
+
+
+def _task_repo(sqlite_path: Path | None = None) -> InitTaskRepo:
+    return InitTaskRepo(sqlite_path)
 
 
 # ---------------------------------------------------------------------------
@@ -118,30 +123,18 @@ def create_task(
     task_id = str(uuid.uuid4())
     created_at = _now_iso()
 
-    conn = _connect(sqlite_path)
-    try:
-        conn.execute(
-            '''
-            INSERT INTO init_task (
-                task_id, task_type, mode, start_date, end_date, status,
-                total_days, processed_days, trading_days, done_trading_days,
-                current_date, error_message, created_at, started_at, finished_at
-            ) VALUES (?, ?, ?, ?, ?, 'PENDING', ?, 0, ?, 0, '', '', ?, '', '')
-            ''',
-            (task_id, task_type, mode, start_date, end_date, total_days, trading_days, created_at),
-        )
-        conn.executemany(
-            '''
-            INSERT INTO init_task_day
-                (task_id, trade_date, is_trading_day, status, row_count,
-                 started_at, finished_at, error_message)
-            VALUES (?, ?, ?, 'PENDING', 0, '', '', '')
-            ''',
-            [(task_id, d, 1) for d in dates],
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    repo = _task_repo(sqlite_path)
+    repo.create_task_with_days(
+        task_id=task_id,
+        task_type=task_type,
+        mode=mode,
+        start_date=start_date,
+        end_date=end_date,
+        total_days=total_days,
+        trading_days=trading_days,
+        created_at=created_at,
+        dates=dates,
+    )
 
     task = get_task(task_id, sqlite_path)
     assert task is not None
@@ -153,26 +146,11 @@ def start_task(task_id: str, sqlite_path: Path | None = None, duckdb_path: Path 
 
     Returns False (without starting) if another task is already RUNNING.
     """
+    repo = _task_repo(sqlite_path)
     with _task_lock:
-        conn = _connect(sqlite_path)
-        try:
-            row = conn.execute(
-                "SELECT task_id FROM init_task WHERE status = 'RUNNING' LIMIT 1"
-            ).fetchone()
-            if row:
-                return False
-
-            updated = conn.execute(
-                '''
-                UPDATE init_task SET status = 'RUNNING', started_at = ?
-                WHERE task_id = ?
-                  AND status IN ('PENDING', 'FAILED', 'TERMINATED')
-                ''',
-                (_now_iso(), task_id),
-            ).rowcount
-            conn.commit()
-        finally:
-            conn.close()
+        if repo.find_running_task_id():
+            return False
+        updated = repo.try_mark_task_running(task_id, _now_iso())
 
     if not updated:
         return False
@@ -188,14 +166,7 @@ def start_task(task_id: str, sqlite_path: Path | None = None, duckdb_path: Path 
 
 def get_task(task_id: str, sqlite_path: Path | None = None) -> dict[str, Any] | None:
     """Return the task record as a dict, or None if not found."""
-    conn = _connect(sqlite_path)
-    try:
-        row = conn.execute(
-            'SELECT * FROM init_task WHERE task_id = ?', (task_id,)
-        ).fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
+    return _task_repo(sqlite_path).get_task(task_id)
 
 
 def list_tasks(
@@ -204,14 +175,7 @@ def list_tasks(
 ) -> list[dict[str, Any]]:
     """Return recent tasks ordered by created_at descending."""
     _ensure_schema(sqlite_path)
-    conn = _connect(sqlite_path)
-    try:
-        rows = conn.execute(
-            'SELECT * FROM init_task ORDER BY created_at DESC LIMIT ?', (limit,)
-        ).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        conn.close()
+    return _task_repo(sqlite_path).list_tasks(limit)
 
 
 def get_task_days(
@@ -221,30 +185,7 @@ def get_task_days(
     sqlite_path: Path | None = None,
 ) -> dict[str, Any]:
     """Return paginated day details for a task."""
-    offset = (page - 1) * per_page
-    conn = _connect(sqlite_path)
-    try:
-        total = conn.execute(
-            'SELECT COUNT(*) FROM init_task_day WHERE task_id = ?', (task_id,)
-        ).fetchone()[0]
-        rows = conn.execute(
-            '''
-            SELECT * FROM init_task_day
-            WHERE task_id = ?
-            ORDER BY trade_date ASC
-            LIMIT ? OFFSET ?
-            ''',
-            (task_id, per_page, offset),
-        ).fetchall()
-        return {
-            'task_id': task_id,
-            'total': total,
-            'page': page,
-            'per_page': per_page,
-            'days': [dict(r) for r in rows],
-        }
-    finally:
-        conn.close()
+    return _task_repo(sqlite_path).get_task_days_page(task_id, page, per_page)
 
 
 def reimport_day(trade_date: str, sqlite_path: Path | None = None, duckdb_path: Path | None = None) -> dict[str, Any]:
@@ -262,52 +203,14 @@ def retry_task(task_id: str, sqlite_path: Path | None = None, duckdb_path: Path 
 
     Returns the updated task, or None when task doesn't exist / cannot be retried.
     """
+    repo = _task_repo(sqlite_path)
     with _task_lock:
-        conn = _connect(sqlite_path)
-        try:
-            row = conn.execute(
-                'SELECT status FROM init_task WHERE task_id = ?',
-                (task_id,),
-            ).fetchone()
-            if not row or row['status'] != 'FAILED':
-                return None
-
-            running = conn.execute(
-                "SELECT task_id FROM init_task WHERE status = 'RUNNING' LIMIT 1"
-            ).fetchone()
-            if running:
-                return None
-
-            now = _now_iso()
-            conn.execute(
-                '''UPDATE init_task
-                   SET status            = 'PENDING',
-                       processed_days    = 0,
-                       done_trading_days = 0,
-                       current_date      = '',
-                       error_message     = '',
-                       started_at        = '',
-                       finished_at       = ''
-                   WHERE task_id = ?''',
-                (task_id,),
-            )
-            conn.execute(
-                '''UPDATE init_task_day
-                   SET status        = 'PENDING',
-                       row_count     = 0,
-                       started_at    = '',
-                       finished_at   = '',
-                       error_message = ''
-                   WHERE task_id = ?''',
-                (task_id,),
-            )
-            conn.execute(
-                "UPDATE init_task SET created_at = ? WHERE task_id = ?",
-                (now, task_id),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        status = repo.get_task_status(task_id)
+        if status != 'FAILED':
+            return None
+        if repo.find_running_task_id():
+            return None
+        repo.reset_task_for_retry(task_id, _now_iso())
 
     started = start_task(task_id, sqlite_path=sqlite_path, duckdb_path=duckdb_path)
     if not started:
@@ -317,59 +220,28 @@ def retry_task(task_id: str, sqlite_path: Path | None = None, duckdb_path: Path 
 
 def terminate_task(task_id: str, sqlite_path: Path | None = None) -> dict[str, Any] | None:
     """Terminate a RUNNING/FAILED/PENDING task and mark it TERMINATED."""
-    conn = _connect(sqlite_path)
-    try:
-        updated = conn.execute(
-            '''UPDATE init_task
-               SET status        = 'TERMINATED',
-                   finished_at   = ?,
-                   current_date  = '',
-                   error_message = CASE
-                                       WHEN error_message = '' THEN 'Terminated by user'
-                                       ELSE error_message
-                       END
-               WHERE task_id = ?
-                 AND status IN ('RUNNING', 'FAILED', 'PENDING')''',
-            (_now_iso(), task_id),
-        ).rowcount
-        conn.commit()
-        if not updated:
-            return None
-    finally:
-        conn.close()
+    updated = _task_repo(sqlite_path).terminate_task(task_id, _now_iso())
+    if not updated:
+        return None
     return get_task(task_id, sqlite_path)
 
 
 def get_overview(sqlite_path: Path | None = None) -> dict[str, Any]:
     """Return high-level overview: running task, latest finished task, data range."""
     _ensure_schema(sqlite_path)
-    conn = _connect(sqlite_path)
-    try:
-        running_row = conn.execute(
-            "SELECT * FROM init_task WHERE status = 'RUNNING' ORDER BY started_at DESC LIMIT 1"
-        ).fetchone()
-        latest_row = conn.execute(
-            "SELECT * FROM init_task WHERE status IN ('SUCCESS', 'FAILED', 'TERMINATED') "
-            "ORDER BY finished_at DESC LIMIT 1"
-        ).fetchone()
-        meta_row = conn.execute(
-            "SELECT * FROM data_range_meta WHERE dataset = 'daily_bars'"
-        ).fetchone()
-        if not meta_row:
-            meta_row = conn.execute(
-                "SELECT * FROM data_range_meta WHERE dataset = 'market_daily_quote'"
-            ).fetchone()
-        return {
-            'running_task': dict(running_row) if running_row else None,
-            'latest_task': dict(latest_row) if latest_row else None,
-            'data_range': {
-                'min_trade_date': meta_row['min_trade_date'] if meta_row else None,
-                'max_trade_date': meta_row['max_trade_date'] if meta_row else None,
-                'trading_day_count': meta_row['trading_day_count'] if meta_row else 0,
-            },
-        }
-    finally:
-        conn.close()
+    repo = _task_repo(sqlite_path)
+    running_row = repo.get_running_task()
+    latest_row = repo.get_latest_finished_task()
+    meta_row = repo.get_data_range_meta()
+    return {
+        'running_task': running_row,
+        'latest_task': latest_row,
+        'data_range': {
+            'min_trade_date': meta_row['min_trade_date'] if meta_row else None,
+            'max_trade_date': meta_row['max_trade_date'] if meta_row else None,
+            'trading_day_count': meta_row['trading_day_count'] if meta_row else 0,
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -381,13 +253,7 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
     """Background thread: process every date in the task's date range."""
     logger.info('Task %s: started', task_id)
     try:
-        conn = _connect(sqlite_path)
-        try:
-            task_row = conn.execute(
-                'SELECT * FROM init_task WHERE task_id = ?', (task_id,)
-            ).fetchone()
-        finally:
-            conn.close()
+        task_row = _task_repo(sqlite_path).get_task(task_id)
 
         if not task_row:
             logger.error('Task %s: not found in DB', task_id)
@@ -410,18 +276,7 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
                 return
 
         # All dates processed
-        conn = _connect(sqlite_path)
-        try:
-            updated = conn.execute(
-                """UPDATE init_task
-                   SET status = 'SUCCESS', finished_at = ?, current_date = ''
-                   WHERE task_id = ?
-                     AND status = 'RUNNING'""",
-                (_now_iso(), task_id),
-            ).rowcount
-            conn.commit()
-        finally:
-            conn.close()
+        updated = _task_repo(sqlite_path).finalize_task_success_if_running(task_id, _now_iso())
 
         if not updated:
             logger.info('Task %s: skipped SUCCESS finalization because task is no longer RUNNING', task_id)
@@ -462,20 +317,7 @@ def _process_one_day(
     logger.debug('Task %s: processing %s (type=%s)', task_id, date_str, task_type)
 
     # Update current_date and set status to RUNNING
-    conn = _connect(sqlite_path)
-    try:
-        conn.execute(
-            'UPDATE init_task SET current_date = ? WHERE task_id = ?',
-            (date_str, task_id),
-        )
-        conn.execute(
-            "UPDATE init_task_day SET started_at = ?, status = 'RUNNING'"
-            ' WHERE task_id = ? AND trade_date = ?',
-            (_now_iso(), task_id, date_str),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    _task_repo(sqlite_path).set_current_date_and_mark_day_running(task_id, date_str, _now_iso())
 
     # Dispatch to appropriate processor based on task_type
     if task_type == 'JYGS_REVIEW':
@@ -514,15 +356,7 @@ def _process_trading_day(
     )
 
     # Mark as WRITING
-    conn = _connect(sqlite_path)
-    try:
-        conn.execute(
-            "UPDATE init_task_day SET status = 'WRITING' WHERE task_id = ? AND trade_date = ?",
-            (task_id, date_str),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    _task_repo(sqlite_path).mark_day_writing(task_id, date_str)
 
     # Write atomically (SQLite + DuckDB)
     t1 = time.monotonic()
@@ -537,24 +371,7 @@ def _process_trading_day(
     write_elapsed = time.monotonic() - t1
 
     # Day succeeded
-    conn = _connect(sqlite_path)
-    try:
-        conn.execute(
-            '''UPDATE init_task_day
-               SET status = 'SUCCESS', finished_at = ?, row_count = ?
-               WHERE task_id = ? AND trade_date = ?''',
-            (_now_iso(), len(rows), task_id, date_str),
-        )
-        conn.execute(
-            '''UPDATE init_task
-               SET processed_days = processed_days + 1,
-                   done_trading_days = done_trading_days + 1
-               WHERE task_id = ?''',
-            (task_id,),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    _task_repo(sqlite_path).mark_day_success_and_increment(task_id, date_str, _now_iso(), len(rows))
 
     total_elapsed = time.monotonic() - t0
     logger.info(
@@ -577,9 +394,12 @@ def _fetch_daily_raw(
     from app.modules.market_data.limit_rules import compute_limit_fields
 
     pro = _get_tushare_api()
+    logger.info('_fetch_daily_raw start. trade_date=%s', date_str)
     df = _rate_limited_call(pro.daily, trade_date=date_str)
     if df is None or df.empty:
+        logger.info('_fetch_daily_raw empty response. trade_date=%s', date_str)
         return []
+    logger.info('_fetch_daily_raw raw dataframe received. trade_date=%s rows=%d', date_str, len(df))
 
     # Load stock universe metadata (name, list_date) for limit-field enrichment.
     # Gracefully skip when the stock_list table is empty or unavailable.
@@ -640,6 +460,7 @@ def _fetch_daily_raw(
             })
         except (ValueError, TypeError):
             continue
+    logger.info('_fetch_daily_raw parsed rows. trade_date=%s rows=%d', date_str, len(rows))
     return rows
 
 
@@ -749,17 +570,7 @@ def _mark_day_failed(
     error_message: str,
     sqlite_path: Path | None,
 ) -> None:
-    conn = _connect(sqlite_path)
-    try:
-        conn.execute(
-            '''UPDATE init_task_day
-               SET status = 'FAILED', finished_at = ?, error_message = ?
-               WHERE task_id = ? AND trade_date = ?''',
-            (_now_iso(), error_message, task_id, date_str),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    _task_repo(sqlite_path).mark_day_failed(task_id, date_str, _now_iso(), error_message)
 
 
 def _mark_task_failed(
@@ -767,29 +578,11 @@ def _mark_task_failed(
     error_message: str,
     sqlite_path: Path | None,
 ) -> None:
-    conn = _connect(sqlite_path)
-    try:
-        conn.execute(
-            '''UPDATE init_task
-               SET status = 'FAILED', finished_at = ?, error_message = ?
-               WHERE task_id = ?''',
-            (_now_iso(), error_message, task_id),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    _task_repo(sqlite_path).mark_task_failed(task_id, _now_iso(), error_message)
 
 
 def _is_task_terminated(task_id: str, sqlite_path: Path | None) -> bool:
-    conn = _connect(sqlite_path)
-    try:
-        row = conn.execute(
-            'SELECT status FROM init_task WHERE task_id = ?',
-            (task_id,),
-        ).fetchone()
-        return bool(row and row['status'] == 'TERMINATED')
-    finally:
-        conn.close()
+    return _task_repo(sqlite_path).is_task_terminated(task_id)
 
 
 def _update_data_range_meta(sqlite_path: Path | None, duckdb_path: Path | None = None) -> None:
@@ -885,24 +678,12 @@ def _process_jygs_review_day(
         elapsed = time.monotonic() - t0
 
         # Mark day as SUCCESS and advance overall task progress.
-        conn = _connect(sqlite_path)
-        try:
-            conn.execute(
-                "UPDATE init_task_day"
-                " SET status = 'SUCCESS', finished_at = ?, row_count = ?"
-                " WHERE task_id = ? AND trade_date = ?",
-                (_now_iso(), review_count, task_id, date_str),
-            )
-            conn.execute(
-                '''UPDATE init_task
-                   SET processed_days = processed_days + 1,
-                       done_trading_days = done_trading_days + 1
-                   WHERE task_id = ?''',
-                (task_id,),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        _task_repo(sqlite_path).mark_day_success_and_increment(
+            task_id,
+            date_str,
+            _now_iso(),
+            review_count,
+        )
 
         logger.info(
             'Task %s: %s SUCCESS (parsed %d reviews in %.1fs)',
@@ -914,23 +695,10 @@ def _process_jygs_review_day(
         elapsed = time.monotonic() - t0
         error_msg = str(exc)[:500]
 
-        conn = _connect(sqlite_path)
-        try:
-            conn.execute(
-                "UPDATE init_task_day"
-                " SET status = 'FAILED', finished_at = ?, error_message = ?"
-                " WHERE task_id = ? AND trade_date = ?",
-                (_now_iso(), error_msg, task_id, date_str),
-            )
-            conn.execute(
-                '''UPDATE init_task
-                   SET processed_days = processed_days + 1
-                   WHERE task_id = ?''',
-                (task_id,),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        repo = _task_repo(sqlite_path)
+        repo.mark_day_failed(task_id, date_str, _now_iso(), error_msg)
+        # Keep prior behavior: JYGS day failure is counted as processed and task continues.
+        repo.mark_task_progress_processed_only(task_id)
 
         logger.error(
             'Task %s: %s FAILED in %.1fs: %s',

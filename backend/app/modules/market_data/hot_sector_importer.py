@@ -437,7 +437,6 @@ def _build_daily_aggregates(parsed_images: list[ParsedImage]) -> list[DailySecto
     ranked_by_date: dict[str, list[DailySectorAggregate]] = {}
     for (trade_date, sector_name), stocks in grouped.items():
         observed_count = len(stocks)
-        declared_count = max((stock.primary_sector_declared_count for stock in stocks), default=0)
         max_board_count = max((stock.board_count or 0 for stock in stocks), default=0)
         sorted_stocks = sorted(
             stocks,
@@ -449,9 +448,9 @@ def _build_daily_aggregates(parsed_images: list[ParsedImage]) -> list[DailySecto
             ),
         )
         representative_stocks = sorted_stocks[:3]
-        sector_order = min(stock.primary_sector_order for stock in stocks)
-        heat_basis = max(observed_count, declared_count)
-        heat_score = min(99, heat_basis * 10 + max_board_count * 4 + max(0, 8 - sector_order))
+        # Heat score now directly represents the sector's limit-up stock count.
+        limit_up_count = sum(1 for stock in stocks if (stock.board_count or 0) > 0 or bool(stock.limit_up_time))
+        heat_score = limit_up_count
         ranked_by_date.setdefault(trade_date, []).append(
             DailySectorAggregate(
                 trade_date=trade_date,

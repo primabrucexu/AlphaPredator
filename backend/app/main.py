@@ -1,19 +1,17 @@
 from contextlib import asynccontextmanager
-import logging
 
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import api_router
+from app.core.logging import configure_logging
 from app.core.settings import settings
 from app.db.duckdb_storage import ensure_duckdb_parent, ensure_duckdb_schema
 from app.db.sqlite import ensure_sqlite_parent, ensure_sqlite_schema
 
-# Ensure the application's own loggers emit at INFO level so task lifecycle
-# and per-day processing events are visible in the console alongside uvicorn's
-# access logs.
-logging.getLogger('app').setLevel(logging.INFO)
+# Apply one logging config so app and uvicorn logs are visible in console.
+configure_logging()
 
 
 @asynccontextmanager
@@ -48,7 +46,7 @@ def root() -> dict[str, str]:
 
 
 def main() -> None:
-    uvicorn.run('app.main:app', host=settings.app_host, port=settings.app_port, reload=True)
+    uvicorn.run('app.main:app', host=settings.app_host, port=settings.app_port, reload=True, log_config=None)
 
 
 if __name__ == '__main__':

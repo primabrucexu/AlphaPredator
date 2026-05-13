@@ -1,6 +1,7 @@
 import {
     AreaChartOutlined,
     DatabaseOutlined,
+    FireOutlined,
     HistoryOutlined,
     HomeOutlined,
     RadarChartOutlined,
@@ -17,6 +18,7 @@ const { Header, Content, Sider } = Layout;
 const menuItems = [
   { key: '/', icon: <HomeOutlined />, label: '首页搜索' },
   { key: '/market', icon: <AreaChartOutlined />, label: '市场总览' },
+    {key: '/sentiment', icon: <FireOutlined/>, label: '短线情绪'},
   { key: '/results', icon: <RadarChartOutlined />, label: 'AI 选股结果' },
   { key: '/focus', icon: <StarOutlined />, label: '重点关注' },
   { key: '/history', icon: <HistoryOutlined />, label: '历史记录' },

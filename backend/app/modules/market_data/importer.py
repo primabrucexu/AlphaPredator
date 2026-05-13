@@ -13,22 +13,12 @@ from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
 @dataclass(frozen=True)
 class ImportResult:
     stock_count: int
-    snapshot_row_count: int
     daily_bar_count: int
     hot_sector_count: int
     latest_trade_date: str
 
 
 REQUIRED_STOCK_POOL_FIELDS = {'stock_code', 'stock_name', 'sectors', 'ai_quick_summary'}
-REQUIRED_DAILY_SNAPSHOT_FIELDS = {
-    'trade_date',
-    'stock_code',
-    'current_price',
-    'change_amount',
-    'change_pct',
-    'turnover_amount_billion',
-    'turnover_rate',
-}
 REQUIRED_DAILY_BAR_FIELDS = {
     'stock_code',
     'trade_date',
@@ -55,18 +45,16 @@ def import_market_data_batch(
     resolved_batch_dir = batch_dir.resolve()
 
     stock_pool_path = resolved_batch_dir / 'stock_pool.csv'
-    daily_snapshot_path = resolved_batch_dir / 'daily_stock_snapshots.csv'
     daily_bars_path = resolved_batch_dir / 'daily_bars.csv'
     hot_sectors_path = resolved_batch_dir / 'hot_sectors.json'
 
     stock_profiles = _read_stock_profiles(stock_pool_path)
-    daily_snapshots = _read_daily_snapshots(daily_snapshot_path)
     daily_bars = _read_daily_bars(daily_bars_path)
     hot_sectors = _read_hot_sectors(hot_sectors_path)
 
-    latest_trade_date = max((row['trade_date'] for row in daily_snapshots), default='')
+    latest_trade_date = max((row['trade_date'] for row in daily_bars), default='')
     if not latest_trade_date:
-        raise ValueError('daily_stock_snapshots.csv must contain at least one row')
+        raise ValueError('daily_bars.csv must contain at least one row')
 
     ensure_sqlite_schema(target_sqlite_path)
     ensure_duckdb_parent(target_duckdb_path, target_daily_bars_parquet_path.parent)
@@ -75,8 +63,6 @@ def import_market_data_batch(
     _write_sqlite_data(
         sqlite_path=target_sqlite_path,
         stock_profiles=stock_profiles,
-        daily_snapshots=daily_snapshots,
-        hot_sectors=hot_sectors,
     )
     _write_duckdb_data(
         duckdb_path=target_duckdb_path,
@@ -86,14 +72,12 @@ def import_market_data_batch(
     _write_market_snapshot(
         market_snapshot_path=target_market_snapshot_path,
         stock_profiles=stock_profiles,
-        daily_snapshots=daily_snapshots,
         hot_sectors=hot_sectors,
         latest_trade_date=latest_trade_date,
     )
 
     return ImportResult(
         stock_count=len(stock_profiles),
-        snapshot_row_count=len(daily_snapshots),
         daily_bar_count=len(daily_bars),
         hot_sector_count=len(hot_sectors),
         latest_trade_date=latest_trade_date,
@@ -108,22 +92,6 @@ def _read_stock_profiles(file_path: Path) -> list[dict[str, Any]]:
             'stock_name': row['stock_name'].strip(),
             'sectors': [item.strip() for item in row['sectors'].split('|') if item.strip()],
             'ai_quick_summary': row['ai_quick_summary'].strip(),
-        }
-        for row in rows
-    ]
-
-
-def _read_daily_snapshots(file_path: Path) -> list[dict[str, Any]]:
-    rows = _read_csv_rows(file_path, REQUIRED_DAILY_SNAPSHOT_FIELDS)
-    return [
-        {
-            'trade_date': row['trade_date'].strip(),
-            'stock_code': row['stock_code'].strip(),
-            'current_price': float(row['current_price']),
-            'change_amount': float(row['change_amount']),
-            'change_pct': float(row['change_pct']),
-            'turnover_amount_billion': float(row['turnover_amount_billion']),
-            'turnover_rate': float(row['turnover_rate']),
         }
         for row in rows
     ]
@@ -202,20 +170,18 @@ def _write_sqlite_data(
     *,
     sqlite_path: Path,
     stock_profiles: list[dict[str, Any]],
-    daily_snapshots: list[dict[str, Any]],
-    hot_sectors: list[dict[str, Any]],
 ) -> None:
     connection = connect_sqlite(sqlite_path)
     try:
         connection.execute('PRAGMA foreign_keys = ON')
-        connection.execute('DELETE FROM focus_stock_entries')
-        connection.execute('DELETE FROM hot_sector_snapshots')
-        connection.execute('DELETE FROM daily_stock_snapshots')
-        connection.execute('DELETE FROM stock_profiles')
         connection.executemany(
             '''
             INSERT INTO stock_profiles (stock_code, stock_name, sectors_json, ai_quick_summary)
-            VALUES (?, ?, ?, ?)
+            VALUES (?, ?, ?, ?) ON CONFLICT(stock_code) DO
+            UPDATE SET
+                stock_name = excluded.stock_name,
+                sectors_json = excluded.sectors_json,
+                ai_quick_summary = excluded.ai_quick_summary
             ''',
             [
                 (
@@ -227,48 +193,6 @@ def _write_sqlite_data(
                 for row in stock_profiles
             ],
         )
-        connection.executemany(
-            '''
-            INSERT INTO daily_stock_snapshots (
-                trade_date,
-                stock_code,
-                current_price,
-                change_amount,
-                change_pct,
-                turnover_amount_billion,
-                turnover_rate
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''',
-            [
-                (
-                    row['trade_date'],
-                    row['stock_code'],
-                    row['current_price'],
-                    row['change_amount'],
-                    row['change_pct'],
-                    row['turnover_amount_billion'],
-                    row['turnover_rate'],
-                )
-                for row in daily_snapshots
-            ],
-        )
-        if hot_sectors:
-            connection.executemany(
-                '''
-                INSERT INTO hot_sector_snapshots (trade_date, name, trend_label, heat_score)
-                VALUES (?, ?, ?, ?)
-                ''',
-                [
-                    (
-                        row['trade_date'],
-                        row['name'],
-                        row['trend_label'],
-                        row['heat_score'],
-                    )
-                    for row in hot_sectors
-                ],
-            )
         connection.commit()
     finally:
         connection.close()
@@ -311,42 +235,34 @@ def _write_market_snapshot(
     *,
     market_snapshot_path: Path,
     stock_profiles: list[dict[str, Any]],
-    daily_snapshots: list[dict[str, Any]],
     hot_sectors: list[dict[str, Any]],
     latest_trade_date: str,
 ) -> None:
-    latest_snapshot_rows = [row for row in daily_snapshots if row['trade_date'] == latest_trade_date]
-    profile_by_code = {row['stock_code']: row for row in stock_profiles}
-    stock_rows = []
-    for snapshot_row in latest_snapshot_rows:
-        profile = profile_by_code.get(snapshot_row['stock_code'])
-        if profile is None:
-            continue
-        stock_rows.append(
-            {
-                'stock_code': snapshot_row['stock_code'],
-                'stock_name': profile['stock_name'],
-                'current_price': snapshot_row['current_price'],
-                'change_amount': snapshot_row['change_amount'],
-                'change_pct': snapshot_row['change_pct'],
-                'turnover_amount_billion': snapshot_row['turnover_amount_billion'],
-                'turnover_rate': snapshot_row['turnover_rate'],
-                'sectors': profile['sectors'],
-                'ai_quick_summary': profile['ai_quick_summary'],
-                'trade_date': latest_trade_date,
-            }
-        )
+    stock_rows = [
+        {
+            'stock_code': row['stock_code'],
+            'stock_name': row['stock_name'],
+            'current_price': 0.0,
+            'change_amount': 0.0,
+            'change_pct': 0.0,
+            'turnover_amount_billion': 0.0,
+            'turnover_rate': 0.0,
+            'sectors': row['sectors'],
+            'ai_quick_summary': row['ai_quick_summary'],
+            'trade_date': latest_trade_date,
+        }
+        for row in stock_profiles
+    ]
 
-    stock_rows.sort(key=lambda row: row['turnover_amount_billion'], reverse=True)
     latest_hot_sectors = [row for row in hot_sectors if row['trade_date'] == latest_trade_date]
     latest_hot_sectors.sort(key=lambda row: row['heat_score'], reverse=True)
 
     payload = {
         'summary': {
             'trade_date': latest_trade_date,
-            'rising_count': sum(1 for row in latest_snapshot_rows if row['change_pct'] >= 0),
-            'falling_count': sum(1 for row in latest_snapshot_rows if row['change_pct'] < 0),
-            'turnover_amount_billion': round(sum(row['turnover_amount_billion'] for row in latest_snapshot_rows), 2),
+            'rising_count': 0,
+            'falling_count': 0,
+            'turnover_amount_billion': 0.0,
         },
         'hot_sectors': latest_hot_sectors,
         'stocks': stock_rows,
@@ -365,7 +281,6 @@ def main(argv: list[str] | None = None) -> int:
     print(
         'Imported market data batch: '
         f'stocks={result.stock_count}, '
-        f'snapshots={result.snapshot_row_count}, '
         f'daily_bars={result.daily_bar_count}, '
         f'hot_sectors={result.hot_sector_count}, '
         f'latest_trade_date={result.latest_trade_date}'

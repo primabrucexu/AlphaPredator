@@ -7,7 +7,7 @@ Provides:
 - ST flag detection from stock name prefix.
 - No-limit-day detection for newly listed stocks (first 5 trading days).
 - ``compute_limit_fields``: master function that returns all limit-related
-  column values ready for insertion into ``market_daily_quote``.
+  column values ready for persistence.
 
 Design references: docs/market-data-init-v2-blueprint.md §7.
 """

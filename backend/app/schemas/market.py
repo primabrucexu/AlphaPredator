@@ -169,3 +169,13 @@ class LimitUpStreakItem(BaseModel):
 class LimitUpStreaksResponse(BaseModel):
     trade_date: str
     streaks: list[LimitUpStreakItem] = Field(default_factory=list)
+
+
+class HotReviewImageItem(BaseModel):
+    url: str
+    source_file: str
+
+
+class HotReviewImagesResponse(BaseModel):
+    trade_date: str
+    images: list[HotReviewImageItem] = Field(default_factory=list)

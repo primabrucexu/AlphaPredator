@@ -134,14 +134,6 @@ def test_atomic_write_day_inserts_rows(tmp_path: Path) -> None:
 
     _atomic_write_day('20240102', MOCK_DAILY_ROWS, sqlite_path, duckdb_path)
 
-    from app.db.sqlite import connect_sqlite
-    conn = connect_sqlite(sqlite_path)
-    sqlite_count = conn.execute(
-        'SELECT COUNT(*) FROM market_daily_quote WHERE trade_date = ?', ('20240102',)
-    ).fetchone()[0]
-    conn.close()
-    # V2 keeps daily quote fact rows in DuckDB only.
-    assert sqlite_count == 0
 
     dconn = connect_duckdb(duckdb_path)
     duckdb_count = dconn.execute(
@@ -220,20 +212,13 @@ def test_write_duckdb_day_idempotent(tmp_path: Path) -> None:
 
 def test_atomic_write_day_persists_limit_fields(tmp_path: Path) -> None:
     from app.db.duckdb_storage import connect_duckdb
-    from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
+    from app.db.sqlite import ensure_sqlite_schema
     sqlite_path = tmp_path / 'test.db'
     duckdb_path = tmp_path / 'test.duckdb'
     ensure_sqlite_schema(sqlite_path)
 
     _atomic_write_day('20240102', MOCK_DAILY_ROWS, sqlite_path, duckdb_path)
 
-    conn = connect_sqlite(sqlite_path)
-    sqlite_count = conn.execute(
-        'SELECT COUNT(*) FROM market_daily_quote WHERE trade_date = ?',
-        ('20240102',),
-    ).fetchone()
-    conn.close()
-    assert sqlite_count[0] == 0
 
     dconn = connect_duckdb(duckdb_path)
     row = dconn.execute(
@@ -409,14 +394,6 @@ def test_full_task_run_succeeds(tmp_path: Path) -> None:
     assert t['status'] == 'SUCCESS', f'Unexpected status: {t}'
     assert t['processed_days'] == t['total_days']
 
-    # Verify SQLite daily quote table stays empty (DuckDB is the source of truth)
-    from app.db.sqlite import connect_sqlite
-    conn = connect_sqlite(sqlite_path)
-    sqlite_count = conn.execute(
-        'SELECT COUNT(*) FROM market_daily_quote WHERE trade_date = ?', ('20240102',)
-    ).fetchone()[0]
-    conn.close()
-    assert sqlite_count == 0
 
     # Verify data was also written to DuckDB for detail-page queries
     from app.db.duckdb_storage import connect_duckdb

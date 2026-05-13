@@ -1,5 +1,4 @@
 import {useEffect, useRef, useState} from 'react';
-import {useSearchParams} from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -15,14 +14,12 @@ import {
   Statistic,
   Table,
   Tag,
-  Tooltip,
   Typography,
 } from 'antd';
 import dayjs from 'dayjs';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
-  CopyOutlined,
   DatabaseOutlined,
   DisconnectOutlined,
   LinkOutlined,
@@ -40,8 +37,8 @@ import {
   getTokenConfig,
   type InitV2OverviewResponse,
   type JygsAuthStatus,
+  loginJygsWithPlaywright,
   retryInitTask,
-  saveJygsSession,
   saveTokenConfig,
   type StockListUploadResponse,
   type TaskDayItem,
@@ -129,8 +126,6 @@ function taskTypeLabel(taskType: string | undefined): string {
 }
 
 export function InitializePage() {
-  const [searchParams, setSearchParams] = useSearchParams();
-
   // Token
   const [tokenConfig, setTokenConfig] = useState<TokenConfigResponse | null>(null);
   const [tokenInput, setTokenInput] = useState('');
@@ -139,13 +134,8 @@ export function InitializePage() {
 
   // JYGS auth
   const [jygsStatus, setJygsStatus] = useState<JygsAuthStatus | null>(null);
-  const [jygsConnecting, setJygsConnecting] = useState(false);
   const [jygsError, setJygsError] = useState<string | null>(null);
-  const [jygsManualSession, setJygsManualSession] = useState('');
-  const [jygsManualSaving, setJygsManualSaving] = useState(false);
-  const [showManualFallback, setShowManualFallback] = useState(false);
-  const jygsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const jygsPopupRef = useRef<Window | null>(null);
+    const [jygsLoginLoading, setJygsLoginLoading] = useState(false);
 
   // Stock list
   const [initOverview, setInitOverview] = useState<InitV2OverviewResponse | null>(null);
@@ -187,12 +177,6 @@ export function InitializePage() {
         setJygsStatus(jygs);
       })
       .catch(() => {});
-
-    // 代理登录成功后会跳转回 /initialize?jygs_login=success
-    if (searchParams.get('jygs_login') === 'success') {
-      setSearchParams({}, { replace: true });
-      getJygsAuthStatus().then(setJygsStatus).catch(() => {});
-    }
   }, []);
 
   // Polling when task is running
@@ -222,6 +206,7 @@ export function InitializePage() {
       }
     };
   }, [currentTask?.status, currentTask?.task_id]);
+
 
   // Refresh day details when page changes or task updates
   useEffect(() => {
@@ -348,65 +333,20 @@ export function InitializePage() {
 
   // ── 韭研公社连接 handlers ───────────────────────────────────────────────
 
-  const stopJygsPoll = () => {
-    if (jygsPollRef.current) {
-      clearInterval(jygsPollRef.current);
-      jygsPollRef.current = null;
-    }
-  };
-
-  const handleJygsConnect = () => {
+    const handleJygsPlaywrightLogin = async () => {
+        setJygsLoginLoading(true);
     setJygsError(null);
-    setJygsConnecting(true);
-    setShowManualFallback(false);
-
-    // 弹出代理登录窗口
-    const proxyUrl = `${window.location.origin}/api/jygs/proxy/`;
-    jygsPopupRef.current = window.open(proxyUrl, 'jygs-login', 'width=520,height=860,left=200,top=80');
-
-    // 每 2 秒轮询鉴权状态
-    jygsPollRef.current = setInterval(async () => {
-      try {
-        const status = await getJygsAuthStatus();
-        if (status.valid) {
-          setJygsStatus(status);
-          setJygsConnecting(false);
-          stopJygsPoll();
-          jygsPopupRef.current?.close();
-          jygsPopupRef.current = null;
-        }
-        // 若弹窗被用户手动关闭，停止轮询
-        if (jygsPopupRef.current?.closed) {
-          stopJygsPoll();
-          setJygsConnecting(false);
-          // 再检查一次，弹窗可能是被代理成功后转到 initialize?success 触发的关闭
-          const finalStatus = await getJygsAuthStatus();
-          setJygsStatus(finalStatus);
-          if (!finalStatus.valid) {
-            setShowManualFallback(true);
-            setJygsError('代理登录未能捕获到凭据，请使用下方手动方式。');
-          }
-        }
-      } catch {
-        // ignore network errors during polling
-      }
-    }, 2000);
-  };
-
-  const handleJygsManualSave = async () => {
-    if (!jygsManualSession.trim()) return;
-    setJygsManualSaving(true);
-    setJygsError(null);
-    try {
-      await saveJygsSession(jygsManualSession.trim());
-      const status = await getJygsAuthStatus();
-      setJygsStatus(status);
-      setJygsManualSession('');
-      setShowManualFallback(false);
+        try {
+            await loginJygsWithPlaywright(300);
+            const status = await getJygsAuthStatus();
+            setJygsStatus(status);
+            if (!status.valid) {
+                setJygsError('登录流程完成，但凭据校验未通过，请重试。');
+            }
     } catch (e) {
-      setJygsError(e instanceof Error ? e.message : '保存失败');
+            setJygsError(e instanceof Error ? e.message : 'Playwright 登录失败');
     } finally {
-      setJygsManualSaving(false);
+            setJygsLoginLoading(false);
     }
   };
 
@@ -415,12 +355,6 @@ export function InitializePage() {
     setJygsStatus({ configured: false, valid: false, saved_at: null, expires_at: null });
   };
 
-  const jygsConsoleSnippet =
-    `fetch("${window.location.origin}/api/jygs/auth/session",` +
-    `{method:"POST",headers:{"Content-Type":"application/json"},` +
-    `body:JSON.stringify({session:document.cookie.split(";")` +
-    `.find(c=>c.trim().startsWith("SESSION=")).trim().split("=")[1]})})` +
-    `.then(r=>r.json()).then(d=>alert(d.ok?"✅ 已同步到 AlphaPredator！":"❌ "+d.error))`;
 
   const isRunning = currentTask?.status === 'RUNNING';
   const isDone = currentTask?.status === 'SUCCESS';
@@ -534,26 +468,17 @@ export function InitializePage() {
 
           {/* 连接 / 断开 操作 */}
           {!jygsStatus?.valid ? (
-            <Space wrap>
+              <Space direction="vertical" size={6} style={{width: '100%'}}>
+                  <Typography.Text type="secondary">
+                      点击后端 Playwright 一键登录，会弹出网页端页面，请在浏览器中完成登录。
+                  </Typography.Text>
               <Button
-                type="primary"
-                icon={jygsConnecting ? <SyncOutlined spin /> : <LinkOutlined />}
-                loading={jygsConnecting}
-                onClick={handleJygsConnect}
+                  type="primary"
+                  icon={<LinkOutlined/>}
+                  loading={jygsLoginLoading}
+                  onClick={handleJygsPlaywrightLogin}
               >
-                {jygsConnecting ? '等待登录中…' : '一键代理登录'}
-              </Button>
-              {jygsConnecting && (
-                <Typography.Text type="secondary">
-                  请在弹出的窗口中完成登录，登录后将自动关闭
-                </Typography.Text>
-              )}
-              <Button
-                type="link"
-                size="small"
-                onClick={() => setShowManualFallback(v => !v)}
-              >
-                {showManualFallback ? '收起手动方式' : '代理登录失败？使用手动方式'}
+                  Playwright 一键登录
               </Button>
             </Space>
           ) : (
@@ -569,61 +494,6 @@ export function InitializePage() {
           {/* JYGS 错误提示 */}
           {jygsError && (
             <Alert type="warning" showIcon closable message={jygsError} onClose={() => setJygsError(null)} />
-          )}
-
-          {/* 手动 SESSION 回退方式 */}
-          {showManualFallback && (
-            <Card size="small" style={{ background: '#fafafa' }}>
-              <Space direction="vertical" size={10} style={{ width: '100%' }}>
-                <Typography.Text strong>手动方式（控制台）</Typography.Text>
-                <ol style={{ margin: 0, paddingLeft: 20, fontSize: 13 }}>
-                  <li>
-                    <Typography.Link href="https://www.jiuyangongshe.com" target="_blank">
-                      点此打开韭研公社
-                    </Typography.Link>
-                    ，完成登录
-                  </li>
-                  <li>按 <Typography.Text code>F12</Typography.Text> 打开开发者工具 → 切到 <Typography.Text code>Console</Typography.Text> 标签</li>
-                  <li>复制下方代码并粘贴到控制台后回车</li>
-                </ol>
-                <Space.Compact style={{ width: '100%' }}>
-                  <Input
-                    value={jygsConsoleSnippet}
-                    readOnly
-                    style={{ fontFamily: 'monospace', fontSize: 11 }}
-                  />
-                  <Tooltip title="复制">
-                    <Button
-                      icon={<CopyOutlined />}
-                      onClick={() => navigator.clipboard.writeText(jygsConsoleSnippet)}
-                    />
-                  </Tooltip>
-                </Space.Compact>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  执行后弹出"✅ 已同步"即表示成功，本页将自动刷新连接状态。
-                </Typography.Text>
-
-                <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
-                  或直接粘贴 SESSION Cookie 的值：
-                </Typography.Text>
-                <Space.Compact style={{ width: '100%' }}>
-                  <Input.Password
-                    placeholder="粘贴 SESSION Cookie 值"
-                    value={jygsManualSession}
-                    onChange={e => setJygsManualSession(e.target.value)}
-                    onPressEnter={handleJygsManualSave}
-                  />
-                  <Button
-                    type="primary"
-                    loading={jygsManualSaving}
-                    disabled={!jygsManualSession.trim()}
-                    onClick={handleJygsManualSave}
-                  >
-                    验证并保存
-                  </Button>
-                </Space.Compact>
-              </Space>
-            </Card>
           )}
         </Space>
       </Card>

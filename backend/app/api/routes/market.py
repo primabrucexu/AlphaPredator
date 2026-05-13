@@ -3,6 +3,7 @@ from fastapi import APIRouter, Query
 from app.modules.market_data.service import market_data_service
 from app.schemas.market import (
     HotSectorHistoryResponse,
+    HotReviewImagesResponse,
     LimitUpStreaksResponse,
     MarketOverviewResponse,
     StockBarsRangeResponse,
@@ -66,3 +67,10 @@ def get_limit_up_streaks(
     min_boards: int = Query(2, ge=1, le=20, description='最小连板数阈值'),
 ) -> LimitUpStreaksResponse:
     return market_data_service.get_limit_up_streaks(trade_date=trade_date, min_boards=min_boards)
+
+
+@router.get('/hot-review-images', response_model=HotReviewImagesResponse)
+def get_hot_review_images(
+        trade_date: str | None = Query(None, description='交易日（YYYY-MM-DD），默认最新有数据交易日'),
+) -> HotReviewImagesResponse:
+    return market_data_service.get_hot_review_images(trade_date=trade_date)

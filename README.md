@@ -11,8 +11,14 @@
 ## Guide
 - [技术栈](#技术栈)
 - [项目结构](#项目结构)
-- [数据存储说明](docs/human/data-storage.md)
-- [文档索引](docs/docs.md)
+- [数据存储说明](docs/human/data-model/data-storage.md)
+- [文档索引](docs/guide.md)
+
+---
+
+## 市场数据来源
+
+麦蕊智数
 
 ---
 

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:playwright": "node scripts/playwright-check.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "^6.0.1",
@@ -23,6 +24,7 @@
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
     "@vitejs/plugin-react": "^4.3.4",
+    "playwright": "^1.54.2",
     "typescript": "~5.7.3",
     "vite": "^6.2.0"
   }

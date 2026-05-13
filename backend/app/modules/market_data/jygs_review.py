@@ -3,20 +3,29 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-
 from zoneinfo import ZoneInfo
 
 from app.core.settings import settings
 from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
+from app.repositories.jygs_repo import JygsRepo
 
 logger = logging.getLogger(__name__)
 
-_JYGS_BASE_URL = 'https://www.jiuyangongshe.com/action'
+_JYGS_BASE_URL = 'https://app.jiuyangongshe.com/jystock-app'
+_BROWSER_UA = (
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+    'AppleWebKit/537.36 (KHTML, like Gecko) '
+    'Chrome/148.0.0.0 Safari/537.36 Edg/148.0.0.0'
+)
+_SEC_CH_UA = '"Chromium";v="148", "Microsoft Edge";v="148", "Not/A)Brand";v="99"'
+_PLATFORM = '3'
+_TOKEN = 'e9efd6ecfaa33e89fd1ff9b2aeef23fa'
 
 
 class JygsCredentialError(RuntimeError):
@@ -33,36 +42,85 @@ def _normalize_stock_code(raw_code: Any) -> str:
     return digits[-6:] if digits else ''
 
 
+def _connect(sqlite_path: Path | None = None) -> Any:
+    """Helper to get SQLite connection."""
+    target = sqlite_path or settings.sqlite_path
+    return connect_sqlite(target)
+
+
 def _post_json(path: str, payload: dict[str, Any], *, cookie: str, timeout: float = 20.0) -> dict[str, Any]:
+    t0 = time.monotonic()
+    payload_keys = sorted(payload.keys())
+    logger.info('JYGS request start. path=%s timeout=%.1fs payload_keys=%s', path, timeout, payload_keys)
+    timestamp_ms = str(int(time.time() * 1000))
     body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
     request = Request(
         url=f'{_JYGS_BASE_URL}{path}',
         data=body,
         headers={
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
             'Content-Type': 'application/json',
             'Cookie': cookie,
-            'User-Agent': 'AlphaPredator/1.0',
+            'DNT': '1',
+            'Origin': 'https://www.jiuyangongshe.com',
+            'Pragma': 'no-cache',
+            'Referer': 'https://www.jiuyangongshe.com/',
+            'Sec-Fetch-Dest': 'empty',
+            'Sec-Fetch-Mode': 'cors',
+            'Sec-Fetch-Site': 'same-site',
+            'User-Agent': _BROWSER_UA,
+            'platform': _PLATFORM,
+            'sec-ch-ua': _SEC_CH_UA,
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+            'timestamp': timestamp_ms,
+            'token': _TOKEN,
         },
         method='POST',
     )
     try:
         with urlopen(request, timeout=timeout) as response:
-            data = response.read().decode('utf-8')
-            return json.loads(data)
+            status = getattr(response, 'status', None) or response.getcode()
+            content_type = response.headers.get('Content-Type', '')
+            raw = response.read()
+            data = raw.decode('utf-8', errors='replace')
+            logger.info(
+                'JYGS request response. path=%s status=%s content_type=%s body_len=%d elapsed_ms=%d',
+                path,
+                status,
+                content_type,
+                len(data),
+                int((time.monotonic() - t0) * 1000),
+            )
+            try:
+                return json.loads(data)
+            except json.JSONDecodeError as exc:
+                logger.error(
+                    'JYGS JSON decode failed. path=%s status=%s content_type=%s pos=%d line=%d col=%d body_preview=%r',
+                    path,
+                    status,
+                    content_type,
+                    exc.pos,
+                    exc.lineno,
+                    exc.colno,
+                    data[:240],
+                )
+                raise
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f'JYGS invalid JSON for {path}: {exc}') from exc
     except (HTTPError, URLError, TimeoutError) as exc:
+        logger.error('JYGS request failed. path=%s error=%s elapsed_ms=%d', path, exc,
+                     int((time.monotonic() - t0) * 1000))
         raise RuntimeError(f'JYGS request failed for {path}: {exc}') from exc
 
 
 def get_jygs_auth_status(sqlite_path: Path | None = None) -> dict[str, Any]:
     target = sqlite_path or settings.sqlite_path
     ensure_sqlite_schema(target)
-    connection = connect_sqlite(target)
-    try:
-        row = connection.execute(
-            'SELECT auth_cookie, updated_at, last_checked_at, is_valid, last_error FROM jygs_auth WHERE id = 1'
-        ).fetchone()
-    finally:
-        connection.close()
+    row = JygsRepo(target).get_auth_row()
 
     if not row:
         return {
@@ -87,23 +145,7 @@ def save_jygs_auth_cookie(cookie: str, sqlite_path: Path | None = None) -> dict[
     target = sqlite_path or settings.sqlite_path
     ensure_sqlite_schema(target)
     now = _now_iso()
-    connection = connect_sqlite(target)
-    try:
-        connection.execute(
-            '''
-            INSERT INTO jygs_auth (id, auth_cookie, updated_at, last_checked_at, is_valid, last_error)
-            VALUES (1, ?, ?, '', 0, '')
-            ON CONFLICT(id) DO UPDATE SET
-                auth_cookie = excluded.auth_cookie,
-                updated_at = excluded.updated_at,
-                is_valid = 0,
-                last_error = ''
-            ''',
-            [cookie.strip(), now],
-        )
-        connection.commit()
-    finally:
-        connection.close()
+    JygsRepo(target).save_auth_cookie(cookie, now)
     return get_jygs_auth_status(target)
 
 
@@ -118,14 +160,7 @@ def _read_cookie(sqlite_path: Path | None = None) -> str:
     # Legacy fallback (older table-based auth storage), kept for compatibility.
     target = sqlite_path or settings.sqlite_path
     ensure_sqlite_schema(target)
-    connection = connect_sqlite(target)
-    try:
-        row = connection.execute(
-            'SELECT auth_cookie FROM jygs_auth WHERE id = 1'
-        ).fetchone()
-    finally:
-        connection.close()
-    cookie = str(row['auth_cookie'] or '').strip() if row else ''
+    cookie = JygsRepo(target).get_auth_cookie()
     if not cookie:
         raise JygsCredentialError('韭研公社登录凭据未配置，请先在数据初始化页面完成登录。')
     return cookie
@@ -146,22 +181,7 @@ def check_jygs_auth_available(sqlite_path: Path | None = None) -> dict[str, Any]
         message = str(exc)
 
     ensure_sqlite_schema(target)
-    connection = connect_sqlite(target)
-    try:
-        connection.execute(
-            '''
-            INSERT INTO jygs_auth (id, auth_cookie, updated_at, last_checked_at, is_valid, last_error)
-            VALUES (1, '', '', ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                last_checked_at = excluded.last_checked_at,
-                is_valid = excluded.is_valid,
-                last_error = excluded.last_error
-            ''',
-            [now, 1 if is_valid else 0, message],
-        )
-        connection.commit()
-    finally:
-        connection.close()
+    JygsRepo(target).update_auth_check_status(now, is_valid, message)
 
     result = get_jygs_auth_status(target)
     result['last_error'] = message
@@ -181,6 +201,16 @@ def _extract_theme_stock_map(field_payload: dict[str, Any]) -> dict[str, set[str
                 continue
             mapping.setdefault(code, set()).add(theme)
     return mapping
+
+
+def _extract_diagram_urls(diagram_payload: dict[str, Any]) -> list[str]:
+    raw_data = diagram_payload.get('data')
+    if isinstance(raw_data, str):
+        value = raw_data.strip()
+        return [value] if value else []
+    if isinstance(raw_data, list):
+        return [str(item).strip() for item in raw_data if str(item).strip()]
+    return []
 
 
 def _extract_hot_info_rows(
@@ -218,18 +248,10 @@ def _extract_hot_info_rows(
 
 
 def sync_hot_review_by_date(trade_date: str, sqlite_path: Path | None = None) -> dict[str, Any]:
-    """Fetch JYGS review data for a date and write unified hot_sector_* tables."""
-    from app.modules.market_data.hot_sector_importer import (
-        ParsedImage,
-        ParsedStockFact,
-        SectorMappingRecord,
-        _build_daily_aggregates,
-        _build_recent_3d_records,
-        _write_sqlite_data,
-    )
-
+    """Fetch JYGS review data for a date and write to daily_hot_pic/daily_hot_info per data-storage.md spec."""
     target = sqlite_path or settings.sqlite_path
     ensure_sqlite_schema(target)
+    logger.info('JYGS sync start. trade_date=%s sqlite=%s', trade_date, target)
     cookie = _read_cookie(target)
 
     diagram_payload = _post_json('/api/v1/action/diagram-url', {'date': trade_date}, cookie=cookie)
@@ -248,10 +270,10 @@ def sync_hot_review_by_date(trade_date: str, sqlite_path: Path | None = None) ->
         cookie=cookie,
     )
 
-    summary_image_url = str(diagram_payload.get('data') or '').strip()
+    summary_image_urls = _extract_diagram_urls(diagram_payload)
     theme_map = _extract_theme_stock_map(field_payload)
 
-    # Merge stock rows from list API and theme mapping.
+    # Merge stock rows from list API and theme mapping
     stock_rows_by_code: dict[str, dict[str, Any]] = {}
     for stock in list_payload.get('data') or []:
         code = _normalize_stock_code(stock.get('code'))
@@ -261,87 +283,64 @@ def sync_hot_review_by_date(trade_date: str, sqlite_path: Path | None = None) ->
     for code in theme_map:
         stock_rows_by_code.setdefault(code, {})
 
-    source_file = f'jygs_api_{trade_date}'
-    stock_facts: list[ParsedStockFact] = []
-    mappings: list[SectorMappingRecord] = []
-
-    for code, stock in stock_rows_by_code.items():
-        article = stock.get('article') or {}
-        action_info = article.get('action_info') or {}
-        stock_name = str(stock.get('name') or '').strip()
-        streak_text = str(action_info.get('num') or '').strip()
-        reason_raw = str(action_info.get('expound') or '').strip()
-        limit_up_time = str(action_info.get('time') or '').strip()
-
-        board_match = re.search(r'(\d+)板', streak_text)
-        board_count = int(board_match.group(1)) if board_match else None
-
-        sectors = sorted(theme_map.get(code, set()))
-        primary_sector = sectors[0] if sectors else '其他'
-
-        stock_facts.append(
-            ParsedStockFact(
-                trade_date=trade_date,
-                source_file=source_file,
-                stock_code=code,
-                stock_name=stock_name,
-                board_count=board_count,
-                limit_up_time=limit_up_time,
-                reason_raw=reason_raw,
-                reason_clean=reason_raw,
-                ocr_confidence=1.0,
-                needs_review=False,
-                primary_sector_name=primary_sector,
-                primary_sector_alias_hit=primary_sector,
-                primary_sector_order=1,
-                primary_sector_declared_count=max(1, len(sectors)),
+    # Write to daily_hot_pic table (復盤圖片)
+    connection = _connect(target)
+    try:
+        for idx, url in enumerate(summary_image_urls):
+            connection.execute(
+                'DELETE FROM daily_hot_pic WHERE trade_date = ? AND summary_image_url = ?',
+                [trade_date, url],
             )
-        )
-
-        sector_list = sectors or [primary_sector]
-        for idx, sector_name in enumerate(sector_list):
-            mappings.append(
-                SectorMappingRecord(
-                    trade_date=trade_date,
-                    source_file=source_file,
-                    stock_code=code,
-                    sector_name_canonical=sector_name,
-                    sector_alias_hit=sector_name,
-                    is_primary_sector=(idx == 0),
-                    mapping_method='api_theme',
-                    mapping_confidence=1.0,
-                    needs_review=False,
-                )
+            connection.execute(
+                'INSERT INTO daily_hot_pic (trade_date, summary_image_url, source) VALUES (?, ?, ?)',
+                [trade_date, url, 'jygs'],
             )
 
-    parsed_image = ParsedImage(
-        trade_date=trade_date,
-        source_file=source_file,
-        parse_status='parsed',
-        parse_notes=(
-            f'from_api=1, summary_image={1 if summary_image_url else 0}, '
-            f'parsed_stocks={len(stock_facts)}'
-        ),
-        stock_facts=stock_facts,
-        mappings=mappings,
-    )
+        # Write to daily_hot_info table (涨停解析)
+        connection.execute('DELETE FROM daily_hot_info WHERE trade_date = ?', [trade_date])
+        for code, stock in stock_rows_by_code.items():
+            article = stock.get('article') or {}
+            action_info = article.get('action_info') or {}
+            stock_name = str(stock.get('name') or '').strip()
+            streak_text = str(action_info.get('num') or '').strip()
+            reason_raw = str(action_info.get('expound') or '').strip()
+            limit_up_time = str(action_info.get('time') or '').strip()
+            hot_theme = '、'.join(sorted(theme_map.get(code, set())))
 
-    daily_aggregates = _build_daily_aggregates([parsed_image])
-    recent_3d_records = _build_recent_3d_records(daily_aggregates)
-    _write_sqlite_data(
-        sqlite_path=target,
-        import_batch=f'jygs-api-{trade_date}',
-        parsed_images=[parsed_image],
-        daily_aggregates=daily_aggregates,
-        recent_3d_records=recent_3d_records,
+            connection.execute(
+                '''
+                INSERT INTO daily_hot_info (trade_date, limit_up_time, stock_code, name, streak_text, hot_theme, reason,
+                                            source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''',
+                [
+                    trade_date,
+                    limit_up_time,
+                    int(code) if code.isdigit() else 0,
+                    stock_name,
+                    streak_text,
+                    hot_theme,
+                    reason_raw,
+                    'jygs',
+                ],
+            )
+
+        connection.commit()
+    finally:
+        connection.close()
+
+    logger.info(
+        'JYGS sync done. trade_date=%s images=%d stocks=%d',
+        trade_date,
+        len(summary_image_urls),
+        len(stock_rows_by_code),
     )
 
     return {
         'trade_date': trade_date,
-        'image_saved': bool(summary_image_url),
-        'stock_fact_count': len(stock_facts),
-        'sector_mapping_count': len(mappings),
-        'daily_sector_count': len(daily_aggregates),
+        'image_saved': bool(summary_image_urls),
+        'stock_fact_count': len(stock_rows_by_code),
+        'images': len(summary_image_urls),
     }
 
 
@@ -366,16 +365,9 @@ def run_incremental_sync_if_due(sqlite_path: Path | None = None, now: datetime |
     target = sqlite_path or settings.sqlite_path
     ensure_sqlite_schema(target)
 
-    connection = connect_sqlite(target)
-    try:
-        existing = connection.execute(
-            'SELECT slot_key FROM jygs_sync_log WHERE slot_key = ?',
-            [slot_key],
-        ).fetchone()
-        if existing:
-            return {'triggered': False, 'reason': 'slot_already_synced', 'slot_key': slot_key}
-    finally:
-        connection.close()
+    repo = JygsRepo(target)
+    if repo.has_sync_slot(slot_key):
+        return {'triggered': False, 'reason': 'slot_already_synced', 'slot_key': slot_key}
 
     try:
         result = sync_hot_review_by_date(trade_date, sqlite_path=target)
@@ -387,18 +379,14 @@ def run_incremental_sync_if_due(sqlite_path: Path | None = None, now: datetime |
         message = str(exc)
         logger.warning('JYGS incremental sync failed: %s', exc)
 
-    connection = connect_sqlite(target)
-    try:
-        connection.execute(
-            '''
-            INSERT OR REPLACE INTO jygs_sync_log (slot_key, trade_date, mode, status, message, triggered_at)
-            VALUES (?, ?, 'INCREMENTAL', ?, ?, ?)
-            ''',
-            [slot_key, trade_date, status, message, _now_iso()],
-        )
-        connection.commit()
-    finally:
-        connection.close()
+    repo.upsert_sync_log(
+        slot_key=slot_key,
+        trade_date=trade_date,
+        mode='INCREMENTAL',
+        status=status,
+        message=message,
+        triggered_at=_now_iso(),
+    )
 
     return {'triggered': True, 'slot_key': slot_key, 'status': status, 'result': result}
 

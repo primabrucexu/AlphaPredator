@@ -1,0 +1,4028 @@
+openapi: 3.0.3
+info:
+  title: "麦蕊数据 API"
+  version: "2026-05-12"
+  description: "根据 https://mairuiapi.com/hsdata 页面整理。所有接口均为 GET，返回 JSON 数组。"
+servers:
+  - url: "https://api.mairuiapi.com"
+    description: "默认域名"
+tags:
+  - name: "列表与板块"
+  - name: "公司资料"
+  - name: "实时交易"
+  - name: "历史行情"
+  - name: "财务数据"
+  - name: "技术指标"
+paths:
+  "/hslt/list/{licence}":
+    get:
+      tags: [ "列表与板块" ]
+      operationId: "get_hslt_list_1"
+      summary: "股票列表"
+      description: "获取基础的股票代码和名称，用于后续接口的参数传入。"
+      parameters:
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StockListResponse"
+  "/hslt/new/{licence}":
+    get:
+      tags: [ "列表与板块" ]
+      operationId: "get_hslt_new_2"
+      summary: "新股日历"
+      description: "新股日历，按申购日期倒序。"
+      parameters:
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NewStockCalendarResponse"
+  "/hslt/sectorslist/{licence}":
+    get:
+      tags: [ "列表与板块" ]
+      operationId: "get_hslt_sectorslist_3"
+      summary: "概念指数列表（券商数据）"
+      description: "获取基础的概念指数代码和名称，用于后续接口的参数传入。"
+      parameters:
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConceptIndexListResponse"
+  "/hslt/primarylist/{licence}":
+    get:
+      tags: [ "列表与板块" ]
+      operationId: "get_hslt_primarylist_4"
+      summary: "一级市场板块列表（券商数据）"
+      description: "获取基础的一级市场板块名称，用于后续接口的参数传入。"
+      parameters:
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrimarySectorListResponse"
+  "/hslt/sectors/{sector_name}/{licence}":
+    get:
+      tags: [ "列表与板块" ]
+      operationId: "get_hslt_sectors_5"
+      summary: "板块明细列表（券商数据）"
+      description: "依据《一级市场板块列表》获取的一级市场板块名称，获取对应的板块列表。"
+      parameters:
+        - $ref: "#/components/parameters/SectorName"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SectorDetailListResponse"
+  "/hszg/list/{licence}":
+    get:
+      tags: [ "列表与板块" ]
+      operationId: "get_hszg_list_6"
+      summary: "指数、行业、概念树"
+      description: "获取指数、行业、概念（包括基金，债券，美股，外汇，期货，黄金等的代码），其中isleaf为1（叶子节点）的记录的code（代码）可以作为下方接口的参数传入，从而得到某个指数、行业、概念下的相关股票。"
+      parameters:
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConceptTreeResponse"
+  "/hszg/gg/{concept_code}/{licence}":
+    get:
+      tags: [ "列表与板块" ]
+      operationId: "get_hszg_gg_7"
+      summary: "根据指数、行业、概念找相关股票"
+      description: "根据“指数、行业、概念树”接口得到的代码作为参数，得到相关的股票。"
+      parameters:
+        - $ref: "#/components/parameters/ConceptCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StocksByConceptResponse"
+  "/hszg/zg/{stock_code}/{licence}":
+    get:
+      tags: [ "列表与板块" ]
+      operationId: "get_hszg_zg_8"
+      summary: "根据股票找相关指数、行业、概念"
+      description: "根据《股票列表》得到的股票代码作为参数，得到相关的指数、行业、概念。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConceptsByStockResponse"
+  "/hslt/ztgc/{date}/{licence}":
+    get:
+      tags: [ "列表与板块" ]
+      operationId: "get_hslt_ztgc_9"
+      summary: "涨停股池"
+      description: "根据日期（格式yyyy-MM-dd，例如2026-01-01）作为参数，得到每天的涨停股票列表，根据封板时间升序，该接口可获取30天左右的数据。"
+      parameters:
+        - $ref: "#/components/parameters/TradeDate"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LimitUpPoolResponse"
+  "/hslt/dtgc/{date}/{licence}":
+    get:
+      tags: [ "列表与板块" ]
+      operationId: "get_hslt_dtgc_10"
+      summary: "跌停股池"
+      description: "根据日期（格式yyyy-MM-dd，例如2026-01-01）作为参数，得到每天的跌停股票列表，根据封单资金升序，该接口可获取30天左右的数据。"
+      parameters:
+        - $ref: "#/components/parameters/TradeDate"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LimitDownPoolResponse"
+  "/hslt/qsgc/{date}/{licence}":
+    get:
+      tags: [ "列表与板块" ]
+      operationId: "get_hslt_qsgc_11"
+      summary: "强势股池"
+      description: "根据日期（格式yyyy-MM-dd，例如2026-01-01）作为参数，得到每天的强势股票列表，根据涨幅倒序，该接口可获取30天左右的数据。"
+      parameters:
+        - $ref: "#/components/parameters/TradeDate"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StrongStockPoolResponse"
+  "/hslt/cxgc/{date}/{licence}":
+    get:
+      tags: [ "列表与板块" ]
+      operationId: "get_hslt_cxgc_12"
+      summary: "次新股池"
+      description: "根据日期（格式yyyy-MM-dd，例如2026-01-01）作为参数，得到每天的次新股票列表，根据开板几日升序，该接口可获取30天左右的数据。"
+      parameters:
+        - $ref: "#/components/parameters/TradeDate"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecentIpoPoolResponse"
+  "/hslt/zbgc/{date}/{licence}":
+    get:
+      tags: [ "列表与板块" ]
+      operationId: "get_hslt_zbgc_13"
+      summary: "炸板股池"
+      description: "根据日期（格式yyyy-MM-dd，例如2026-01-01）作为参数，得到每天的炸板股票列表，根据首次封板时间升序，该接口可获取30天左右的数据。"
+      parameters:
+        - $ref: "#/components/parameters/TradeDate"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrokenLimitPoolResponse"
+  "/hscp/gsjj/{stock_code}/{licence}":
+    get:
+      tags: [ "公司资料" ]
+      operationId: "get_hscp_gsjj_14"
+      summary: "公司简介"
+      description: "根据《股票列表》得到的股票代码获取上市公司的简介。包括公司基本信息，概念以及发行信息等。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanyProfileResponse"
+  "/hscp/sszs/{stock_code}/{licence}":
+    get:
+      tags: [ "公司资料" ]
+      operationId: "get_hscp_sszs_15"
+      summary: "所属指数"
+      description: "根据《股票列表》得到的股票代码获取上市公司的所属指数。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanyIndexMembershipResponse"
+  "/hscp/ljgg/{stock_code}/{licence}":
+    get:
+      tags: [ "公司资料" ]
+      operationId: "get_hscp_ljgg_16"
+      summary: "历届高管成员"
+      description: "根据《股票列表》得到的股票代码获取上市公司的历届高管成员名单。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanyExecutiveHistoryResponse"
+  "/hscp/ljds/{stock_code}/{licence}":
+    get:
+      tags: [ "公司资料" ]
+      operationId: "get_hscp_ljds_17"
+      summary: "历届董事会成员"
+      description: "根据《股票列表》得到的股票代码获取上市公司的历届董事会成员名单。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanyBoardHistoryResponse"
+  "/hscp/ljjj/{stock_code}/{licence}":
+    get:
+      tags: [ "公司资料" ]
+      operationId: "get_hscp_ljjj_18"
+      summary: "历届监事会成员"
+      description: "根据《股票列表》得到的股票代码获取上市公司的历届监事会成员名单。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanySupervisorHistoryResponse"
+  "/hscp/jnfh/{stock_code}/{licence}":
+    get:
+      tags: [ "公司资料" ]
+      operationId: "get_hscp_jnfh_19"
+      summary: "近年分红"
+      description: "根据《股票列表》得到的股票代码获取上市公司的近年来的分红实施结果。按公告日期倒序。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanyDividendHistoryResponse"
+  "/hscp/jnzf/{stock_code}/{licence}":
+    get:
+      tags: [ "公司资料" ]
+      operationId: "get_hscp_jnzf_20"
+      summary: "近年增发"
+      description: "根据《股票列表》得到的股票代码获取上市公司的近年来的增发情况。按公告日期倒序。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanyPrivatePlacementHistoryResponse"
+  "/hscp/jjxs/{stock_code}/{licence}":
+    get:
+      tags: [ "公司资料" ]
+      operationId: "get_hscp_jjxs_21"
+      summary: "解禁限售"
+      description: "根据《股票列表》得到的股票代码获取上市公司的解禁限售情况。按解禁日期倒序。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanyUnlockScheduleResponse"
+  "/hscp/jdlr/{stock_code}/{licence}":
+    get:
+      tags: [ "公司资料" ]
+      operationId: "get_hscp_jdlr_22"
+      summary: "近一年各季度利润"
+      description: "根据《股票列表》得到的股票代码获取上市公司近一年各个季度的利润。按截止日期倒序。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanyQuarterlyProfitResponse"
+  "/hscp/jdxj/{stock_code}/{licence}":
+    get:
+      tags: [ "公司资料" ]
+      operationId: "get_hscp_jdxj_23"
+      summary: "近一年各季度现金流"
+      description: "根据《股票列表》得到的股票代码获取上市公司近一年各个季度的现金流。按截止日期倒序。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanyQuarterlyCashflowResponse"
+  "/hscp/yjyg/{stock_code}/{licence}":
+    get:
+      tags: [ "公司资料" ]
+      operationId: "get_hscp_yjyg_24"
+      summary: "近年业绩预告"
+      description: "根据《股票列表》得到的股票代码获取上市公司近年来的业绩预告。按公告日期倒序。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanyEarningsForecastResponse"
+  "/hscp/cwzb/{stock_code}/{licence}":
+    get:
+      tags: [ "公司资料" ]
+      operationId: "get_hscp_cwzb_25"
+      summary: "财务指标"
+      description: "根据《股票列表》得到的股票代码获取上市公司近四个季度的主要财务指标。按报告日期倒序。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanyFinancialIndicatorResponse"
+  "/hscp/sdgd/{stock_code}/{licence}":
+    get:
+      tags: [ "公司资料" ]
+      operationId: "get_hscp_sdgd_26"
+      summary: "十大股东"
+      description: "根据《股票列表》得到的股票代码获取上市公司的十大股东数据。按截止日期倒序。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanyTopShareholderResponse"
+  "/hscp/ltgd/{stock_code}/{licence}":
+    get:
+      tags: [ "公司资料" ]
+      operationId: "get_hscp_ltgd_27"
+      summary: "十大流通股东"
+      description: "根据《股票列表》得到的股票代码获取上市公司的十大流通股东数据。按公告日期倒序。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanyTopFloatShareholderResponse"
+  "/hscp/gdbh/{stock_code}/{licence}":
+    get:
+      tags: [ "公司资料" ]
+      operationId: "get_hscp_gdbh_28"
+      summary: "股东变化趋势"
+      description: "根据《股票列表》得到的股票代码获取上市公司的股东变化趋势数据。按截止日期倒序。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanyShareholderTrendResponse"
+  "/hscp/jjcg/{stock_code}/{licence}":
+    get:
+      tags: [ "公司资料" ]
+      operationId: "get_hscp_jjcg_29"
+      summary: "基金持股"
+      description: "根据《股票列表》得到的股票代码获取该股票最近500家左右的基金持股情况。按截止日期倒序。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompanyFundHoldingResponse"
+  "/hsrl/ssjy/{stock_code}/{licence}":
+    get:
+      tags: [ "实时交易" ]
+      operationId: "get_hsrl_ssjy_30"
+      summary: "实时交易数据（网络数据源）"
+      description: "根据《股票列表》得到的股票代码获取实时交易数据（您可以理解为日线的最新数据），该接口为网络公开数据源，非券商数据源。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RealtimeTradeNetworkResponse"
+  "/hsrl/zbjy/{stock_code}/{licence}":
+    get:
+      tags: [ "实时交易" ]
+      operationId: "get_hsrl_zbjy_31"
+      summary: "当天逐笔交易"
+      description: "根据《股票列表》得到的股票代码获取当天逐笔交易数据，按时间倒序。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TickTradeTodayResponse"
+  "/hsstock/real/time/{stock_code}/{licence}":
+    get:
+      tags: [ "实时交易" ]
+      operationId: "get_hsstock_real_time_32"
+      summary: "实时交易数据（券商数据源）"
+      description: "根据《股票列表》得到的股票代码获取实时交易数据（您可以理解为日线的最新数据）。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RealtimeTradeBrokerResponse"
+  "/hsstock/real/five/{stock_code}/{licence}":
+    get:
+      tags: [ "实时交易" ]
+      operationId: "get_hsstock_real_five_33"
+      summary: "买卖五档盘口"
+      description: "根据《股票列表》得到的股票代码获取实时买卖五档盘口数据。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderBookFiveLevelResponse"
+  "/hsrl/ssjy/all/{licence}":
+    get:
+      tags: [ "实时交易" ]
+      operationId: "get_hsrl_ssjy_all_34"
+      summary: "实时交易数据（全部 | 券商数据源）"
+      description: "一次性获取《股票列表》中所有股票的实时交易数据（您可以理解为日线的最新数据），该接口仅限钻石版和包年版证书使用且限制每分钟请求1次。"
+      parameters:
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RealtimeTradeAllNetworkResponse"
+  "/hsrl/ssjy_more/{licence}":
+    get:
+      tags: [ "实时交易" ]
+      operationId: "get_hsrl_ssjy_more_35"
+      summary: "实时交易数据（多股）"
+      description: "一次性获取《股票列表》中不超过20支股票的实时交易数据（您可以理解为日线的最新数据）"
+      parameters:
+        - $ref: "#/components/parameters/Licence"
+        - $ref: "#/components/parameters/StockCodes"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RealtimeTradeMultiStockResponse"
+  "/hsrl/real/all/{licence}":
+    get:
+      tags: [ "实时交易" ]
+      operationId: "get_hsrl_real_all_36"
+      summary: "实时交易数据（全部 | 网络数据源）"
+      description: "一次性获取《股票列表》中所有股票的实时交易数据（您可以理解为日线的最新数据），该接口仅限钻石版和包年版证书使用且限制每分钟请求1次。"
+      parameters:
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RealtimeTradeAllBrokerResponse"
+  "/hsstock/history/transaction/{stock_code}/{licence}":
+    get:
+      tags: [ "历史行情" ]
+      operationId: "get_hsstock_history_transaction_37"
+      summary: "资金流向数据"
+      description: "根据《股票列表》得到的股票代码获取资金流向数据。开始时间以及结束时间的格式均为 YYYYMMDD，例如：'20240101'，不设置开始时间和结束时间则为全部历史数据。同时可以指定获取数据条数，例如指定lt=10，则获取最新的10条数据。下列字段中，特大单为成交金额大于或等于100万元或成交量大于或等于5000手，大单为成交金额大于或等于20万元或成交量大于或等于1000手，中单为成交金额大于或等于4万元或成交量大于或等于200手，其他为小单。"
+      parameters:
+        - $ref: "#/components/parameters/StockCode"
+        - $ref: "#/components/parameters/Licence"
+        - $ref: "#/components/parameters/StartTime"
+        - $ref: "#/components/parameters/EndTime"
+        - $ref: "#/components/parameters/LimitCount"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CapitalFlowHistoryResponse"
+  "/hsstock/latest/{market_code}/{interval}/{adjust_type}/{licence}":
+    get:
+      tags: [ "历史行情" ]
+      operationId: "get_hsstock_latest_38"
+      summary: "最新分时交易"
+      description: "根据《股票列表》得到的股票代码和分时级别获取最新交易数据，交易时间升序。目前分时级别支持5分钟、15分钟、30分钟、60分钟、日线、周线、月线、年线，对应的请求参数分别为5、15、30、60、d、w、m、y，日线以上除权方式有不复权、前复权、后复权、等比前复权、等比后复权，对应的参数分别为n、f、b、fr、br，分钟级无除权数据，对应的参数为n。同时可以指定获取数据条数，例如指定lt=3，则获取最新的3条数据，最多可获取5条数据。"
+      parameters:
+        - $ref: "#/components/parameters/MarketCode"
+        - $ref: "#/components/parameters/Interval"
+        - $ref: "#/components/parameters/AdjustType"
+        - $ref: "#/components/parameters/Licence"
+        - $ref: "#/components/parameters/LimitCount"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LatestKlineResponse"
+  "/hsstock/history/{market_code}/{interval}/{adjust_type}/{licence}":
+    get:
+      tags: [ "历史行情" ]
+      operationId: "get_hsstock_history_39"
+      summary: "历史分时交易"
+      description: "根据《股票列表》得到的股票代码和分时级别获取历史交易数据，交易时间升序。目前分时级别支持5分钟、15分钟、30分钟、60分钟、日线、周线、月线、年线，对应的请求参数分别为5、15、30、60、d、w、m、y，日线以上除权方式有不复权、前复权、后复权、等比前复权、等比后复权，对应的参数分别为n、f、b、fr、br，分钟级无除权数据，对应的参数为n。开始时间以及结束时间的格式均为 YYYYMMDD 或 YYYYMMDDhhmmss，例如：'20240101' 或'20241231235959'。不设置开始时间和结束时间则为全部历史数据。同时可以指定获取数据条数，例如指定lt=10，则获取最新的10条数据。"
+      parameters:
+        - $ref: "#/components/parameters/MarketCode"
+        - $ref: "#/components/parameters/Interval"
+        - $ref: "#/components/parameters/AdjustType"
+        - $ref: "#/components/parameters/Licence"
+        - $ref: "#/components/parameters/StartTime"
+        - $ref: "#/components/parameters/EndTime"
+        - $ref: "#/components/parameters/LimitCount"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KlineHistoryResponse"
+  "/hsstock/stopprice/history/{market_code}/{licence}":
+    get:
+      tags: [ "历史行情" ]
+      operationId: "get_hsstock_stopprice_history_40"
+      summary: "历史涨跌停价格"
+      description: "根据《股票列表》得到的股票代码获取历史涨跌停价格，开始时间以及结束时间的格式均为 YYYYMMDD，例如：'20240101'。不设置开始时间和结束时间则为全部历史数据。"
+      parameters:
+        - $ref: "#/components/parameters/MarketCode"
+        - $ref: "#/components/parameters/Licence"
+        - $ref: "#/components/parameters/StartTime"
+        - $ref: "#/components/parameters/EndTime"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PriceLimitHistoryResponse"
+  "/hsstock/indicators/{market_code}/{licence}":
+    get:
+      tags: [ "历史行情" ]
+      operationId: "get_hsstock_indicators_41"
+      summary: "行情指标"
+      description: "根据《股票列表》得到的股票代码获取各项行情指标，开始时间以及结束时间的格式均为 YYYYMMDD，例如：'20240101'。不设置开始时间和结束时间则为全部数据。"
+      parameters:
+        - $ref: "#/components/parameters/MarketCode"
+        - $ref: "#/components/parameters/Licence"
+        - $ref: "#/components/parameters/StartTime"
+        - $ref: "#/components/parameters/EndTime"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketIndicatorHistoryResponse"
+  "/hsstock/vip/{market_code}/{interval}/{adjust_type}/{licence}":
+    get:
+      tags: [ "历史行情" ]
+      operationId: "get_hsstock_vip_42"
+      summary: "企业版历史数据【1m级别】"
+      description: "【支持1分钟级】【因该接口为企业专属服务器直接对接券商数据源，故仅限企业版用户使用】根据《股票列表》得到的股票代码和分时级别获取历史交易数据，交易时间升序。目前分时级别支持1分钟、5分钟、15分钟、30分钟、60分钟、日线、周线、月线、年线，对应的请求参数分别为1、5、15、30、60、d、w、m、y，日线以上除权方式有不复权、前复权、后复权、等比前复权、等比后复权，对应的参数分别为n、f、b、fr、br。分钟级历史数据为最近3年以内，日线以上为上市以后所有数据。开始时间以及结束时间的格式均为 YYYYMMDD 或 YYYYMMDDhhmmss，例如：'20240101' 或'20241231235959'。不设置开始时间和结束时间则为全部历史数据。同时可以指定获取数据条数，例如指定lt=10，则获取最新的10条数据。"
+      parameters:
+        - $ref: "#/components/parameters/MarketCode"
+        - $ref: "#/components/parameters/Interval"
+        - $ref: "#/components/parameters/AdjustType"
+        - $ref: "#/components/parameters/Licence"
+        - $ref: "#/components/parameters/StartTime"
+        - $ref: "#/components/parameters/EndTime"
+        - $ref: "#/components/parameters/LimitCount"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseKlineHistoryResponse"
+  "/hsstock/instrument/{market_code}/{licence}":
+    get:
+      tags: [ "实时交易" ]
+      operationId: "get_hsstock_instrument_43"
+      summary: "股票基础信息"
+      description: "依据《股票列表》中的股票代码获取股票的基础信息"
+      parameters:
+        - $ref: "#/components/parameters/MarketCode"
+        - $ref: "#/components/parameters/Licence"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StockInstrumentInfoResponse"
+  "/hsstock/financial/balance/{market_code}/{licence}":
+    get:
+      tags: [ "财务数据" ]
+      operationId: "get_hsstock_financial_balance_44"
+      summary: "资产负债表"
+      description: "根据《股票列表》得到的股票代码获取资产负债表，开始时间以及结束时间的格式均为 YYYYMMDD，例如：'20240101'。不设置开始时间和结束时间则为全部数据。"
+      parameters:
+        - $ref: "#/components/parameters/MarketCode"
+        - $ref: "#/components/parameters/Licence"
+        - $ref: "#/components/parameters/StartTime"
+        - $ref: "#/components/parameters/EndTime"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BalanceSheetResponse"
+  "/hsstock/financial/income/{market_code}/{licence}":
+    get:
+      tags: [ "财务数据" ]
+      operationId: "get_hsstock_financial_income_45"
+      summary: "利润表"
+      description: "根据《股票列表》得到的股票代码获取利润表，开始时间以及结束时间的格式均为 YYYYMMDD，例如：'20240101'。不设置开始时间和结束时间则为全部数据。"
+      parameters:
+        - $ref: "#/components/parameters/MarketCode"
+        - $ref: "#/components/parameters/Licence"
+        - $ref: "#/components/parameters/StartTime"
+        - $ref: "#/components/parameters/EndTime"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncomeStatementResponse"
+  "/hsstock/financial/cashflow/{market_code}/{licence}":
+    get:
+      tags: [ "财务数据" ]
+      operationId: "get_hsstock_financial_cashflow_46"
+      summary: "现金流量表"
+      description: "根据《股票列表》得到的股票代码获取现金流量表，开始时间以及结束时间的格式均为 YYYYMMDD，例如：'20240101'。不设置开始时间和结束时间则为全部数据。"
+      parameters:
+        - $ref: "#/components/parameters/MarketCode"
+        - $ref: "#/components/parameters/Licence"
+        - $ref: "#/components/parameters/StartTime"
+        - $ref: "#/components/parameters/EndTime"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CashflowStatementResponse"
+  "/hsstock/financial/pershareindex/{market_code}/{licence}":
+    get:
+      tags: [ "财务数据" ]
+      operationId: "get_hsstock_financial_pershareindex_47"
+      summary: "财务主要指标"
+      description: "根据《股票列表》得到的股票代码获取财务主要指标，开始时间以及结束时间的格式均为 YYYYMMDD，例如：'20240101'。不设置开始时间和结束时间则为全部数据。"
+      parameters:
+        - $ref: "#/components/parameters/MarketCode"
+        - $ref: "#/components/parameters/Licence"
+        - $ref: "#/components/parameters/StartTime"
+        - $ref: "#/components/parameters/EndTime"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PerShareMetricResponse"
+  "/hsstock/financial/capital/{market_code}/{licence}":
+    get:
+      tags: [ "财务数据" ]
+      operationId: "get_hsstock_financial_capital_48"
+      summary: "公司股本表"
+      description: "根据《股票列表》得到的股票代码获取公司股本表，开始时间以及结束时间的格式均为 YYYYMMDD，例如：'20240101'。不设置开始时间和结束时间则为全部数据。"
+      parameters:
+        - $ref: "#/components/parameters/MarketCode"
+        - $ref: "#/components/parameters/Licence"
+        - $ref: "#/components/parameters/StartTime"
+        - $ref: "#/components/parameters/EndTime"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CapitalStructureResponse"
+  "/hsstock/financial/topholder/{market_code}/{licence}":
+    get:
+      tags: [ "财务数据" ]
+      operationId: "get_hsstock_financial_topholder_49"
+      summary: "公司十大股东"
+      description: "根据《股票列表》得到的股票代码获取公司十大股东，开始时间以及结束时间的格式均为 YYYYMMDD，例如：'20240101'。不设置开始时间和结束时间则为全部数据。"
+      parameters:
+        - $ref: "#/components/parameters/MarketCode"
+        - $ref: "#/components/parameters/Licence"
+        - $ref: "#/components/parameters/StartTime"
+        - $ref: "#/components/parameters/EndTime"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FinancialTopShareholderResponse"
+  "/hsstock/financial/flowholder/{market_code}/{licence}":
+    get:
+      tags: [ "财务数据" ]
+      operationId: "get_hsstock_financial_flowholder_50"
+      summary: "公司十大流通股东"
+      description: "根据《股票列表》得到的股票代码获取公司十大流通股东，开始时间以及结束时间的格式均为 YYYYMMDD，例如：'20240101'。不设置开始时间和结束时间则为全部数据。"
+      parameters:
+        - $ref: "#/components/parameters/MarketCode"
+        - $ref: "#/components/parameters/Licence"
+        - $ref: "#/components/parameters/StartTime"
+        - $ref: "#/components/parameters/EndTime"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FinancialTopFloatShareholderResponse"
+  "/hsstock/financial/hm/{market_code}/{licence}":
+    get:
+      tags: [ "财务数据" ]
+      operationId: "get_hsstock_financial_hm_51"
+      summary: "公司股东数"
+      description: "根据《股票列表》得到的股票代码获取公司股东数，开始时间以及结束时间的格式均为 YYYYMMDD，例如：'20240101'。不设置开始时间和结束时间则为全部数据。"
+      parameters:
+        - $ref: "#/components/parameters/MarketCode"
+        - $ref: "#/components/parameters/Licence"
+        - $ref: "#/components/parameters/StartTime"
+        - $ref: "#/components/parameters/EndTime"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShareholderCountHistoryResponse"
+  "/hsstock/history/macd/{market_code}/{interval}/{adjust_type}/{licence}":
+    get:
+      tags: [ "技术指标" ]
+      operationId: "get_hsstock_history_macd_52"
+      summary: "历史分时MACD"
+      description: "根据《股票列表》得到的股票代码和分时级别获取历史MACD数据，交易时间升序。目前分时级别支持5分钟、15分钟、30分钟、60分钟、日线、周线、月线、年线，对应的请求参数分别为5、15、30、60、d、w、m、y，日线以上除权方式有不复权、前复权、后复权、等比前复权、等比后复权，对应的参数分别为n、f、b、fr、br，分钟级仅限请求不复权数据，对应的参数为n。开始时间以及结束时间的格式均为 YYYYMMDD 或 YYYYMMDDhhmmss，例如：'20240101' 或'20241231235959'。不设置开始时间和结束时间则为全部历史数据。同时可以指定获取数据条数，例如指定lt=10，则获取最新的10条数据。"
+      parameters:
+        - $ref: "#/components/parameters/MarketCode"
+        - $ref: "#/components/parameters/Interval"
+        - $ref: "#/components/parameters/AdjustType"
+        - $ref: "#/components/parameters/Licence"
+        - $ref: "#/components/parameters/StartTime"
+        - $ref: "#/components/parameters/EndTime"
+        - $ref: "#/components/parameters/LimitCount"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MacdHistoryResponse"
+  "/hsstock/history/ma/{market_code}/{interval}/{adjust_type}/{licence}":
+    get:
+      tags: [ "技术指标" ]
+      operationId: "get_hsstock_history_ma_53"
+      summary: "历史分时MA"
+      description: "根据《股票列表》得到的股票代码和分时级别获取历史MA数据，交易时间升序。目前分时级别支持5分钟、15分钟、30分钟、60分钟、日线、周线、月线、年线，对应的请求参数分别为5、15、30、60、d、w、m、y，日线以上除权方式有不复权、前复权、后复权、等比前复权、等比后复权，对应的参数分别为n、f、b、fr、br，分钟级仅限请求不复权数据，对应的参数为n。开始时间以及结束时间的格式均为 YYYYMMDD 或 YYYYMMDDhhmmss，例如：'20240101' 或'20241231235959'。不设置开始时间和结束时间则为全部历史数据。同时可以指定获取数据条数，例如指定lt=10，则获取最新的10条数据。"
+      parameters:
+        - $ref: "#/components/parameters/MarketCode"
+        - $ref: "#/components/parameters/Interval"
+        - $ref: "#/components/parameters/AdjustType"
+        - $ref: "#/components/parameters/Licence"
+        - $ref: "#/components/parameters/StartTime"
+        - $ref: "#/components/parameters/EndTime"
+        - $ref: "#/components/parameters/LimitCount"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MaHistoryResponse"
+  "/hsstock/history/boll/{market_code}/{interval}/{adjust_type}/{licence}":
+    get:
+      tags: [ "技术指标" ]
+      operationId: "get_hsstock_history_boll_54"
+      summary: "历史分时BOLL"
+      description: "根据《股票列表》得到的股票代码和分时级别获取历史BOLL数据，交易时间升序。目前分时级别支持5分钟、15分钟、30分钟、60分钟、日线、周线、月线、年线，对应的请求参数分别为5、15、30、60、d、w、m、y，日线以上除权方式有不复权、前复权、后复权、等比前复权、等比后复权，对应的参数分别为n、f、b、fr、br，分钟级仅限请求不复权数据，对应的参数为n。开始时间以及结束时间的格式均为 YYYYMMDD 或 YYYYMMDDhhmmss，例如：'20240101' 或'20241231235959'。不设置开始时间和结束时间则为全部历史数据。同时可以指定获取数据条数，例如指定lt=10，则获取最新的10条数据。"
+      parameters:
+        - $ref: "#/components/parameters/MarketCode"
+        - $ref: "#/components/parameters/Interval"
+        - $ref: "#/components/parameters/AdjustType"
+        - $ref: "#/components/parameters/Licence"
+        - $ref: "#/components/parameters/StartTime"
+        - $ref: "#/components/parameters/EndTime"
+        - $ref: "#/components/parameters/LimitCount"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BollHistoryResponse"
+  "/hsstock/history/kdj/{market_code}/{interval}/{adjust_type}/{licence}":
+    get:
+      tags: [ "技术指标" ]
+      operationId: "get_hsstock_history_kdj_55"
+      summary: "历史分时KDJ"
+      description: "根据《股票列表》得到的股票代码和分时级别获取历史KDJ数据，交易时间升序。目前分时级别支持5分钟、15分钟、30分钟、60分钟、日线、周线、月线、年线，对应的请求参数分别为5、15、30、60、d、w、m、y，日线以上除权方式有不复权、前复权、后复权、等比前复权、等比后复权，对应的参数分别为n、f、b、fr、br，分钟级仅限请求不复权数据，对应的参数为n。开始时间以及结束时间的格式均为 YYYYMMDD 或 YYYYMMDDhhmmss，例如：'20240101' 或'20241231235959'。不设置开始时间和结束时间则为全部历史数据。同时可以指定获取数据条数，例如指定lt=10，则获取最新的10条数据。"
+      parameters:
+        - $ref: "#/components/parameters/MarketCode"
+        - $ref: "#/components/parameters/Interval"
+        - $ref: "#/components/parameters/AdjustType"
+        - $ref: "#/components/parameters/Licence"
+        - $ref: "#/components/parameters/StartTime"
+        - $ref: "#/components/parameters/EndTime"
+        - $ref: "#/components/parameters/LimitCount"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KdjHistoryResponse"
+components:
+  parameters:
+    Licence:
+      in: "path"
+      name: "licence"
+      required: true
+      description: "Mairui licence，如 LICENCE-xxxx-xxxx"
+      schema:
+        type: "string"
+        example: "LICENCE-66D8-9F96-0C7F0FBCD073"
+    StockCode:
+      in: "path"
+      name: "stock_code"
+      required: true
+      description: "6位股票代码，如 000001"
+      schema:
+        type: "string"
+        example: "000001"
+    MarketCode:
+      in: "path"
+      name: "market_code"
+      required: true
+      description: "带市场后缀代码，如 000001.SZ"
+      schema:
+        type: "string"
+        example: "000001.SZ"
+    TradeDate:
+      in: "path"
+      name: "date"
+      required: true
+      description: "交易日期，格式 yyyy-MM-dd"
+      schema:
+        type: "string"
+        example: "2020-01-15"
+    SectorName:
+      in: "path"
+      name: "sector_name"
+      required: true
+      description: "板块指数名称，如 概念指数"
+      schema:
+        type: "string"
+        example: "概念指数"
+    ConceptCode:
+      in: "path"
+      name: "concept_code"
+      required: true
+      description: "指数/行业/概念代码"
+      schema:
+        type: "string"
+        example: "BK0917"
+    Interval:
+      in: "path"
+      name: "interval"
+      required: true
+      description: "分时级别枚举：5=5分钟，15=15分钟，30=30分钟，60=60分钟，d=日线，w=周线，m=月线，y=年线"
+      schema:
+        type: "string"
+        enum: [ "5", "15", "30", "60", "d", "w", "m", "y" ]
+        example: "d"
+    AdjustType:
+      in: "path"
+      name: "adjust_type"
+      required: true
+      description: "除权方式枚举：n=不复权，f=前复权，b=后复权，fr=等比前复权，br=等比后复权"
+      schema:
+        type: "string"
+        enum: [ "n", "f", "b", "fr", "br" ]
+        example: "n"
+    StockCodes:
+      in: "query"
+      name: "stock_codes"
+      required: false
+      description: "逗号分隔股票代码列表，最多20只"
+      schema:
+        type: "string"
+        example: "000001,000002,000004"
+    StartTime:
+      in: "query"
+      name: "st"
+      required: false
+      description: "开始时间，按接口要求传 yyyyMMdd 或 yyyy-MM-dd"
+      schema:
+        type: "string"
+        example: "20240601"
+    EndTime:
+      in: "query"
+      name: "et"
+      required: false
+      description: "结束时间，按接口要求传 yyyyMMdd 或 yyyy-MM-dd"
+      schema:
+        type: "string"
+        example: "20250430"
+    LimitCount:
+      in: "query"
+      name: "lt"
+      required: false
+      description: "返回最新条数"
+      schema:
+        type: "integer"
+        example: 100
+  schemas:
+    StockListResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          dm:
+            type: "string"
+            description: "有交易所代码的股票代码，如：000001.SZ"
+          mc:
+            type: "string"
+            description: "股票名称，如：平安银行"
+          jys:
+            type: "string"
+            description: "交易所，\"sh\"表示上证，\"sz\"表示深证"
+        additionalProperties: true
+    NewStockCalendarResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          zqdm:
+            type: "string"
+            description: "股票代码"
+          zqjc:
+            type: "string"
+            description: "股票简称"
+          sgdm:
+            type: "string"
+            description: "申购代码"
+          fxsl:
+            type: "number"
+            description: "发行总数（股）"
+          swfxsl:
+            type: "number"
+            description: "网上发行（股）"
+          sgsx:
+            type: "number"
+            description: "申购上限（股）"
+          dgsz:
+            type: "number"
+            description: "顶格申购需配市值(元)"
+          sgrq:
+            type: "string"
+            description: "申购日期"
+          fxjg:
+            type: "number"
+            description: "发行价格（元），null为“未知”"
+          zxj:
+            type: "number"
+            description: "最新价（元），null为“未知”"
+          srspj:
+            type: "number"
+            description: "首日收盘价（元），null为“未知”"
+          zqgbrq:
+            type: "string"
+            description: "中签号公布日，null为未知"
+          zqjkrq:
+            type: "string"
+            description: "中签缴款日，null为未知"
+          ssrq:
+            type: "string"
+            description: "上市日期，null为未知"
+          syl:
+            type: "number"
+            description: "发行市盈率，null为“未知”"
+          hysyl:
+            type: "number"
+            description: "行业市盈率"
+          wszql:
+            type: "number"
+            description: "中签率（%），null为“未知”"
+          yzbsl:
+            type: "number"
+            description: "连续一字板数量，null为“未知”"
+          zf:
+            type: "number"
+            description: "涨幅（%），null为“未知”"
+          yqhl:
+            type: "number"
+            description: "每中一签获利（元），null为“未知”"
+          zyyw:
+            type: "string"
+            description: "主营业务"
+        additionalProperties: true
+    ConceptIndexListResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          dm:
+            type: "string"
+            description: "概念指数代码，如：101076.BKZS"
+          mc:
+            type: "string"
+            description: "概念指数名称，如：GN玻璃"
+          jys:
+            type: "string"
+            description: "交易所"
+        additionalProperties: true
+    PrimarySectorListResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          mc:
+            type: "string"
+            description: "一级市场名称，如：1000SW1基础化工"
+        additionalProperties: true
+    SectorDetailListResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          dm:
+            type: "string"
+            description: "板块代码，如：101076.BKZS"
+          mc:
+            type: "string"
+            description: "板块名称，如：GN玻璃"
+          jys:
+            type: "string"
+            description: "交易所"
+        additionalProperties: true
+    ConceptTreeResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          name:
+            type: "string"
+            description: "名称"
+          code:
+            type: "string"
+            description: "代码"
+          type1:
+            type: "number"
+            description: "一级分类（0:A股,1:创业板,2:科创板,3:基金,4:香港股市,5:债券,6:美国股市,7:外汇,8:期货,9:黄金,10:英国股市）"
+          type2:
+            type: "number"
+            description: "二级分类（0:A股-申万行业,1:A股-申万二级,2:A股-热门概念,3:A股-概念板块,4:A股-地域板块,5:A股-证监会行业,6:A股-分类,7:A股-指数成分,8:A股-风险警示,9:A股-大盘指数,10:A股-次新股,11:A股-沪港通,12:A股-深港通,13:基金-封闭式基金,14:基金-开放式基金,15:基金-货币型基金,16:基金-ETF基金净值,17:基金-ETF基金行情,18:基金-LOF基金行情,21:基金-科创板基金,22:香港股市-恒生行业,23:香港股市-全部港股,24:香港股市-热门港股,25:香港股市-蓝筹股,26:香港股市-红筹股,27:香港股市-国企股,28:香港股市-创业板,29:香港股市-指数,30:香港股市-A+H,31:香港股市-窝轮,32:香港股市-ADR,33:香港股市-沪港通,34:香港股市-深港通,35:香港股市-中华系列指数,36:债券-沪深债券,37:债券-深市债券,38:债券-沪市债券,39:债券-沪深可转债,40:美国股市-中国概念股,41:美国股市-科技类,42:美国股市-金融类,43:美国股市-制造零售类,44:美国股市-汽车能源类,45:美国股市-媒体类,46:美国股市-医药食品类,48:外汇-基本汇率,49:外汇-热门汇率,50:外汇-所有汇率,51:外汇-交叉盘汇率,52:外汇-美元相关汇率,53:外汇-人民币相关汇率,54:期货-全球期货,55:期货-中国金融期货交易所,56:期货-上海期货交易所,57:期货-大连商品交易所,58:期货-郑州商品交易所,59:黄金-黄金现货,60:黄金-黄金期货"
+          level:
+            type: "number"
+            description: "层级，从0开始，根节点为0，二级节点为1，以此类推"
+          pcode:
+            type: "string"
+            description: "父节点代码"
+          pname:
+            type: "string"
+            description: "父节点名称"
+          isleaf:
+            type: "number"
+            description: "是否为叶子节点，0：否，1：是"
+        additionalProperties: true
+    StocksByConceptResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          dm:
+            type: "string"
+            description: "代码（根据接口参数可能是A股股票代码，也可能是其他指数、行业、概念的股票代码）"
+          mc:
+            type: "string"
+            description: "名称（根据接口参数可能是A股股票代码，也可能是其他指数、行业、概念的股票名称）"
+          jys:
+            type: "string"
+            description: "交易所，\"sh\"表示上证，\"sz\"表示深证（如果返回的是A股的股票，那么有值，否则是null）"
+        additionalProperties: true
+    ConceptsByStockResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          code:
+            type: "string"
+            description: "指数、行业、概念代码，如：sw2_650300"
+          name:
+            type: "string"
+            description: "指数、行业、概念名称，如：沪深股市-申万二级-国防军工-地面兵装"
+        additionalProperties: true
+    LimitUpPoolResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          dm:
+            type: "string"
+            description: "代码"
+          mc:
+            type: "string"
+            description: "名称"
+          p:
+            type: "number"
+            description: "价格（元）"
+          zf:
+            type: "number"
+            description: "涨幅（%）"
+          cje:
+            type: "number"
+            description: "成交额（元）"
+          lt:
+            type: "number"
+            description: "流通市值（元）"
+          zsz:
+            type: "number"
+            description: "总市值（元）"
+          hs:
+            type: "number"
+            description: "换手率（%）"
+          lbc:
+            type: "number"
+            description: "连板数"
+          fbt:
+            type: "string"
+            description: "首次封板时间（HH:mm:ss）"
+          lbt:
+            type: "string"
+            description: "最后封板时间（HH:mm:ss）"
+          zj:
+            type: "number"
+            description: "封板资金（元）"
+          zbc:
+            type: "number"
+            description: "炸板次数"
+          tj:
+            type: "string"
+            description: "涨停统计（x天/y板）"
+          hy:
+            type: "string"
+            description: "所属行业"
+        additionalProperties: true
+    LimitDownPoolResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          dm:
+            type: "string"
+            description: "代码"
+          mc:
+            type: "string"
+            description: "名称"
+          p:
+            type: "number"
+            description: "价格（元）"
+          zf:
+            type: "number"
+            description: "跌幅（%）"
+          cje:
+            type: "number"
+            description: "成交额（元）"
+          lt:
+            type: "number"
+            description: "流通市值（元）"
+          zsz:
+            type: "number"
+            description: "总市值（元）"
+          pe:
+            type: "number"
+            description: "动态市盈率"
+          hs:
+            type: "number"
+            description: "换手率（%）"
+          lbc:
+            type: "number"
+            description: "连续跌停次数"
+          lbt:
+            type: "string"
+            description: "最后封板时间（HH:mm:ss）"
+          zj:
+            type: "number"
+            description: "封单资金（元）"
+          fba:
+            type: "number"
+            description: "板上成交额（元）"
+          zbc:
+            type: "number"
+            description: "开板次数"
+        additionalProperties: true
+    StrongStockPoolResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          dm:
+            type: "string"
+            description: "代码"
+          mc:
+            type: "string"
+            description: "名称"
+          p:
+            type: "number"
+            description: "价格（元）"
+          ztp:
+            type: "number"
+            description: "涨停价（元）"
+          zf:
+            type: "number"
+            description: "涨幅（%）"
+          cje:
+            type: "number"
+            description: "成交额（元）"
+          lt:
+            type: "number"
+            description: "流通市值（元）"
+          zsz:
+            type: "number"
+            description: "总市值（元）"
+          zs:
+            type: "number"
+            description: "涨速（%）"
+          nh:
+            type: "number"
+            description: "是否新高（0：否，1：是）"
+          lb:
+            type: "number"
+            description: "量比"
+          hs:
+            type: "number"
+            description: "换手率（%）"
+          tj:
+            type: "string"
+            description: "涨停统计（x天/y板）"
+        additionalProperties: true
+    RecentIpoPoolResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          dm:
+            type: "string"
+            description: "代码"
+          mc:
+            type: "string"
+            description: "名称"
+          p:
+            type: "number"
+            description: "价格（元）"
+          ztp:
+            type: "number"
+            description: "涨停价（元，无涨停价为null）"
+          zf:
+            type: "number"
+            description: "涨跌幅（%）"
+          cje:
+            type: "number"
+            description: "成交额（元）"
+          lt:
+            type: "number"
+            description: "流通市值（元）"
+          zsz:
+            type: "number"
+            description: "总市值（元）"
+          nh:
+            type: "number"
+            description: "是否新高（0：否，1：是）"
+          hs:
+            type: "number"
+            description: "转手率（%）"
+          tj:
+            type: "string"
+            description: "涨停统计（x天/y板）"
+          kb:
+            type: "number"
+            description: "开板几日"
+          od:
+            type: "string"
+            description: "开板日期（yyyyMMdd）"
+          ipod:
+            type: "string"
+            description: "上市日期（yyyyMMdd）"
+        additionalProperties: true
+    BrokenLimitPoolResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          dm:
+            type: "string"
+            description: "代码"
+          mc:
+            type: "string"
+            description: "名称"
+          p:
+            type: "number"
+            description: "价格（元）"
+          ztp:
+            type: "number"
+            description: "涨停价（元）"
+          zf:
+            type: "number"
+            description: "涨跌幅（%）"
+          cje:
+            type: "number"
+            description: "成交额（元）"
+          lt:
+            type: "number"
+            description: "流通市值（元）"
+          zsz:
+            type: "number"
+            description: "总市值（元）"
+          zs:
+            type: "number"
+            description: "涨速（%）"
+          hs:
+            type: "number"
+            description: "转手率（%）"
+          tj:
+            type: "string"
+            description: "涨停统计（x天/y板）"
+          fbt:
+            type: "string"
+            description: "首次封板时间（HH:mm:ss）"
+          zbc:
+            type: "number"
+            description: "炸板次数"
+        additionalProperties: true
+    CompanyProfileResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          name:
+            type: "string"
+            description: "公司名称"
+          ename:
+            type: "string"
+            description: "公司英文名称"
+          market:
+            type: "string"
+            description: "上市市场"
+          idea:
+            type: "string"
+            description: "概念及板块，多个概念由英文逗号分隔"
+          ldate:
+            type: "string"
+            description: "上市日期，格式yyyy-MM-dd"
+          sprice:
+            type: "string"
+            description: "发行价格（元）"
+          principal:
+            type: "string"
+            description: "主承销商"
+          rdate:
+            type: "string"
+            description: "成立日期"
+          rprice:
+            type: "string"
+            description: "注册资本"
+          instype:
+            type: "string"
+            description: "机构类型"
+          organ:
+            type: "string"
+            description: "组织形式"
+          secre:
+            type: "string"
+            description: "董事会秘书"
+          phone:
+            type: "string"
+            description: "公司电话"
+          sphone:
+            type: "string"
+            description: "董秘电话"
+          fax:
+            type: "string"
+            description: "公司传真"
+          sfax:
+            type: "string"
+            description: "董秘传真"
+          email:
+            type: "string"
+            description: "公司电子邮箱"
+          semail:
+            type: "string"
+            description: "董秘电子邮箱"
+          site:
+            type: "string"
+            description: "公司网站"
+          post:
+            type: "string"
+            description: "邮政编码"
+          infosite:
+            type: "string"
+            description: "信息披露网址"
+          oname:
+            type: "string"
+            description: "证券简称更名历史"
+          addr:
+            type: "string"
+            description: "注册地址"
+          oaddr:
+            type: "string"
+            description: "办公地址"
+          desc:
+            type: "string"
+            description: "公司简介"
+          bscope:
+            type: "string"
+            description: "经营范围"
+          printype:
+            type: "string"
+            description: "承销方式"
+          referrer:
+            type: "string"
+            description: "上市推荐人"
+          putype:
+            type: "string"
+            description: "发行方式"
+          pe:
+            type: "string"
+            description: "发行市盈率（按发行后总股本）"
+          firgu:
+            type: "string"
+            description: "首发前总股本（万股）"
+          lastgu:
+            type: "string"
+            description: "首发后总股本（万股）"
+          realgu:
+            type: "string"
+            description: "实际发行量（万股）"
+          planm:
+            type: "string"
+            description: "预计募集资金（万元）"
+          realm:
+            type: "string"
+            description: "实际募集资金合计（万元）"
+          pubfee:
+            type: "string"
+            description: "发行费用总额（万元）"
+          collect:
+            type: "string"
+            description: "募集资金净额（万元）"
+          signfee:
+            type: "string"
+            description: "承销费用（万元）"
+          pdate:
+            type: "string"
+            description: "招股公告日"
+        additionalProperties: true
+    CompanyIndexMembershipResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          mc:
+            type: "string"
+            description: "指数名称"
+          dm:
+            type: "string"
+            description: "指数代码"
+          ind:
+            type: "string"
+            description: "进入日期yyyy-MM-dd"
+          outd:
+            type: "string"
+            description: "退出日期yyyy-MM-dd"
+        additionalProperties: true
+    CompanyExecutiveHistoryResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          name:
+            type: "string"
+            description: "姓名"
+          title:
+            type: "string"
+            description: "职务"
+          sdate:
+            type: "string"
+            description: "起始日期yyyy-MM-dd"
+          edate:
+            type: "string"
+            description: "终止日期yyyy-MM-dd"
+        additionalProperties: true
+    CompanyBoardHistoryResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          name:
+            type: "string"
+            description: "姓名"
+          title:
+            type: "string"
+            description: "职务"
+          sdate:
+            type: "string"
+            description: "起始日期yyyy-MM-dd"
+          edate:
+            type: "string"
+            description: "终止日期yyyy-MM-dd"
+        additionalProperties: true
+    CompanySupervisorHistoryResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          name:
+            type: "string"
+            description: "姓名"
+          title:
+            type: "string"
+            description: "职务"
+          sdate:
+            type: "string"
+            description: "起始日期yyyy-MM-dd"
+          edate:
+            type: "string"
+            description: "终止日期yyyy-MM-dd"
+        additionalProperties: true
+    CompanyDividendHistoryResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          sdate:
+            type: "string"
+            description: "公告日期yyyy-MM-dd"
+          give:
+            type: "string"
+            description: "每10股送股(单位：股)"
+          change:
+            type: "string"
+            description: "每10股转增(单位：股)"
+          send:
+            type: "string"
+            description: "每10股派息(税前，单位：元)"
+          line:
+            type: "string"
+            description: "进度"
+          cdate:
+            type: "string"
+            description: "除权除息日yyyy-MM-dd"
+          edate:
+            type: "string"
+            description: "股权登记日yyyy-MM-dd"
+          hdate:
+            type: "string"
+            description: "红股上市日yyyy-MM-dd"
+        additionalProperties: true
+    CompanyPrivatePlacementHistoryResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          sdate:
+            type: "string"
+            description: "公告日期yyyy-MM-dd"
+          type:
+            type: "string"
+            description: "发行方式"
+          price:
+            type: "string"
+            description: "发行价格"
+          tprice:
+            type: "string"
+            description: "实际公司募集资金总额"
+          fprice:
+            type: "string"
+            description: "发行费用总额"
+          amount:
+            type: "string"
+            description: "实际发行数量"
+        additionalProperties: true
+    CompanyUnlockScheduleResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          rdate:
+            type: "string"
+            description: "解禁日期yyyy-MM-dd"
+          ramount:
+            type: "number"
+            description: "解禁数量(万股)"
+          rprice:
+            type: "number"
+            description: "解禁股流通市值(亿元)"
+          batch:
+            type: "number"
+            description: "上市批次"
+          pdate:
+            type: "string"
+            description: "公告日期yyyy-MM-dd"
+        additionalProperties: true
+    CompanyQuarterlyProfitResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          date:
+            type: "string"
+            description: "截止日期yyyy-MM-dd"
+          income:
+            type: "string"
+            description: "营业收入（万元）"
+          expend:
+            type: "string"
+            description: "营业支出（万元）"
+          profit:
+            type: "string"
+            description: "营业利润（万元）"
+          totalp:
+            type: "string"
+            description: "利润总额（万元）"
+          reprofit:
+            type: "string"
+            description: "净利润（万元）"
+          basege:
+            type: "string"
+            description: "基本每股收益(元/股)"
+          ettege:
+            type: "string"
+            description: "稀释每股收益(元/股)"
+          otherp:
+            type: "string"
+            description: "其他综合收益（万元）"
+          totalcp:
+            type: "string"
+            description: "综合收益总额（万元）"
+        additionalProperties: true
+    CompanyQuarterlyCashflowResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          date:
+            type: "string"
+            description: "截止日期yyyy-MM-dd"
+          jyin:
+            type: "string"
+            description: "经营活动现金流入小计（万元）"
+          jyout:
+            type: "string"
+            description: "经营活动现金流出小计（万元）"
+          jyfinal:
+            type: "string"
+            description: "经营活动产生的现金流量净额（万元）"
+          tzin:
+            type: "string"
+            description: "投资活动现金流入小计（万元）"
+          tzout:
+            type: "string"
+            description: "投资活动现金流出小计（万元）"
+          tzfinal:
+            type: "string"
+            description: "投资活动产生的现金流量净额（万元）"
+          czin:
+            type: "string"
+            description: "筹资活动现金流入小计（万元）"
+          czout:
+            type: "string"
+            description: "筹资活动现金流出小计（万元）"
+          czfinal:
+            type: "string"
+            description: "筹资活动产生的现金流量净额（万元）"
+          hl:
+            type: "string"
+            description: "汇率变动对现金及现金等价物的影响（万元）"
+          cashinc:
+            type: "string"
+            description: "现金及现金等价物净增加额（万元）"
+          cashs:
+            type: "string"
+            description: "期初现金及现金等价物余额（万元）"
+          cashe:
+            type: "string"
+            description: "期末现金及现金等价物余额（万元）"
+        additionalProperties: true
+    CompanyEarningsForecastResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          pdate:
+            type: "string"
+            description: "公告日期yyyy-MM-dd"
+          rdate:
+            type: "string"
+            description: "报告期yyyy-MM-dd"
+          type:
+            type: "string"
+            description: "类型"
+          abs:
+            type: "string"
+            description: "业绩预告摘要"
+          old:
+            type: "string"
+            description: "上年同期每股收益(元)"
+        additionalProperties: true
+    CompanyFinancialIndicatorResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          date:
+            type: "string"
+            description: "报告日期yyyy-MM-dd"
+          tbmg:
+            type: "string"
+            description: "摊薄每股收益(元)d"
+          jqmg:
+            type: "string"
+            description: "加权每股收益(元)型"
+          mgsy:
+            type: "string"
+            description: "每股收益_调整后(元)"
+          kfmg:
+            type: "string"
+            description: "扣除非经常性损益后的每股收益(元)"
+          mgjz:
+            type: "string"
+            description: "每股净资产_调整前(元)"
+          mgjzad:
+            type: "string"
+            description: "每股净资产_调整后(元)"
+          mgjy:
+            type: "string"
+            description: "每股经营性现金流(元)"
+          mggjj:
+            type: "string"
+            description: "每股资本公积金(元)"
+          mgwly:
+            type: "string"
+            description: "每股未分配利润(元)"
+          zclr:
+            type: "string"
+            description: "总资产利润率(%)"
+          zylr:
+            type: "string"
+            description: "主营业务利润率(%)"
+          zzlr:
+            type: "string"
+            description: "总资产净利润率(%)"
+          cblr:
+            type: "string"
+            description: "成本费用利润率(%)"
+          yylr:
+            type: "string"
+            description: "营业利润率(%)"
+          zycb:
+            type: "string"
+            description: "主营业务成本率(%)"
+          xsjl:
+            type: "string"
+            description: "销售净利率(%)"
+          gbbc:
+            type: "string"
+            description: "股本报酬率(%)"
+          jzbc:
+            type: "string"
+            description: "净资产报酬率(%)"
+          zcbc:
+            type: "string"
+            description: "资产报酬率(%)"
+          xsml:
+            type: "string"
+            description: "销售毛利率(%)"
+          xxbz:
+            type: "string"
+            description: "三项费用比重"
+          fzy:
+            type: "string"
+            description: "非主营比重"
+          zybz:
+            type: "string"
+            description: "主营利润比重"
+          gxff:
+            type: "string"
+            description: "股息发放率(%)"
+          tzsy:
+            type: "string"
+            description: "投资收益率(%)"
+          zyyw:
+            type: "string"
+            description: "主营业务利润(元)"
+          jzsy:
+            type: "string"
+            description: "净资产收益率(%)"
+          jqjz:
+            type: "string"
+            description: "加权净资产收益率(%)"
+          kflr:
+            type: "string"
+            description: "扣除非经常性损益后的净利润(元)"
+          zysr:
+            type: "string"
+            description: "主营业务收入增长率(%)"
+          jlzz:
+            type: "string"
+            description: "净利润增长率(%)"
+          jzzz:
+            type: "string"
+            description: "净资产增长率(%)"
+          zzzz:
+            type: "string"
+            description: "总资产增长率(%)"
+          yszz:
+            type: "string"
+            description: "应收账款周转率(次)"
+          yszzt:
+            type: "string"
+            description: "应收账款周转天数(天)"
+          chzz:
+            type: "string"
+            description: "存货周转天数(天)"
+          chzzl:
+            type: "string"
+            description: "存货周转率(次)"
+          gzzz:
+            type: "string"
+            description: "固定资产周转率(次)"
+          zzzzl:
+            type: "string"
+            description: "总资产周转率(次)"
+          zzzzt:
+            type: "string"
+            description: "总资产周转天数(天)"
+          ldzz:
+            type: "string"
+            description: "流动资产周转率(次)"
+          ldzzt:
+            type: "string"
+            description: "流动资产周转天数(天)"
+          gdzz:
+            type: "string"
+            description: "股东权益周转率(次)"
+          ldbl:
+            type: "string"
+            description: "流动比率"
+          sdbl:
+            type: "string"
+            description: "速动比率"
+          xjbl:
+            type: "string"
+            description: "现金比率(%)"
+          lxzf:
+            type: "string"
+            description: "利息支付倍数"
+          zjbl:
+            type: "string"
+            description: "长期债务与营运资金比率(%)"
+          gdqy:
+            type: "string"
+            description: "股东权益比率(%)"
+          cqfz:
+            type: "string"
+            description: "长期负债比率(%)"
+          gdgd:
+            type: "string"
+            description: "股东权益与固定资产比率(%)"
+          fzqy:
+            type: "string"
+            description: "负债与所有者权益比率(%)"
+          zczjbl:
+            type: "string"
+            description: "长期资产与长期资金比率(%)"
+          zblv:
+            type: "string"
+            description: "资本化比率(%)"
+          gdzcjz:
+            type: "string"
+            description: "固定资产净值率(%)"
+          zbgdh:
+            type: "string"
+            description: "资本固定化比率(%)"
+          cqbl:
+            type: "string"
+            description: "产权比率(%)"
+          qxjzb:
+            type: "string"
+            description: "清算价值比率(%)"
+          gdzcbz:
+            type: "string"
+            description: "固定资产比重(%)"
+          zcfzl:
+            type: "string"
+            description: "资产负债率(%)"
+          zzc:
+            type: "string"
+            description: "总资产(元)"
+          jyxj:
+            type: "string"
+            description: "经营现金净流量对销售收入比率(%)"
+          zcjyxj:
+            type: "string"
+            description: "资产的经营现金流量回报率(%)"
+          jylrb:
+            type: "string"
+            description: "经营现金净流量与净利润的比率(%)"
+          jyfzl:
+            type: "string"
+            description: "经营现金净流量对负债比率(%)"
+          xjlbl:
+            type: "string"
+            description: "现金流量比率(%)"
+          dqgptz:
+            type: "string"
+            description: "短期股票投资(元)"
+          dqzctz:
+            type: "string"
+            description: "短期债券投资(元)"
+          dqjytz:
+            type: "string"
+            description: "短期其它经营性投资(元)"
+          qcgptz:
+            type: "string"
+            description: "长期股票投资(元)"
+          cqzqtz:
+            type: "string"
+            description: "长期债券投资(元)"
+          cqjyxtz:
+            type: "string"
+            description: "长期其它经营性投资(元)"
+          yszk1:
+            type: "string"
+            description: "1年以内应收帐款(元)"
+          yszk12:
+            type: "string"
+            description: "1-2年以内应收帐款(元)"
+          yszk23:
+            type: "string"
+            description: "2-3年以内应收帐款(元)"
+          yszk3:
+            type: "string"
+            description: "3年以内应收帐款(元)"
+          yfhk1:
+            type: "string"
+            description: "1年以内预付货款(元)"
+          yfhk12:
+            type: "string"
+            description: "1-2年以内预付货款(元)"
+          yfhk23:
+            type: "string"
+            description: "2-3年以内预付货款(元)"
+          yfhk3:
+            type: "string"
+            description: "3年以内预付货款(元)"
+          ysk1:
+            type: "string"
+            description: "1年以内其它应收款(元)"
+          ysk12:
+            type: "string"
+            description: "1-2年以内其它应收款(元)"
+          ysk23:
+            type: "string"
+            description: "2-3年以内其它应收款(元)"
+          ysk3:
+            type: "string"
+            description: "3年以内其它应收款(元)"
+        additionalProperties: true
+    CompanyTopShareholderResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          jzrq:
+            type: "string"
+            description: "截止日期yyyy-MM-dd"
+          ggrq:
+            type: "string"
+            description: "公告日期yyyy-MM-dd"
+          gdsm:
+            type: "string"
+            description: "股东说明"
+          gdzs:
+            type: "number"
+            description: "股东总数"
+          pjcg:
+            type: "number"
+            description: "平均持股(单位：股，按总股本计算)"
+          sdgd:
+            type: "string"
+            description: "十大股东，其中ZygdSdgd对象见下方说明"
+        additionalProperties: true
+    CompanyTopFloatShareholderResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          jzrq:
+            type: "string"
+            description: "截止日期yyyy-MM-dd"
+          ggrq:
+            type: "string"
+            description: "公告日期yyyy-MM-dd"
+          sdgd:
+            type: "string"
+            description: "十大流通股东，其中ZygdSdgd对象见下方说明"
+        additionalProperties: true
+    CompanyShareholderTrendResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          jzrq:
+            type: "string"
+            description: "截止日期yyyy-MM-dd"
+          gdhs:
+            type: "string"
+            description: "股东户数"
+          bh:
+            type: "string"
+            description: "比上期变化情况"
+        additionalProperties: true
+    CompanyFundHoldingResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          jzrq:
+            type: "string"
+            description: "截止日期yyyy-MM-dd"
+          jjmc:
+            type: "string"
+            description: "基金名称"
+          jjdm:
+            type: "string"
+            description: "基金代码"
+          ccsl:
+            type: "number"
+            description: "持仓数量(股)"
+          ltbl:
+            type: "number"
+            description: "占流通股比例(%)"
+          cgsz:
+            type: "number"
+            description: "持股市值（元）"
+          jzbl:
+            type: "number"
+            description: "占净值比例（%）"
+        additionalProperties: true
+    RealtimeTradeNetworkResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          fm:
+            type: "number"
+            description: "五分钟涨跌幅（%）"
+          h:
+            type: "number"
+            description: "最高价（元）"
+          hs:
+            type: "number"
+            description: "换手（%）"
+          lb:
+            type: "number"
+            description: "量比（%）"
+          l:
+            type: "number"
+            description: "最低价（元）"
+          lt:
+            type: "number"
+            description: "流通市值（元）"
+          o:
+            type: "number"
+            description: "开盘价（元）"
+          pe:
+            type: "number"
+            description: "市盈率（动态，总市值除以预估全年净利润，例如当前公布一季度净利润1000万，则预估全年净利润4000万）"
+          pc:
+            type: "number"
+            description: "涨跌幅（%）"
+          p:
+            type: "number"
+            description: "当前价格（元）"
+          sz:
+            type: "number"
+            description: "总市值（元）"
+          cje:
+            type: "number"
+            description: "成交额（元）"
+          ud:
+            type: "number"
+            description: "涨跌额（元）"
+          v:
+            type: "number"
+            description: "成交量（手）"
+          yc:
+            type: "number"
+            description: "昨日收盘价（元）"
+          zf:
+            type: "number"
+            description: "振幅（%）"
+          zs:
+            type: "number"
+            description: "涨速（%）"
+          sjl:
+            type: "number"
+            description: "市净率"
+          zdf60:
+            type: "number"
+            description: "60日涨跌幅（%）"
+          zdfnc:
+            type: "number"
+            description: "年初至今涨跌幅（%）"
+          t:
+            type: "string"
+            description: "更新时间yyyy-MM-ddHH:mm:ss"
+        additionalProperties: true
+    TickTradeTodayResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          d:
+            type: "string"
+            description: "数据归属日期（yyyy-MM-dd）"
+          t:
+            type: "string"
+            description: "时间（HH:mm:dd）"
+          v:
+            type: "number"
+            description: "成交量（股）"
+          p:
+            type: "number"
+            description: "成交价"
+          ts:
+            type: "number"
+            description: "交易方向（0：中性盘，1：买入，2：卖出）"
+        additionalProperties: true
+    RealtimeTradeBrokerResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          p:
+            type: "number"
+            description: "最新价"
+          o:
+            type: "number"
+            description: "开盘价"
+          h:
+            type: "number"
+            description: "最高价"
+          l:
+            type: "number"
+            description: "最低价"
+          yc:
+            type: "number"
+            description: "前收盘价"
+          cje:
+            type: "number"
+            description: "成交总额"
+          v:
+            type: "number"
+            description: "成交总量"
+          pv:
+            type: "number"
+            description: "原始成交总量"
+          ud:
+            type: "number"
+            description: "涨跌额"
+          pc:
+            type: "number"
+            description: "涨跌幅"
+          zf:
+            type: "number"
+            description: "振幅"
+          t:
+            type: "string"
+            description: "更新时间"
+          pe:
+            type: "number"
+            description: "市盈率"
+          tr:
+            type: "number"
+            description: "换手率"
+          pb_ratio:
+            type: "number"
+            description: "市净率"
+          tv:
+            type: "number"
+            description: "成交量"
+        additionalProperties: true
+    OrderBookFiveLevelResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          ps:
+            type: "number"
+            description: "委卖价"
+          pb:
+            type: "number"
+            description: "委买价"
+          vs:
+            type: "number"
+            description: "委卖量"
+          vb:
+            type: "number"
+            description: "委买量"
+          t:
+            type: "string"
+            description: "更新时间"
+        additionalProperties: true
+    RealtimeTradeAllNetworkResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          dm:
+            type: "string"
+            description: "股票代码"
+          p:
+            type: "number"
+            description: "最新价"
+          o:
+            type: "number"
+            description: "开盘价"
+          h:
+            type: "number"
+            description: "最高价"
+          l:
+            type: "number"
+            description: "最低价"
+          yc:
+            type: "number"
+            description: "前收盘价"
+          cje:
+            type: "number"
+            description: "成交总额"
+          v:
+            type: "number"
+            description: "成交总量"
+          pv:
+            type: "number"
+            description: "原始成交总量"
+          ud:
+            type: "number"
+            description: "涨跌额"
+          pc:
+            type: "number"
+            description: "涨跌幅"
+          zf:
+            type: "number"
+            description: "振幅"
+          t:
+            type: "string"
+            description: "更新时间"
+          pe:
+            type: "number"
+            description: "市盈率"
+          tr:
+            type: "number"
+            description: "换手率"
+          pb_ratio:
+            type: "number"
+            description: "市净率"
+          tv:
+            type: "number"
+            description: "成交量"
+        additionalProperties: true
+    RealtimeTradeMultiStockResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          p:
+            type: "number"
+            description: "最新价"
+          o:
+            type: "number"
+            description: "开盘价"
+          h:
+            type: "number"
+            description: "最高价"
+          l:
+            type: "number"
+            description: "最低价"
+          yc:
+            type: "number"
+            description: "前收盘价"
+          cje:
+            type: "number"
+            description: "成交总额"
+          v:
+            type: "number"
+            description: "成交总量"
+          pv:
+            type: "number"
+            description: "原始成交总量"
+          ud:
+            type: "number"
+            description: "涨跌额"
+          pc:
+            type: "number"
+            description: "涨跌幅"
+          zf:
+            type: "number"
+            description: "振幅"
+          t:
+            type: "string"
+            description: "更新时间"
+          pe:
+            type: "number"
+            description: "市盈率"
+          tr:
+            type: "number"
+            description: "换手率"
+          pb_ratio:
+            type: "number"
+            description: "市净率"
+          tv:
+            type: "number"
+            description: "成交量"
+        additionalProperties: true
+    RealtimeTradeAllBrokerResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          dm:
+            type: "string"
+            description: "股票代码"
+          fm:
+            type: "number"
+            description: "五分钟涨跌幅（%）"
+          h:
+            type: "number"
+            description: "最高价（元）"
+          hs:
+            type: "number"
+            description: "换手（%）"
+          lb:
+            type: "number"
+            description: "量比（%）"
+          l:
+            type: "number"
+            description: "最低价（元）"
+          lt:
+            type: "number"
+            description: "流通市值（元）"
+          o:
+            type: "number"
+            description: "开盘价（元）"
+          pe:
+            type: "number"
+            description: "市盈率（动态，总市值除以预估全年净利润，例如当前公布一季度净利润1000万，则预估全年净利润4000万）"
+          pc:
+            type: "number"
+            description: "涨跌幅（%）"
+          p:
+            type: "number"
+            description: "当前价格（元）"
+          sz:
+            type: "number"
+            description: "总市值（元）"
+          cje:
+            type: "number"
+            description: "成交额（元）"
+          ud:
+            type: "number"
+            description: "涨跌额（元）"
+          v:
+            type: "number"
+            description: "成交量（手）"
+          yc:
+            type: "number"
+            description: "昨日收盘价（元）"
+          zf:
+            type: "number"
+            description: "振幅（%）"
+          zs:
+            type: "number"
+            description: "涨速（%）"
+          sjl:
+            type: "number"
+            description: "市净率"
+          zdf60:
+            type: "number"
+            description: "60日涨跌幅（%）"
+          zdfnc:
+            type: "number"
+            description: "年初至今涨跌幅（%）"
+          t:
+            type: "string"
+            description: "更新时间yyyy-MM-ddHH:mm:ss"
+        additionalProperties: true
+    CapitalFlowHistoryResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          t:
+            type: "integer"
+            description: "交易时间"
+          zmbzds:
+            type: "integer"
+            description: "主买单总单数"
+          zmszds:
+            type: "integer"
+            description: "主卖单总单数"
+          dddx:
+            type: "number"
+            description: "大单动向"
+          zddy:
+            type: "number"
+            description: "涨跌动因"
+          ddcf:
+            type: "number"
+            description: "大单差分"
+          zmbzdszl:
+            type: "integer"
+            description: "主买单总单数增量"
+          zmszdszl:
+            type: "integer"
+            description: "主卖单总单数增量"
+          cjbszl:
+            type: "integer"
+            description: "成交笔数增量"
+          zmbtdcje:
+            type: "number"
+            description: "主买特大单成交额"
+          zmbddcje:
+            type: "number"
+            description: "主买大单成交额"
+          zmbzdcje:
+            type: "number"
+            description: "主买中单成交额"
+          zmbxdcje:
+            type: "number"
+            description: "主买小单成交额"
+          zmstdcje:
+            type: "number"
+            description: "主卖特大单成交额"
+          zmsddcje:
+            type: "number"
+            description: "主卖大单成交额"
+          zmszdcje:
+            type: "number"
+            description: "主卖中单成交额"
+          zmsxdcje:
+            type: "number"
+            description: "主卖小单成交额"
+          bdmbtdcje:
+            type: "number"
+            description: "被动买特大单成交额"
+          bdmbddcje:
+            type: "number"
+            description: "被动买大单成交额"
+          bdmbzdcje:
+            type: "number"
+            description: "被动买中单成交额"
+          bdmbxdcje:
+            type: "number"
+            description: "被动买小单成交额"
+          bdmstdcje:
+            type: "number"
+            description: "被动卖特大单成交额"
+          bdmsddcje:
+            type: "number"
+            description: "被动卖大单成交额"
+          bdmszdcje:
+            type: "number"
+            description: "被动卖中单成交额"
+          bdmsxdcje:
+            type: "number"
+            description: "被动卖小单成交额"
+          bdmsljcje:
+            type: "number"
+            description: "被动卖累计成交额"
+          zmbtdcjl:
+            type: "integer"
+            description: "主买特大单成交量"
+          zmbddcjl:
+            type: "integer"
+            description: "主买大单成交量"
+          zmbzdcjl:
+            type: "integer"
+            description: "主买中单成交量"
+          zmbxdcjl:
+            type: "integer"
+            description: "主买小单成交量"
+          zmstdcjl:
+            type: "integer"
+            description: "主卖特大单成交量"
+          zmsddcjl:
+            type: "integer"
+            description: "主卖大单成交量"
+          zmszdcjl:
+            type: "integer"
+            description: "主卖中单成交量"
+          zmsxdcjl:
+            type: "integer"
+            description: "主卖小单成交量"
+          bdmbtdcjl:
+            type: "integer"
+            description: "被动买特大单成交量"
+          bdmbddcjl:
+            type: "integer"
+            description: "被动买大单成交量"
+          bdmbzdcjl:
+            type: "integer"
+            description: "被动买中单成交量"
+          bdmbxdcjl:
+            type: "integer"
+            description: "被动买小单成交量"
+          bdmstdcjl:
+            type: "integer"
+            description: "被动卖特大单成交量"
+          bdmsddcjl:
+            type: "integer"
+            description: "被动卖大单成交量"
+          bdmszdcjl:
+            type: "integer"
+            description: "被动卖中单成交量"
+          bdmsxdcjl:
+            type: "integer"
+            description: "被动卖小单成交量"
+          zmbtdcjzl:
+            type: "number"
+            description: "主买特大单成交额增量"
+          zmbddcjzl:
+            type: "number"
+            description: "主买大单成交额增量"
+          zmbzdcjzl:
+            type: "number"
+            description: "主买中单成交额增量"
+          zmbxdcjzl:
+            type: "number"
+            description: "主买小单成交额增量"
+          zmstdcjzl:
+            type: "number"
+            description: "主卖特大单成交额增量"
+          zmsddcjzl:
+            type: "number"
+            description: "主卖大单成交额增量"
+          zmszdcjzl:
+            type: "number"
+            description: "主卖中单成交额增量"
+          zmsxdcjzl:
+            type: "number"
+            description: "主卖小单成交额增量"
+          bdmbtdcjzl:
+            type: "number"
+            description: "被动买特大单成交额增量"
+          bdmbddcjzl:
+            type: "number"
+            description: "被动买大单成交额增量"
+          bdmbzdcjzl:
+            type: "number"
+            description: "被动买中单成交额增量"
+          bdmbxdcjzl:
+            type: "number"
+            description: "被动买小单成交额增量"
+          bdmstdcjzl:
+            type: "number"
+            description: "被动卖特大单成交额增量"
+          bdmsddcjzl:
+            type: "number"
+            description: "被动卖大单成交额增量"
+          bdmszdcjzl:
+            type: "number"
+            description: "被动卖中单成交额增量"
+          bdmsxdcjzl:
+            type: "number"
+            description: "被动卖小单成交额增量"
+          zmbtdcjzlv:
+            type: "integer"
+            description: "主买特大单成交量增量"
+          zmbddcjzlv:
+            type: "integer"
+            description: "主买大单成交量增量"
+          zmbzdcjzlv:
+            type: "integer"
+            description: "主买中单成交量增量"
+          zmbxdcjzlv:
+            type: "integer"
+            description: "主买小单成交量增量"
+          zmstdcjzlv:
+            type: "integer"
+            description: "主卖特大单成交量增量"
+          zmsddcjzlv:
+            type: "integer"
+            description: "主卖大单成交量增量"
+          zmszdcjzlv:
+            type: "integer"
+            description: "主卖中单成交量增量"
+          zmsxdcjzlv:
+            type: "integer"
+            description: "主卖小单成交量增量"
+          bdmbtdcjzlv:
+            type: "integer"
+            description: "被动买特大单成交量增量"
+          bdmbddcjzlv:
+            type: "integer"
+            description: "被动买大单成交量增量"
+          bdmbzdcjzlv:
+            type: "integer"
+            description: "被动买中单成交量增量"
+          bdmbxdcjzlv:
+            type: "integer"
+            description: "被动买小单成交量增量"
+          bdmstdcjzlv:
+            type: "integer"
+            description: "被动卖特大单成交量增量"
+          bdmsddcjzlv:
+            type: "integer"
+            description: "被动卖大单成交量增量"
+          bdmszdcjzlv:
+            type: "integer"
+            description: "被动卖中单成交量增量"
+          bdmsxdcjzlv:
+            type: "integer"
+            description: "被动卖小单成交量增量"
+        additionalProperties: true
+    LatestKlineResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          t:
+            type: "string"
+            description: "交易时间"
+          o:
+            type: "number"
+            description: "开盘价"
+          h:
+            type: "number"
+            description: "最高价"
+          l:
+            type: "number"
+            description: "最低价"
+          c:
+            type: "number"
+            description: "收盘价"
+          v:
+            type: "number"
+            description: "成交量"
+          a:
+            type: "number"
+            description: "成交额"
+          pc:
+            type: "number"
+            description: "前收盘价"
+          sf:
+            type: "integer"
+            description: "停牌 1停牌，0 不停牌"
+        additionalProperties: true
+    KlineHistoryResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          t:
+            type: "string"
+            description: "交易时间"
+          o:
+            type: "number"
+            description: "开盘价"
+          h:
+            type: "number"
+            description: "最高价"
+          l:
+            type: "number"
+            description: "最低价"
+          c:
+            type: "number"
+            description: "收盘价"
+          v:
+            type: "number"
+            description: "成交量"
+          a:
+            type: "number"
+            description: "成交额"
+          pc:
+            type: "number"
+            description: "前收盘价"
+          sf:
+            type: "integer"
+            description: "停牌 1停牌，0 不停牌"
+        additionalProperties: true
+    PriceLimitHistoryResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          t:
+            type: "string"
+            description: "交易日期"
+          h:
+            type: "number"
+            description: "涨停价格"
+          l:
+            type: "number"
+            description: "跌停价格"
+        additionalProperties: true
+    MarketIndicatorHistoryResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          time:
+            type: "string"
+            description: "更新时间"
+          lb:
+            type: "number"
+            description: "量比"
+          om:
+            type: "number"
+            description: "1分钟涨速(%)"
+          fm:
+            type: "number"
+            description: "5分钟涨速(%)"
+          3d:
+            type: "number"
+            description: "3日涨幅(%)"
+          5d:
+            type: "number"
+            description: "5日涨幅(%)"
+          10d:
+            type: "number"
+            description: "10日涨幅(%)"
+          3t:
+            type: "number"
+            description: "3日换手(%)"
+          5t:
+            type: "number"
+            description: "5日换手(%)"
+          10t:
+            type: "number"
+            description: "10日换手(%)"
+        additionalProperties: true
+    EnterpriseKlineHistoryResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          t:
+            type: "string"
+            description: "交易时间"
+          o:
+            type: "number"
+            description: "开盘价"
+          h:
+            type: "number"
+            description: "最高价"
+          l:
+            type: "number"
+            description: "最低价"
+          c:
+            type: "number"
+            description: "收盘价"
+          v:
+            type: "number"
+            description: "成交量"
+          a:
+            type: "number"
+            description: "成交额"
+          pc:
+            type: "number"
+            description: "前收盘价"
+          sf:
+            type: "integer"
+            description: "停牌 1停牌，0 不停牌"
+        additionalProperties: true
+    StockInstrumentInfoResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          ei:
+            type: "string"
+            description: "市场代码"
+          ii:
+            type: "string"
+            description: "股票代码"
+          name:
+            type: "string"
+            description: "股票名称"
+          od:
+            type: "string"
+            description: "上市日期(股票IPO日期)"
+          pc:
+            type: "number"
+            description: "前收盘价格"
+          up:
+            type: "number"
+            description: "当日涨停价"
+          dp:
+            type: "number"
+            description: "当日跌停价"
+          fv:
+            type: "number"
+            description: "流通股本"
+          tv:
+            type: "number"
+            description: "总股本"
+          pk:
+            type: "number"
+            description: "最小价格变动单位"
+          is:
+            type: "integer"
+            description: "股票停牌状态(<=0:正常交易（-1:复牌）;>=1停牌天数;)"
+        additionalProperties: true
+    BalanceSheetResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          jzrq:
+            type: "string"
+            description: "截止日期"
+          plrq:
+            type: "string"
+            description: "披露日期"
+          nbysk:
+            type: "number"
+            description: "内部应收款"
+          gdzcql:
+            type: "number"
+            description: "固定资产清理"
+          yffbzk:
+            type: "number"
+            description: "应付分保账款"
+          jsbfj:
+            type: "number"
+            description: "结算备付金"
+          ysbf:
+            type: "number"
+            description: "应收保费"
+          ysfbzk:
+            type: "number"
+            description: "应收分保账款"
+          ysfbhtzbj:
+            type: "number"
+            description: "应收分保合同准备金"
+          ysgl:
+            type: "number"
+            description: "应收股利"
+          ysckts:
+            type: "number"
+            description: "应收出口退税"
+          ysbtk:
+            type: "number"
+            description: "应收补贴款"
+          ysbzj:
+            type: "number"
+            description: "应收保证金"
+          dfy:
+            type: "number"
+            description: "待摊费用"
+          dclldzcsy:
+            type: "number"
+            description: "待处理流动资产损益"
+          ynndqdfldzc:
+            type: "number"
+            description: "一年内到期的非流动资产"
+          cqysk:
+            type: "number"
+            description: "长期应收款"
+          qtcqtz:
+            type: "number"
+            description: "其他长期投资"
+          gdzcyz:
+            type: "number"
+            description: "固定资产原值"
+          gdzcjz:
+            type: "number"
+            description: "固定资产净值"
+          gdzcjzzbj:
+            type: "number"
+            description: "固定资产减值准备"
+          scxswzc:
+            type: "number"
+            description: "生产性生物资产"
+          gyxswzc:
+            type: "number"
+            description: "公益性生物资产"
+          yqzc:
+            type: "number"
+            description: "油气资产"
+          kfzc:
+            type: "number"
+            description: "开发支出"
+          gqfzltq:
+            type: "number"
+            description: "股权分置流通权"
+          qtfldzc:
+            type: "number"
+            description: "其他非流动资产"
+          yfsxfyj:
+            type: "number"
+            description: "应付手续费及佣金"
+          qtjyk:
+            type: "number"
+            description: "其他应交款"
+          yfbzj:
+            type: "number"
+            description: "应付保证金"
+          nbyfk:
+            type: "number"
+            description: "内部应付款"
+          ytfy:
+            type: "number"
+            description: "预提费用"
+          bxhtzbj:
+            type: "number"
+            description: "保险合同准备金"
+          dlmmzqk:
+            type: "number"
+            description: "代理买卖证券款"
+          dlcxzqk:
+            type: "number"
+            description: "代理承销证券款"
+          gjpjjs:
+            type: "number"
+            description: "国际票证结算"
+          gnpjjs:
+            type: "number"
+            description: "国内票证结算"
+          dysr:
+            type: "number"
+            description: "递延收益"
+          yfdqzq:
+            type: "number"
+            description: "应付短期债券"
+          cqdysr:
+            type: "number"
+            description: "长期递延收益"
+          wqddtzss:
+            type: "number"
+            description: "未确定的投资损失"
+          nfpxjgl:
+            type: "number"
+            description: "拟分配现金股利"
+          yjfz:
+            type: "number"
+            description: "预计负债"
+          xsckjtycf:
+            type: "number"
+            description: "吸收存款及同业存放"
+          yjldfz:
+            type: "number"
+            description: "预计流动负债"
+          j_kcg:
+            type: "number"
+            description: "减:库存股"
+          hbzj:
+            type: "number"
+            description: "货币资金"
+          cczj:
+            type: "number"
+            description: "拆出资金"
+          jyxjrzc:
+            type: "number"
+            description: "交易性金融资产"
+          ysjrzc:
+            type: "number"
+            description: "衍生金融资产"
+          yspj:
+            type: "number"
+            description: "应收票据"
+          yszk:
+            type: "number"
+            description: "应收账款"
+          yfkx:
+            type: "number"
+            description: "预付款项"
+          yslx:
+            type: "number"
+            description: "应收利息"
+          qtysk:
+            type: "number"
+            description: "其他应收款"
+          mrfsjrzck:
+            type: "number"
+            description: "买入返售金融资产款"
+          gyjzjzbdqjsrdq:
+            type: "number"
+            description: "以公允价值计量且其变动计入当期损益的金融资产"
+          ch:
+            type: "number"
+            description: "存货"
+          qtldzc:
+            type: "number"
+            description: "其他流动资产"
+          ldzchj:
+            type: "number"
+            description: "流动资产合计"
+          ffdkjjd:
+            type: "number"
+            description: "发放贷款及垫款"
+          kkgsjrzc:
+            type: "number"
+            description: "可供出售金融资产"
+          cyzdqtz:
+            type: "number"
+            description: "持有至到期投资"
+          cqgqtz:
+            type: "number"
+            description: "长期股权投资"
+          tzxfd:
+            type: "number"
+            description: "投资性房地产"
+          ljzj:
+            type: "number"
+            description: "累计折旧"
+          gdzc:
+            type: "number"
+            description: "固定资产"
+          zjgc:
+            type: "number"
+            description: "在建工程"
+          gcwz:
+            type: "number"
+            description: "工程物资"
+          cqfz:
+            type: "number"
+            description: "长期负债"
+          wxzc:
+            type: "number"
+            description: "无形资产"
+          sy:
+            type: "number"
+            description: "商誉"
+          cqdtfy:
+            type: "number"
+            description: "长期待摊费用"
+          dysdszc:
+            type: "number"
+            description: "递延所得税资产"
+          fldzchj:
+            type: "number"
+            description: "非流动资产合计"
+          zczj:
+            type: "number"
+            description: "资产总计"
+          dqjk:
+            type: "number"
+            description: "短期借款"
+          xzyhyhk:
+            type: "number"
+            description: "向中央银行借款"
+          crzj:
+            type: "number"
+            description: "拆入资金"
+          jyxjrfz:
+            type: "number"
+            description: "交易性金融负债"
+          ysjrfz:
+            type: "number"
+            description: "衍生金融负债"
+          yfpj:
+            type: "number"
+            description: "应付票据"
+          yfzk:
+            type: "number"
+            description: "应付账款"
+          ysk:
+            type: "number"
+            description: "预收账款"
+          mchgjrzck:
+            type: "number"
+            description: "卖出回购金融资产款"
+          yfgzxc:
+            type: "number"
+            description: "应付职工薪酬"
+          yjsf:
+            type: "number"
+            description: "应交税费"
+          yflx:
+            type: "number"
+            description: "应付利息"
+          yfgl:
+            type: "number"
+            description: "应付股利"
+          qtfzk:
+            type: "number"
+            description: "其他应付款"
+          ynndqdfldfz:
+            type: "number"
+            description: "一年内到期的非流动负债"
+          qtldfz:
+            type: "number"
+            description: "其他流动负债"
+          ldfzhj:
+            type: "number"
+            description: "流动负债合计"
+          cqjk:
+            type: "number"
+            description: "长期借款"
+          yfzq:
+            type: "number"
+            description: "应付债券"
+          cqyfk:
+            type: "number"
+            description: "长期应付款"
+          zxyfk:
+            type: "number"
+            description: "专项应付款"
+          dysdsfz:
+            type: "number"
+            description: "递延所得税负债"
+          qtfldfz:
+            type: "number"
+            description: "其他非流动负债"
+          fldfzhj:
+            type: "number"
+            description: "非流动负债合计"
+          fzhj:
+            type: "number"
+            description: "负债合计"
+          sszb:
+            type: "number"
+            description: "实收资本(或股本)"
+          zbgj:
+            type: "number"
+            description: "资本公积"
+          zxzb:
+            type: "number"
+            description: "专项储备"
+          ylgj:
+            type: "number"
+            description: "盈余公积"
+          ybfxzb:
+            type: "number"
+            description: "一般风险准备"
+          wfplr:
+            type: "number"
+            description: "未分配利润"
+          wbbzbzhc:
+            type: "number"
+            description: "外币报表折算差额"
+          gsmgdqsyhj:
+            type: "number"
+            description: "归属于母公司股东权益合计"
+          ssgdqy:
+            type: "number"
+            description: "少数股东权益"
+          syzqyhj:
+            type: "number"
+            description: "所有者权益合计"
+          fzhgdqyzj:
+            type: "number"
+            description: "负债和股东权益总计"
+        additionalProperties: true
+    IncomeStatementResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          jzrq:
+            type: "string"
+            description: "截止日期"
+          plrq:
+            type: "string"
+            description: "披露日期"
+          yysr:
+            type: "number"
+            description: "营业收入"
+          yzbf:
+            type: "number"
+            description: "已赚保费"
+          fdczssr:
+            type: "number"
+            description: "房地产销售收入"
+          yyzcb:
+            type: "number"
+            description: "营业总成本"
+          fdczscb:
+            type: "number"
+            description: "房地产销售成本"
+          yffy:
+            type: "number"
+            description: "研发费用"
+          tbj:
+            type: "number"
+            description: "退保金"
+          pczjje:
+            type: "number"
+            description: "赔付支出净额"
+          tqbxhtzbjje:
+            type: "number"
+            description: "提取保险合同准备金净额"
+          bdhlzc:
+            type: "number"
+            description: "保单红利支出"
+          fbfy:
+            type: "number"
+            description: "分保费用"
+          gyjzbdsy:
+            type: "number"
+            description: "公允价值变动收益"
+          qhsy:
+            type: "number"
+            description: "期货损益"
+          tgsy:
+            type: "number"
+            description: "托管收益"
+          btsr:
+            type: "number"
+            description: "补贴收入"
+          qtywlr:
+            type: "number"
+            description: "其他业务利润"
+          bhbfzhbqsljlr:
+            type: "number"
+            description: "被合并方在合并前实现净利润"
+          lxsr:
+            type: "number"
+            description: "利息收入"
+          sxfjyjsr:
+            type: "number"
+            description: "手续费及佣金收入"
+          sxfjyjzc:
+            type: "number"
+            description: "手续费及佣金支出"
+          qtywcb:
+            type: "number"
+            description: "其他业务成本"
+          hdsy:
+            type: "number"
+            description: "汇兑收益"
+          fldzcczsy:
+            type: "number"
+            description: "非流动资产处置收益"
+          sdsfy:
+            type: "number"
+            description: "所得税费用"
+          wqrtzss:
+            type: "number"
+            description: "未确认投资损失"
+          gsmgsyzzdjlr:
+            type: "number"
+            description: "归属于母公司所有者的净利润"
+          lxzc:
+            type: "number"
+            description: "利息支出"
+          qtywsr:
+            type: "number"
+            description: "其他业务收入"
+          yyzsr:
+            type: "number"
+            description: "营业总收入"
+          yycb:
+            type: "number"
+            description: "营业成本"
+          yysjjfj:
+            type: "number"
+            description: "营业税金及附加"
+          xsfy:
+            type: "number"
+            description: "销售费用"
+          glfy:
+            type: "number"
+            description: "管理费用"
+          cwfy:
+            type: "number"
+            description: "财务费用"
+          zcjzss:
+            type: "number"
+            description: "资产减值损失"
+          tzsy:
+            type: "number"
+            description: "投资收益"
+          lyqyhhhqydtzsy:
+            type: "number"
+            description: "联营企业和合营企业的投资收益"
+          yylr:
+            type: "number"
+            description: "营业利润"
+          ywsr:
+            type: "number"
+            description: "营业外收入"
+          ywzc:
+            type: "number"
+            description: "营业外支出"
+          lrze:
+            type: "number"
+            description: "利润总额"
+          jlr:
+            type: "number"
+            description: "净利润"
+          jlrhfcjcx:
+            type: "number"
+            description: "净利润(扣除非经常性损益后)"
+          ssgdsy:
+            type: "number"
+            description: "少数股东损益"
+          jbmgsy:
+            type: "number"
+            description: "基本每股收益"
+          xsmgsy:
+            type: "number"
+            description: "稀释每股收益"
+          zhsyz:
+            type: "number"
+            description: "综合收益总额"
+          gsssgdzhsyz:
+            type: "number"
+            description: "归属于少数股东的综合收益总额"
+          qtsy:
+            type: "number"
+            description: "其他收益"
+        additionalProperties: true
+    CashflowStatementResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          jzrq:
+            type: "string"
+            description: "截止日期"
+          plrq:
+            type: "string"
+            description: "披露日期"
+          sdydbxbfqdxj:
+            type: "number"
+            description: "收到原保险合同保费取得的现金"
+          sdzbxywxjjje:
+            type: "number"
+            description: "收到再保险业务现金净额"
+          bhcjjtkkjzje:
+            type: "number"
+            description: "保户储金及投资款净增加额"
+          czjyxjrzcjzje:
+            type: "number"
+            description: "处置交易性金融资产净增加额"
+          sqlxsxfjyjdxj:
+            type: "number"
+            description: "收取利息、手续费及佣金的现金"
+          hgywzjjzje:
+            type: "number"
+            description: "回购业务资金净增加额"
+          zfybxhtpfkxdj:
+            type: "number"
+            description: "支付原保险合同赔付款项的现金"
+          zfbdhldxj:
+            type: "number"
+            description: "支付保单红利的现金"
+          czfzgsjqtsddxj:
+            type: "number"
+            description: "处置子公司及其他收到的现金"
+          jszyhdqckssddxj:
+            type: "number"
+            description: "减少质押和定期存款所收到的现金"
+          tzszfdxj:
+            type: "number"
+            description: "投资所支付的现金"
+          zydkjzje:
+            type: "number"
+            description: "质押贷款净增加额"
+          qdfzgsjqtywdwzfdxjje:
+            type: "number"
+            description: "取得子公司及其他营业单位支付的现金净额"
+          zjzyhdqckszfdxj:
+            type: "number"
+            description: "增加质押和定期存款所支付的现金"
+          qzfzgsxrxj:
+            type: "number"
+            description: "其中子公司吸收现金"
+          qz:fzgszfgsssgdglr:
+            type: "number"
+            description: "其中:子公司支付给少数股东的股利、利润"
+          ssgdsy:
+            type: "number"
+            description: "少数股东损益"
+          wqrdtzss:
+            type: "number"
+            description: "未确认的投资损失"
+          dysyzj(j:js):
+            type: "number"
+            description: "递延收益增加(减:减少)"
+          yjfz:
+            type: "number"
+            description: "预计负债"
+          jxyyfxmdzj:
+            type: "number"
+            description: "经营性应付项目的增加"
+          ywgwswjskdjs(j:zj):
+            type: "number"
+            description: "已完工尚未结算款的减少(减:增加)"
+          yjswgwgdjz(j:js):
+            type: "number"
+            description: "已结算尚未完工款的增加(减:减少)"
+          xssptglwsddxj:
+            type: "number"
+            description: "销售商品、提供劳务收到的现金"
+          khckhtyckxkjzje:
+            type: "number"
+            description: "客户存款和同业存放款项净增加额"
+          xzyhyhkjzje:
+            type: "number"
+            description: "向中央银行借款净增加额(万元)"
+          xtjrgjqjcrzjjzje:
+            type: "number"
+            description: "向其他金融机构拆入资金净增加额"
+          sddsfyfh:
+            type: "number"
+            description: "收到的税费与返还"
+          tzzfdxj:
+            type: "number"
+            description: "投资支付的现金"
+          sdqtyjyghdxj:
+            type: "number"
+            description: "收到的其他与经营活动有关的现金"
+          jyhdxjlrxj:
+            type: "number"
+            description: "经营活动现金流入小计"
+          gmspjslwzfdxj:
+            type: "number"
+            description: "购买商品、接受劳务支付的现金"
+          khdkjdknzje:
+            type: "number"
+            description: "客户贷款及垫款净增加额"
+          cfzyxhytckxkjzje:
+            type: "number"
+            description: "存放中央银行和同业款项净增加额"
+          zflxsxfjyjdxj:
+            type: "number"
+            description: "支付利息、手续费及佣金的现金"
+          zfgzyjwzgzfdxj:
+            type: "number"
+            description: "支付给职工以及为职工支付的现金"
+          zfdgxsf:
+            type: "number"
+            description: "支付的各项税费"
+          zfqtyjyghdxj:
+            type: "number"
+            description: "支付其他与经营活动有关的现金"
+          jyhdxjlcxj:
+            type: "number"
+            description: "经营活动现金流出小计"
+          jyhdcsdxjlje:
+            type: "number"
+            description: "经营活动产生的现金流量净额"
+          shtzssddxj:
+            type: "number"
+            description: "收回投资所收到的现金"
+          qdtzsysddxj:
+            type: "number"
+            description: "取得投资收益所收到的现金"
+          czgdzcwxzhqtqctzssddxj:
+            type: "number"
+            description: "处置固定资产、无形资产和其他长期投资收到的现金"
+          sdqtytzghdxj:
+            type: "number"
+            description: "收到的其他与投资活动有关的现金"
+          tzhdxjlrxj:
+            type: "number"
+            description: "投资活动现金流入小计"
+          gjgdzcwxzhqtqctzzfdxj:
+            type: "number"
+            description: "购建固定资产、无形资产和其他长期投资支付的现金"
+          tzhdxjlcxj:
+            type: "number"
+            description: "投资活动现金流出小计"
+          tzhdcsdxjlxj:
+            type: "number"
+            description: "投资活动产生的现金流量净额"
+          xstzsdj:
+            type: "number"
+            description: "吸收投资收到的现金"
+          qdjkjddxj:
+            type: "number"
+            description: "取得借款收到的现金"
+          fxzjsddxj:
+            type: "number"
+            description: "发行债券收到的现金"
+          sdqtczghdxj:
+            type: "number"
+            description: "收到其他与筹资活动有关的现金"
+          czhdxjlrxj:
+            type: "number"
+            description: "筹资活动现金流入小计"
+          chzwzfxj:
+            type: "number"
+            description: "偿还债务支付现金"
+          fpglrlhcllxzfdxj:
+            type: "number"
+            description: "分配股利、利润或偿付利息支付的现金"
+          zfqtczdxj:
+            type: "number"
+            description: "支付其他与筹资的现金"
+          czhdxjlcxj:
+            type: "number"
+            description: "筹资活动现金流出小计"
+          czhdcsdxjlxj:
+            type: "number"
+            description: "筹资活动产生的现金流量净额"
+          hlbddxjdxy:
+            type: "number"
+            description: "汇率变动对现金的影响"
+          xjxjdhwjzje:
+            type: "number"
+            description: "现金及现金等价物净增加额"
+          qcxjjxjdhwye:
+            type: "number"
+            description: "期初现金及现金等价物余额"
+          qmxjjxjdhwye:
+            type: "number"
+            description: "期末现金及现金等价物余额"
+          jlr:
+            type: "number"
+            description: "净利润"
+          zcjzzb:
+            type: "number"
+            description: "资产减值准备"
+          gdzczjyqzcshscxwzczj:
+            type: "number"
+            description: "固定资产折旧、油气资产折耗、生产性物资折旧"
+          wxzctx:
+            type: "number"
+            description: "无形资产摊销"
+          cqdtfytx:
+            type: "number"
+            description: "长期待摊费用摊销"
+          dtfydjs:
+            type: "number"
+            description: "待摊费用的减少"
+          ytfydzj:
+            type: "number"
+            description: "预提费用的增加"
+          czgdzcwxzhqtqctzss:
+            type: "number"
+            description: "处置固定资产、无形资产和其他长期资产的损失"
+          gdzcgbss:
+            type: "number"
+            description: "固定资产报废损失"
+          gyjzbds:
+            type: "number"
+            description: "公允价值变动损失"
+          cwfy:
+            type: "number"
+            description: "财务费用"
+          tzss:
+            type: "number"
+            description: "投资损失"
+          dysdszcjs:
+            type: "number"
+            description: "递延所得税资产减少"
+          dysdsfzzj:
+            type: "number"
+            description: "递延所得税负债增加"
+          chdjs:
+            type: "number"
+            description: "存货的减少"
+          jxyysxmdjs:
+            type: "number"
+            description: "经营性应收项目的减少"
+          qt:
+            type: "number"
+            description: "其他"
+          jyhdcsdxjlxj:
+            type: "number"
+            description: "经营活动产生现金流量净额"
+          zwzwzb:
+            type: "number"
+            description: "债务转为资本"
+          ynndqdkzhgzq:
+            type: "number"
+            description: "一年内到期的可转换公司债券"
+          rzrgdzc:
+            type: "number"
+            description: "融资租入固定资产"
+          xjdqmye:
+            type: "number"
+            description: "现金的期末余额"
+          xjdqcye:
+            type: "number"
+            description: "现金的期初余额"
+          xjdhwdqmye:
+            type: "number"
+            description: "现金等价物的期末余额"
+          xjdhwdqcye:
+            type: "number"
+            description: "现金等价物的期初余额"
+          xjxjdhwdjzje:
+            type: "number"
+            description: "现金及现金等价物的净增加额"
+        additionalProperties: true
+    PerShareMetricResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          jzrq:
+            type: "string"
+            description: "截止日期"
+          plrq:
+            type: "string"
+            description: "披露日期"
+          mgjyhdxjl:
+            type: "number"
+            description: "每股经营活动现金流量"
+          mgjzc:
+            type: "number"
+            description: "每股净资产"
+          jbmgsy:
+            type: "number"
+            description: "基本每股收益"
+          xsmgsy:
+            type: "number"
+            description: "稀释每股收益"
+          mgwfplr:
+            type: "number"
+            description: "每股未分配利润"
+          mgzbgjj:
+            type: "number"
+            description: "每股资本公积金"
+          kfmgsy:
+            type: "number"
+            description: "扣非每股收益"
+          jzcsyl:
+            type: "number"
+            description: "净资产收益率"
+          xsmlv:
+            type: "number"
+            description: "销售毛利率"
+          zyyrsrzz:
+            type: "number"
+            description: "主营收入同比增长"
+          jlrzz:
+            type: "number"
+            description: "净利润同比增长"
+          gsmgsyzzdjlrzz:
+            type: "number"
+            description: "归属于母公司所有者的净利润同比增长"
+          kfjlrzz:
+            type: "number"
+            description: "扣非净利润同比增长"
+          yyzsrgdhbzz:
+            type: "number"
+            description: "营业总收入滚动环比增长"
+          sljlrjqhbzz:
+            type: "number"
+            description: "归属净利润滚动环比增长"
+          kfjlrgdhbzz:
+            type: "number"
+            description: "扣非净利润滚动环比增长"
+          jqjzcsyl:
+            type: "number"
+            description: "加权净资产收益率"
+          tbjzcsyl:
+            type: "number"
+            description: "摊薄净资产收益率"
+          tbzzcsyl:
+            type: "number"
+            description: "摊薄总资产收益率"
+          mlv:
+            type: "number"
+            description: "毛利率"
+          jlv:
+            type: "number"
+            description: "净利率"
+          sjslv:
+            type: "number"
+            description: "实际税率"
+          yskyysr:
+            type: "number"
+            description: "预收款营业收入"
+          xsxjlyysr:
+            type: "number"
+            description: "销售现金流营业收入"
+          zcfzl:
+            type: "number"
+            description: "资产负债比率"
+          chzzl:
+            type: "number"
+            description: "存货周转率"
+        additionalProperties: true
+    CapitalStructureResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          zgb:
+            type: "number"
+            description: "总股本"
+          ysltag:
+            type: "number"
+            description: "已上市流通A股"
+          xsltgf:
+            type: "number"
+            description: "限售流通股份"
+          bdrq:
+            type: "string"
+            description: "变动日期"
+          plrq:
+            type: "string"
+            description: "公告日"
+        additionalProperties: true
+    FinancialTopShareholderResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          plrq:
+            type: "string"
+            description: "公告日期"
+          jzrq:
+            type: "string"
+            description: "截止日期"
+          gdmc:
+            type: "string"
+            description: "股东名称"
+          gdlx:
+            type: "string"
+            description: "股东类型"
+          cgsl:
+            type: "string"
+            description: "持股数量"
+          bdyy:
+            type: "string"
+            description: "变动原因"
+          cgbl:
+            type: "string"
+            description: "持股比例"
+          gfxz:
+            type: "string"
+            description: "股份性质"
+          cgpm:
+            type: "string"
+            description: "持股排名"
+        additionalProperties: true
+    FinancialTopFloatShareholderResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          ggrq:
+            type: "string"
+            description: "公告日期"
+          jzrq:
+            type: "string"
+            description: "截止日期"
+          gdmc:
+            type: "string"
+            description: "股东名称"
+          gdlx:
+            type: "string"
+            description: "股东类型"
+          cgsl:
+            type: "string"
+            description: "持股数量"
+          bdyy:
+            type: "string"
+            description: "变动原因"
+          cgbl:
+            type: "string"
+            description: "持股比例"
+          gfxz:
+            type: "string"
+            description: "股份性质"
+          cgpm:
+            type: "string"
+            description: "持股排名"
+        additionalProperties: true
+    ShareholderCountHistoryResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          plrq:
+            type: "string"
+            description: "公告日期"
+          jzrq:
+            type: "string"
+            description: "截止日期"
+          gdzs:
+            type: "string"
+            description: "股东总数"
+          agdhs:
+            type: "string"
+            description: "A股东户数"
+          bgdhs:
+            type: "string"
+            description: "B股东户数"
+          hgdhs:
+            type: "string"
+            description: "H股东户数"
+          yltgdhs:
+            type: "string"
+            description: "已流通股东户数"
+          wltgdhs:
+            type: "string"
+            description: "未流通股东户数"
+        additionalProperties: true
+    MacdHistoryResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          t:
+            type: "string"
+            description: "交易时间，短分时级别格式为yyyy-MM-ddHH:mm:ss，日线级别为yyyy-MM-dd"
+          diff:
+            type: "number"
+            description: "DIFF值"
+          dea:
+            type: "number"
+            description: "DEA值"
+          macd:
+            type: "number"
+            description: "MACD值"
+          ema12:
+            type: "number"
+            description: "EMA（12）值"
+          ema26:
+            type: "number"
+            description: "EMA（26）值"
+        additionalProperties: true
+    MaHistoryResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          t:
+            type: "string"
+            description: "交易时间，短分时级别格式为yyyy-MM-ddHH:mm:ss，日线级别为yyyy-MM-dd"
+          ma3:
+            type: "number"
+            description: "MA3，没有则为null"
+          ma5:
+            type: "number"
+            description: "MA5，没有则为null"
+          ma10:
+            type: "number"
+            description: "MA10，没有则为null"
+          ma15:
+            type: "number"
+            description: "MA15，没有则为null"
+          ma20:
+            type: "number"
+            description: "MA20，没有则为null"
+          ma30:
+            type: "number"
+            description: "MA30，没有则为null"
+          ma60:
+            type: "number"
+            description: "MA60，没有则为null"
+          ma120:
+            type: "number"
+            description: "MA120，没有则为null"
+          ma200:
+            type: "number"
+            description: "MA200，没有则为null"
+          ma250:
+            type: "number"
+            description: "MA250，没有则为null"
+        additionalProperties: true
+    BollHistoryResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          t:
+            type: "string"
+            description: "交易时间，短分时级别格式为yyyy-MM-ddHH:mm:ss，日线级别为yyyy-MM-dd"
+          u:
+            type: "number"
+            description: "上轨"
+          d:
+            type: "number"
+            description: "下轨"
+          m:
+            type: "number"
+            description: "中轨"
+        additionalProperties: true
+    KdjHistoryResponse:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          t:
+            type: "string"
+            description: "交易时间，短分时级别格式为yyyy-MM-ddHH:mm:ss，日线级别为yyyy-MM-dd"
+          k:
+            type: "number"
+            description: "K值"
+          d:
+            type: "number"
+            description: "D值"
+          j:
+            type: "number"
+            description: "J值"
+        additionalProperties: true
