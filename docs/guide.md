@@ -8,12 +8,16 @@
 
 ## 阶段规划
 
-- [阶段目标清单](phase.md)：Phase 1~4 的阶段目标、前置依赖、本阶段范围、关键任务、达成标准。
+- [阶段目标清单](phase.md)：项目阶段目标，包括：前置依赖、本阶段范围、关键任务、达成标准。
 
 ## 人类维护规范（docs/human）
 
 - [AlphaPredator.dbml](human/data-model/AlphaPredator.dbml)：数据模型涉及
 - [A股涨跌停计算规则](human/price-limit-rule.md)：按市场板块区分的涨跌停计算口径。
+- [mysj.md](human/mysj.md)：A股市场数据源设计文档
+- [hot-review.md](human/hot-review.md)：热点复盘设计文档
+- [jygs-api.yml](human/api-docs/jygs-api.yml)：韭研公社api文档
+- [mysj.yaml](human/api-docs/mysj.yaml)：麦蕊数据api文档
 
 ## Agent 协作文档
 
@@ -22,9 +26,7 @@
 
 ## Agent 工作文档（docs/agent）
 
-- [当前执行进度](agent/current-progress.md)：**每次会话开始前必读**，记录当前阶段、上一步完成内容、下一步待做任务与已知阻塞。
-- [数据模型文档](agent/data-model.md)：所有 SQLite 表的字段说明、枚举值速查与表间关系图，基于 `AlphaPredator.sql` /
-  `AlphaPredator.dbml` 生成。
+- [当前执行进度](agent/current-progress.md)：记录当前阶段、上一步完成内容、下一步待做任务与已知阻塞。
 
 
 
