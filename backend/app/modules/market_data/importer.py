@@ -1,4 +1,4 @@
-import csv
+﻿import csv
 import json
 import sys
 from dataclasses import dataclass
@@ -28,6 +28,15 @@ REQUIRED_DAILY_BAR_FIELDS = {
     'close_price',
     'volume',
 }
+
+
+def _to_full_code(code: str) -> str:
+    raw = str(code).strip().zfill(6)
+    if raw.startswith('6'):
+        return f'{raw}.SH'
+    if raw.startswith(('8', '4')):
+        return f'{raw}.BJ'
+    return f'{raw}.SZ'
 
 
 def import_market_data_batch(
@@ -108,7 +117,7 @@ def _read_daily_bars(file_path: Path) -> list[dict[str, Any]]:
             'low_price': float(row['low_price']),
             'close_price': float(row['close_price']),
             'volume': int(row['volume']),
-            # Optional field: 0.0 when missing (backward compat with old CSVs)
+            # Optional field: defaults to 0.0 when missing
             'turnover_amount_billion': float(row.get('turnover_amount_billion') or 0.0),
         }
         for row in rows
@@ -201,13 +210,20 @@ def _write_sqlite_data(
 def _write_duckdb_data(*, duckdb_path: Path, daily_bars: list[dict[str, Any]], daily_bars_parquet_path: Path) -> None:
     connection = connect_duckdb(duckdb_path)
     try:
-        connection.execute('DELETE FROM daily_bars')
+        connection.execute('BEGIN TRANSACTION')
+        trade_dates = {str(row['trade_date']) for row in daily_bars if row.get('trade_date')}
+        for td in trade_dates:
+            connection.execute('DELETE FROM day_level_trade_data WHERE trade_date = ?', [td])
+
         if daily_bars:
             connection.executemany(
-                'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'INSERT INTO day_level_trade_data ('
+                'full_code, trade_date, open, high, low, close, '
+                'pre_close, change, pct_chg, vol, amount, is_up_limit, is_down_limit'
+                ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [
                     (
-                        row['stock_code'],               # ts_code: CSV uses 6-digit stock_code; stored as-is (without exchange suffix)
+                        _to_full_code(row['stock_code']),
                         row['trade_date'],
                         row['open_price'],               # open
                         row['high_price'],               # high
@@ -226,7 +242,14 @@ def _write_duckdb_data(*, duckdb_path: Path, daily_bars: list[dict[str, Any]], d
             )
         daily_bars_parquet_path.unlink(missing_ok=True)
         parquet_path = str(daily_bars_parquet_path).replace('\\', '/').replace("'", "''")
-        connection.execute(f"COPY (SELECT * FROM daily_bars ORDER BY ts_code, trade_date) TO '{parquet_path}' (FORMAT PARQUET)")
+        connection.execute(
+            f"COPY (SELECT * FROM day_level_trade_data ORDER BY full_code, trade_date) "
+            f"TO '{parquet_path}' (FORMAT PARQUET)"
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
     finally:
         connection.close()
 
@@ -274,7 +297,7 @@ def _write_market_snapshot(
 def main(argv: list[str] | None = None) -> int:
     arguments = argv or sys.argv[1:]
     if len(arguments) != 1:
-        print('Usage: python -m app.modules.market_data.importer <batch-dir>', file=sys.stderr)
+        print('Usage: python -m app.modules.market-data.md.importer <batch-dir>', file=sys.stderr)
         return 1
 
     result = import_market_data_batch(Path(arguments[0]))

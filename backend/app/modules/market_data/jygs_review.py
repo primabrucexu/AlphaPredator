@@ -11,8 +11,12 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import sync_playwright
+
 from app.core.settings import settings
 from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
+from app.modules.jygs.auth import get_session
 from app.repositories.jygs_repo import JygsRepo
 
 logger = logging.getLogger(__name__)
@@ -150,20 +154,11 @@ def save_jygs_auth_cookie(cookie: str, sqlite_path: Path | None = None) -> dict[
 
 
 def _read_cookie(sqlite_path: Path | None = None) -> str:
-    """Read auth cookie, preferring the new file-based SESSION storage."""
-    from app.modules.jygs.auth import get_session
-
+    """Read auth cookie from SESSION storage."""
     session = get_session()
     if session:
         return f'SESSION={session}'
-
-    # Legacy fallback (older table-based auth storage), kept for compatibility.
-    target = sqlite_path or settings.sqlite_path
-    ensure_sqlite_schema(target)
-    cookie = JygsRepo(target).get_auth_cookie()
-    if not cookie:
-        raise JygsCredentialError('韭研公社登录凭据未配置，请先在数据初始化页面完成登录。')
-    return cookie
+    raise JygsCredentialError('韭研公社登录凭据未配置，请先在数据初始化页面完成登录。')
 
 
 def check_jygs_auth_available(sqlite_path: Path | None = None) -> dict[str, Any]:
@@ -310,8 +305,8 @@ def sync_hot_review_by_date(trade_date: str, sqlite_path: Path | None = None) ->
             connection.execute(
                 '''
                 INSERT INTO daily_hot_info (trade_date, limit_up_time, stock_code, name, streak_text, hot_theme, reason,
-                                            source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                            source, short_reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''',
                 [
                     trade_date,
@@ -322,6 +317,7 @@ def sync_hot_review_by_date(trade_date: str, sqlite_path: Path | None = None) ->
                     hot_theme,
                     reason_raw,
                     'jygs',
+                    '',  # short_reason: placeholder, populated by OCR in a future phase
                 ],
             )
 
@@ -344,51 +340,7 @@ def sync_hot_review_by_date(trade_date: str, sqlite_path: Path | None = None) ->
     }
 
 
-def sync_hot_review_now(sqlite_path: Path | None = None) -> dict[str, Any]:
-    trade_date = datetime.now(tz=ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d')
-    return sync_hot_review_by_date(trade_date, sqlite_path=sqlite_path)
 
-
-def run_incremental_sync_if_due(sqlite_path: Path | None = None, now: datetime | None = None) -> dict[str, Any]:
-    current = now or datetime.now(tz=ZoneInfo('Asia/Shanghai'))
-    current_slot: str | None = None
-    if current.hour == 12 and current.minute == 2:
-        current_slot = '12:02'
-    elif current.hour == 15 and current.minute == 32:
-        current_slot = '15:32'
-
-    if not current_slot:
-        return {'triggered': False, 'reason': 'not_in_schedule_window'}
-
-    trade_date = current.strftime('%Y-%m-%d')
-    slot_key = f'{trade_date}@{current_slot}'
-    target = sqlite_path or settings.sqlite_path
-    ensure_sqlite_schema(target)
-
-    repo = JygsRepo(target)
-    if repo.has_sync_slot(slot_key):
-        return {'triggered': False, 'reason': 'slot_already_synced', 'slot_key': slot_key}
-
-    try:
-        result = sync_hot_review_by_date(trade_date, sqlite_path=target)
-        status = 'SUCCESS'
-        message = ''
-    except Exception as exc:  # noqa: BLE001
-        result = {'trade_date': trade_date, 'error': str(exc)}
-        status = 'FAILED'
-        message = str(exc)
-        logger.warning('JYGS incremental sync failed: %s', exc)
-
-    repo.upsert_sync_log(
-        slot_key=slot_key,
-        trade_date=trade_date,
-        mode='INCREMENTAL',
-        status=status,
-        message=message,
-        triggered_at=_now_iso(),
-    )
-
-    return {'triggered': True, 'slot_key': slot_key, 'status': status, 'result': result}
 
 
 def auto_login_jygs_with_browser(sqlite_path: Path | None = None, timeout_seconds: int = 300) -> dict[str, Any]:
@@ -405,8 +357,6 @@ def auto_login_jygs_with_browser(sqlite_path: Path | None = None, timeout_second
     Raises:
         RuntimeError: 浏览器操作或登录失败时抛出
     """
-    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-    from playwright.sync_api import sync_playwright
 
     target = sqlite_path or settings.sqlite_path
     login_url = f'{_JYGS_BASE_URL}/'

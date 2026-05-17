@@ -18,33 +18,19 @@ class InitTaskRepo:
             *,
             task_id: str,
             task_type: str,
-            mode: str,
             start_date: str,
             end_date: str,
-            total_days: int,
-            trading_days: int,
-            created_at: str,
-            dates: list[str],
+            total_items: int,
     ) -> None:
         conn = self._connect()
         try:
             conn.execute(
                 '''
-                INSERT INTO init_task (task_id, task_type, mode, start_date, end_date, status,
-                                       total_days, processed_days, trading_days, done_trading_days,
-                                       current_date, error_message, created_at, started_at, finished_at)
-                VALUES (?, ?, ?, ?, ?, 'PENDING', ?, 0, ?, 0, '', '', ?, '', '')
+                INSERT INTO task_info
+                (task_id, task_type, start_date, end_date, status, total_items, processed_items)
+                VALUES (?, ?, ?, ?, 'PENDING', ?, 0)
                 ''',
-                (task_id, task_type, mode, start_date, end_date, total_days, trading_days, created_at),
-            )
-            conn.executemany(
-                '''
-                INSERT INTO init_task_day
-                (task_id, trade_date, is_trading_day, status, row_count,
-                 started_at, finished_at, error_message)
-                VALUES (?, ?, ?, 'PENDING', 0, '', '', '')
-                ''',
-                [(task_id, d, 1) for d in dates],
+                (task_id, task_type, start_date, end_date, total_items),
             )
             conn.commit()
         finally:
@@ -54,7 +40,7 @@ class InitTaskRepo:
         conn = self._connect()
         try:
             row = conn.execute(
-                'SELECT * FROM init_task WHERE task_id = ?',
+                'SELECT * FROM task_info WHERE task_id = ?',
                 (task_id,),
             ).fetchone()
             return dict(row) if row else None
@@ -65,38 +51,10 @@ class InitTaskRepo:
         conn = self._connect()
         try:
             rows = conn.execute(
-                'SELECT * FROM init_task ORDER BY created_at DESC LIMIT ?',
+                'SELECT * FROM task_info ORDER BY id DESC LIMIT ?',
                 (limit,),
             ).fetchall()
             return [dict(r) for r in rows]
-        finally:
-            conn.close()
-
-    def get_task_days_page(self, task_id: str, page: int, per_page: int) -> dict[str, Any]:
-        offset = (page - 1) * per_page
-        conn = self._connect()
-        try:
-            total = conn.execute(
-                'SELECT COUNT(*) FROM init_task_day WHERE task_id = ?',
-                (task_id,),
-            ).fetchone()[0]
-            rows = conn.execute(
-                '''
-                SELECT *
-                FROM init_task_day
-                WHERE task_id = ?
-                ORDER BY trade_date ASC LIMIT ?
-                OFFSET ?
-                ''',
-                (task_id, per_page, offset),
-            ).fetchall()
-            return {
-                'task_id': task_id,
-                'total': total,
-                'page': page,
-                'per_page': per_page,
-                'days': [dict(r) for r in rows],
-            }
         finally:
             conn.close()
 
@@ -104,7 +62,7 @@ class InitTaskRepo:
         conn = self._connect()
         try:
             row = conn.execute(
-                'SELECT status FROM init_task WHERE task_id = ?',
+                'SELECT status FROM task_info WHERE task_id = ?',
                 (task_id,),
             ).fetchone()
             return str(row['status']) if row else None
@@ -115,78 +73,62 @@ class InitTaskRepo:
         conn = self._connect()
         try:
             row = conn.execute(
-                "SELECT task_id FROM init_task WHERE status = 'RUNNING' LIMIT 1"
+                "SELECT task_id FROM task_info WHERE status = 'RUNNING' LIMIT 1"
             ).fetchone()
             return str(row['task_id']) if row else None
         finally:
             conn.close()
 
-    def try_mark_task_running(self, task_id: str, started_at: str) -> bool:
+    def try_mark_task_running(self, task_id: str, task_start_date: str) -> bool:
         conn = self._connect()
         try:
             updated = conn.execute(
                 '''
-                UPDATE init_task
-                SET status     = 'RUNNING',
-                    started_at = ?
+                UPDATE task_info
+                SET status          = 'RUNNING',
+                    task_start_date = ?
                 WHERE task_id = ?
                   AND status IN ('PENDING', 'FAILED', 'TERMINATED')
                 ''',
-                (started_at, task_id),
+                (task_start_date, task_id),
             ).rowcount
             conn.commit()
             return bool(updated)
         finally:
             conn.close()
 
-    def reset_task_for_retry(self, task_id: str, now: str) -> None:
+    def reset_task_for_retry(self, task_id: str) -> None:
         conn = self._connect()
         try:
             conn.execute(
-                '''UPDATE init_task
-                   SET status            = 'PENDING',
-                       processed_days    = 0,
-                       done_trading_days = 0,
-                       current_date      = '',
-                       error_message     = '',
-                       started_at        = '',
-                       finished_at       = ''
+                '''UPDATE task_info
+                   SET status          = 'PENDING',
+                       processed_items = 0,
+                       current_label   = '',
+                       error_message   = '',
+                       task_start_date = '',
+                       task_end_date   = ''
                    WHERE task_id = ?''',
                 (task_id,),
-            )
-            conn.execute(
-                '''UPDATE init_task_day
-                   SET status        = 'PENDING',
-                       row_count     = 0,
-                       started_at    = '',
-                       finished_at   = '',
-                       error_message = ''
-                   WHERE task_id = ?''',
-                (task_id,),
-            )
-            conn.execute(
-                'UPDATE init_task SET created_at = ? WHERE task_id = ?',
-                (now, task_id),
             )
             conn.commit()
         finally:
             conn.close()
 
-    def terminate_task(self, task_id: str, finished_at: str) -> bool:
+    def terminate_task(self, task_id: str, task_end_date: str) -> bool:
         conn = self._connect()
         try:
             updated = conn.execute(
-                '''UPDATE init_task
+                '''UPDATE task_info
                    SET status        = 'TERMINATED',
-                       finished_at   = ?,
-                       current_date  = '',
+                       task_end_date = ?,
                        error_message = CASE
                                            WHEN error_message = '' THEN 'Terminated by user'
                                            ELSE error_message
                            END
                    WHERE task_id = ?
                      AND status IN ('RUNNING', 'FAILED', 'PENDING')''',
-                (finished_at, task_id),
+                (task_end_date, task_id),
             ).rowcount
             conn.commit()
             return bool(updated)
@@ -197,7 +139,7 @@ class InitTaskRepo:
         conn = self._connect()
         try:
             row = conn.execute(
-                "SELECT * FROM init_task WHERE status = 'RUNNING' ORDER BY started_at DESC LIMIT 1"
+                "SELECT * FROM task_info WHERE status = 'RUNNING' ORDER BY task_start_date DESC LIMIT 1"
             ).fetchone()
             return dict(row) if row else None
         finally:
@@ -207,119 +149,73 @@ class InitTaskRepo:
         conn = self._connect()
         try:
             row = conn.execute(
-                "SELECT * FROM init_task WHERE status IN ('SUCCESS', 'FAILED', 'TERMINATED') "
-                "ORDER BY finished_at DESC LIMIT 1"
+                "SELECT * FROM task_info WHERE status IN ('SUCCESS', 'FAILED', 'TERMINATED') "
+                "ORDER BY task_end_date DESC LIMIT 1"
             ).fetchone()
             return dict(row) if row else None
         finally:
             conn.close()
 
-    def set_current_date_and_mark_day_running(self, task_id: str, trade_date: str, started_at: str) -> None:
+    def set_total_items(self, task_id: str, total: int) -> None:
         conn = self._connect()
         try:
             conn.execute(
-                'UPDATE init_task SET current_date = ? WHERE task_id = ?',
-                (trade_date, task_id),
-            )
-            conn.execute(
-                "UPDATE init_task_day SET started_at = ?, status = 'RUNNING' "
-                'WHERE task_id = ? AND trade_date = ?',
-                (started_at, task_id, trade_date),
+                'UPDATE task_info SET total_items = ? WHERE task_id = ?',
+                (total, task_id),
             )
             conn.commit()
         finally:
             conn.close()
 
-    def mark_day_writing(self, task_id: str, trade_date: str) -> None:
+    def increment_processed_items(self, task_id: str) -> None:
         conn = self._connect()
         try:
             conn.execute(
-                "UPDATE init_task_day SET status = 'WRITING' WHERE task_id = ? AND trade_date = ?",
-                (task_id, trade_date),
-            )
-            conn.commit()
-        finally:
-            conn.close()
-
-    def mark_day_success_and_increment(self, task_id: str, trade_date: str, finished_at: str, row_count: int) -> None:
-        conn = self._connect()
-        try:
-            conn.execute(
-                '''UPDATE init_task_day
-                   SET status      = 'SUCCESS',
-                       finished_at = ?,
-                       row_count   = ?
-                   WHERE task_id = ?
-                     AND trade_date = ?''',
-                (finished_at, row_count, task_id, trade_date),
-            )
-            conn.execute(
-                '''UPDATE init_task
-                   SET processed_days    = processed_days + 1,
-                       done_trading_days = done_trading_days + 1
-                   WHERE task_id = ?''',
+                'UPDATE task_info SET processed_items = processed_items + 1 WHERE task_id = ?',
                 (task_id,),
             )
             conn.commit()
         finally:
             conn.close()
 
-    def mark_task_progress_processed_only(self, task_id: str) -> None:
+    def set_current_label(self, task_id: str, label: str) -> None:
         conn = self._connect()
         try:
             conn.execute(
-                '''UPDATE init_task
-                   SET processed_days = processed_days + 1
-                   WHERE task_id = ?''',
-                (task_id,),
+                'UPDATE task_info SET current_label = ? WHERE task_id = ?',
+                (label, task_id),
             )
             conn.commit()
         finally:
             conn.close()
 
-    def finalize_task_success_if_running(self, task_id: str, finished_at: str) -> bool:
+    def finalize_task_success_if_running(self, task_id: str, task_end_date: str) -> bool:
         conn = self._connect()
         try:
             updated = conn.execute(
-                '''UPDATE init_task
-                   SET status       = 'SUCCESS',
-                       finished_at  = ?,
-                       current_date = ''
+                '''UPDATE task_info
+                   SET status        = 'SUCCESS',
+                       task_end_date = ?,
+                       current_label = ''
                    WHERE task_id = ?
                      AND status = 'RUNNING' ''',
-                (finished_at, task_id),
+                (task_end_date, task_id),
             ).rowcount
             conn.commit()
             return bool(updated)
         finally:
             conn.close()
 
-    def mark_day_failed(self, task_id: str, trade_date: str, finished_at: str, error_message: str) -> None:
+    def mark_task_failed(self, task_id: str, task_end_date: str, error_message: str) -> None:
         conn = self._connect()
         try:
             conn.execute(
-                '''UPDATE init_task_day
+                '''UPDATE task_info
                    SET status        = 'FAILED',
-                       finished_at   = ?,
-                       error_message = ?
-                   WHERE task_id = ?
-                     AND trade_date = ?''',
-                (finished_at, error_message, task_id, trade_date),
-            )
-            conn.commit()
-        finally:
-            conn.close()
-
-    def mark_task_failed(self, task_id: str, finished_at: str, error_message: str) -> None:
-        conn = self._connect()
-        try:
-            conn.execute(
-                '''UPDATE init_task
-                   SET status        = 'FAILED',
-                       finished_at   = ?,
+                       task_end_date = ?,
                        error_message = ?
                    WHERE task_id = ?''',
-                (finished_at, error_message, task_id),
+                (task_end_date, error_message, task_id),
             )
             conn.commit()
         finally:
@@ -329,7 +225,7 @@ class InitTaskRepo:
         conn = self._connect()
         try:
             row = conn.execute(
-                'SELECT status FROM init_task WHERE task_id = ?',
+                'SELECT status FROM task_info WHERE task_id = ?',
                 (task_id,),
             ).fetchone()
             return bool(row and row['status'] == 'TERMINATED')
@@ -340,11 +236,11 @@ class InitTaskRepo:
         conn = self._connect()
         try:
             row = conn.execute(
-                "SELECT * FROM data_range_meta WHERE dataset = 'daily_bars'"
+                "SELECT * FROM data_range_meta WHERE dataset = 'day_level_trade_data'"
             ).fetchone()
-            if not row:
+            if row is None:
                 row = conn.execute(
-                    "SELECT * FROM data_range_meta WHERE dataset = 'market_daily_quote'"
+                    "SELECT * FROM data_range_meta WHERE dataset = 'daily_price'"
                 ).fetchone()
             return dict(row) if row else None
         finally:

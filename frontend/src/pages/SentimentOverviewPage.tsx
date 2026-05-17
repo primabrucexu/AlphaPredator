@@ -12,7 +12,7 @@ import {
     type LimitUpStreakItem,
 } from '../lib/api';
 
-const HISTORY_DAY_OPTIONS = [5, 7, 10, 20].map((value) => ({value, label: `近 ${value} 日`}));
+const HISTORY_DAY_OPTIONS = [3, 5, 10, 20].map((value) => ({value, label: `近 ${value} 日`}));
 
 const hotSectorColumns: ColumnsType<HotSectorHistorySector> = [
     {
@@ -50,7 +50,7 @@ const streakColumns: ColumnsType<LimitUpStreakItem> = [
 ];
 
 export function SentimentOverviewPage() {
-    const [historyDays, setHistoryDays] = useState(7);
+    const [historyDays, setHistoryDays] = useState(5);
     const [minBoards, setMinBoards] = useState(2);
     const [streakTradeDate, setStreakTradeDate] = useState<string>();
     const [currentImageIndex, setCurrentImageIndex] = useState(0);
@@ -99,46 +99,58 @@ export function SentimentOverviewPage() {
     }
 
     const tradeDates = data.trade_dates;
-    const themeNames = Array.from(new Set(data.days.flatMap((d) => d.sectors.map((s) => s.name))));
-    const themeIndex = new Map(themeNames.map((name, idx) => [name, idx]));
-    const points: [number, number, number][] = [];
-
-    data.days.forEach((day, x) => {
-      day.sectors.forEach((sector) => {
-        const y = themeIndex.get(sector.name);
-        if (y !== undefined) {
-          points.push([x, y, sector.heat_score]);
-        }
+      // Collect all unique theme names across all days, sorted by total heat descending
+      const themeHeat = new Map<string, number>();
+      data.days.forEach((d) => {
+          d.sectors.forEach((s) => {
+              themeHeat.set(s.name, (themeHeat.get(s.name) ?? 0) + s.heat_score);
       });
     });
+      const allThemes = [...themeHeat.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 15)  // top 15 themes to keep chart readable
+          .map(([name]) => name);
+
+      // Build a quick-access lookup: dateStr → sectorName → heat_score
+      const dayMap = new Map(data.days.map((d) => [d.trade_date, d]));
+
+      const series = allThemes.map((theme) => ({
+          name: theme,
+          type: 'line',
+          smooth: true,
+          symbol: 'circle',
+          symbolSize: 6,
+          data: tradeDates.map((date) => {
+              const day = dayMap.get(date);
+              const sector = day?.sectors.find((s) => s.name === theme);
+              return sector?.heat_score ?? null;
+          }),
+          connectNulls: false,
+      }));
 
     return {
       tooltip: {
-        formatter: (params: { value: [number, number, number] }) => {
-          const [x, y, score] = params.value;
-            return `${tradeDates[x]}<br/>${themeNames[y]}<br/>涨停家数：${score}`;
+          trigger: 'axis',
+          formatter: (params: { seriesName: string; value: number | null; name: string }[]) => {
+              const date = params[0]?.name ?? '';
+              const lines = params
+                  .filter((p) => p.value !== null && p.value !== undefined)
+                  .sort((a, b) => (b.value ?? 0) - (a.value ?? 0))
+                  .map((p) => `${p.seriesName}：${p.value} 家`)
+                  .join('<br/>');
+              return `${date}<br/>${lines}`;
         },
       },
-      xAxis: { type: 'category', data: tradeDates },
-      yAxis: { type: 'category', data: themeNames },
-      visualMap: {
-        min: 0,
-        max: Math.max(...points.map((p) => p[2]), 1),
-        calculable: true,
-        orient: 'horizontal',
-        left: 'center',
+        legend: {
+            data: allThemes,
+            type: 'scroll',
         bottom: 0,
+            pageButtonPosition: 'end',
       },
-      series: [
-        {
-            name: '涨停家数',
-          type: 'heatmap',
-          data: points,
-          label: { show: false },
-          emphasis: { itemStyle: { shadowBlur: 8, shadowColor: 'rgba(0, 0, 0, 0.35)' } },
-        },
-      ],
-      grid: { left: 90, right: 20, top: 20, bottom: 60 },
+        xAxis: {type: 'category', data: tradeDates, boundaryGap: false},
+        yAxis: {type: 'value', name: '涨停家数', minInterval: 1},
+        series,
+        grid: {left: 60, right: 20, top: 30, bottom: 80},
     };
   }, [historyQuery.data]);
 
@@ -194,7 +206,7 @@ export function SentimentOverviewPage() {
             </Space>
         </Card>
 
-        <Card className="page-card" title={`热点板块趋势热力图（近 ${historyDays} 日）`}>
+        <Card className="page-card" title={`热点板块涨停趋势（近 ${historyDays} 日）`}>
         {historyChart ? <ReactECharts option={historyChart} style={{ height: 380 }} /> : <Empty description="暂无热点趋势数据" />}
       </Card>
 

@@ -2812,7 +2812,7 @@ components:
             description: "成交量"
           a:
             type: "number"
-            description: "成交额"
+            description: "成交额，单位亿元"
           pc:
             type: "number"
             description: "前收盘价"

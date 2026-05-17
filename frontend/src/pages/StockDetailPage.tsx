@@ -62,7 +62,7 @@ const SUB_CHART_TITLES = {
   rsi: 'RSI',
 } as const;
 
-// Backend returns duckdb raw amount sourced from Tushare `amount` (unit: 千元).
+// Backend returns raw amount in 千元.
 // UI should display in 亿元.
 const QIANYUAN_PER_YI = 100_000;
 const INITIAL_MONTHS_WINDOW = 6;

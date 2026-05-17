@@ -7,11 +7,14 @@ from typing import Any
 from app.core.settings import settings
 from app.db.duckdb_storage import connect_duckdb
 from app.db.sqlite import connect_sqlite
+from app.modules.market_data.data_source import _to_full_code
 from app.queries.market_queries import (
-    get_hot_sector_rows_by_date,
-    get_hot_sector_trade_dates,
-    get_latest_limit_up_trade_date,
-    get_limit_up_streak_rows,
+    get_hot_info_rows_by_date,
+    get_hot_info_trade_dates,
+    get_latest_hot_info_trade_date,
+    get_hot_pic_rows_by_date,
+    get_latest_hot_pic_trade_date,
+    parse_board_count,
 )
 from app.repositories.market_metadata_repo import MarketMetadataRepo
 from app.repositories.stock_list_repo import StockListRepo
@@ -126,28 +129,14 @@ class MarketDataService:
         target_days = max(1, min(days, 60))
         connection = connect_sqlite(self._sqlite_path)
         try:
-            trade_dates = get_hot_sector_trade_dates(connection, target_days)
+            trade_dates = get_hot_info_trade_dates(connection, target_days)
             if not trade_dates:
                 return HotSectorHistoryResponse()
 
             days_payload: list[HotSectorHistoryDay] = []
             for trade_date in trade_dates:
-                rows = get_hot_sector_rows_by_date(connection, trade_date)
-
-                sectors = [
-                    HotSectorHistorySector(
-                        name=str(row['name']),
-                        heat_score=int(row['heat_score']),
-                        trend_tag=str(row['trend_tag']) if row['trend_tag'] is not None else None,
-                        trend_label=self._build_trend_label(
-                            str(row['trend_tag']) if row['trend_tag'] is not None else None,
-                            int(row['days_present_3d']) if row['days_present_3d'] is not None else None,
-                        ),
-                        rank_today=int(row['rank_today']) if row['rank_today'] is not None else None,
-                        max_board_count=int(row['max_board_count']) if row['max_board_count'] is not None else None,
-                    )
-                    for row in rows
-                ]
+                rows = get_hot_info_rows_by_date(connection, trade_date)
+                sectors = self._build_hot_sector_history_sectors(rows)
                 days_payload.append(HotSectorHistoryDay(trade_date=trade_date, sectors=sectors))
         finally:
             connection.close()
@@ -167,24 +156,33 @@ class MarketDataService:
         try:
             target_trade_date = trade_date
             if not target_trade_date:
-                target_trade_date = get_latest_limit_up_trade_date(connection)
+                target_trade_date = get_latest_hot_info_trade_date(connection)
 
             if not target_trade_date:
                 return LimitUpStreaksResponse(trade_date='', streaks=[])
 
-            rows = get_limit_up_streak_rows(connection, target_trade_date, target_min_boards)
-
-            streaks = [
-                LimitUpStreakItem(
-                    trade_date=str(row['trade_date']),
-                    stock_code=str(row['stock_code']),
-                    stock_name=str(row['stock_name']),
-                    board_count=int(row['board_count']),
-                    limit_up_time=str(row['limit_up_time'] or ''),
-                    hot_theme=str(row['hot_theme'] or ''),
+            rows = get_hot_info_rows_by_date(connection, target_trade_date)
+            streak_rows: list[dict[str, Any]] = []
+            for row in rows:
+                board_count = parse_board_count(str(row['streak_text'] or ''))
+                if board_count < target_min_boards:
+                    continue
+                stock_code = str(row['stock_code'] or '').strip()
+                if stock_code.isdigit():
+                    stock_code = stock_code.zfill(6)
+                streak_rows.append(
+                    {
+                        'trade_date': str(row['trade_date']),
+                        'stock_code': stock_code,
+                        'stock_name': str(row['name'] or ''),
+                        'board_count': board_count,
+                        'limit_up_time': str(row['limit_up_time'] or ''),
+                        'hot_theme': str(row['hot_theme'] or ''),
+                    }
                 )
-                for row in rows
-            ]
+            streak_rows.sort(key=lambda item: (-item['board_count'], item['limit_up_time'], item['stock_code']))
+
+            streaks = [LimitUpStreakItem(**row) for row in streak_rows]
         finally:
             connection.close()
 
@@ -198,59 +196,47 @@ class MarketDataService:
         try:
             target_trade_date = trade_date
             if not target_trade_date:
-                latest_row = connection.execute(
-                    'SELECT MAX(trade_date) AS trade_date FROM hot_sector_image_sources'
-                ).fetchone()
-                target_trade_date = str(latest_row['trade_date'] or '').strip() if latest_row else ''
+                target_trade_date = get_latest_hot_pic_trade_date(connection)
 
             if not target_trade_date:
                 return HotReviewImagesResponse(trade_date='', images=[])
 
-            rows = connection.execute(
-                '''
-                SELECT source_file, parse_notes
-                FROM hot_sector_image_sources
-                WHERE trade_date = ?
-                ORDER BY source_file ASC
-                ''',
-                [target_trade_date],
-            ).fetchall()
-
-            images = self._extract_hot_review_images(rows)
+            rows = get_hot_pic_rows_by_date(connection, target_trade_date)
+            images = [
+                HotReviewImageItem(
+                    url=str(row['summary_image_url'] or ''),
+                    source_file=str(row['source'] or ''),
+                )
+                for row in rows
+                if str(row['summary_image_url'] or '').strip()
+            ]
         finally:
             connection.close()
 
-        return HotReviewImagesResponse(
-            trade_date=target_trade_date,
-            images=[HotReviewImageItem(url=item['url'], source_file=item['source_file']) for item in images],
-        )
+        return HotReviewImagesResponse(trade_date=target_trade_date, images=images)
 
-    def _extract_hot_review_images(self, rows: list[Any]) -> list[dict[str, str]]:
-        image_rows: list[dict[str, str]] = []
-        seen_urls: set[str] = set()
+    def _build_hot_sector_history_sectors(self, rows: list[Any]) -> list[HotSectorHistorySector]:
+        stats: dict[str, dict[str, int]] = {}
         for row in rows:
-            source_file = str(row['source_file'] or '').strip()
-            parse_notes = str(row['parse_notes'] or '').strip()
-            urls: list[str] = []
+            sector_name = str(row['hot_theme'] or '').strip()
+            if not sector_name:
+                continue
+            item = stats.setdefault(sector_name, {'heat_score': 0, 'max_board_count': 0})
+            item['heat_score'] += 1
+            item['max_board_count'] = max(item['max_board_count'], parse_board_count(str(row['streak_text'] or '')))
 
-            if parse_notes:
-                try:
-                    payload = json.loads(parse_notes)
-                except (TypeError, JSONDecodeError):
-                    payload = {}
-
-                if isinstance(payload, dict):
-                    raw_urls = payload.get('summary_image_urls')
-                    if isinstance(raw_urls, list):
-                        urls = [str(url).strip() for url in raw_urls if str(url).strip()]
-
-            for url in urls:
-                if url in seen_urls:
-                    continue
-                seen_urls.add(url)
-                image_rows.append({'url': url, 'source_file': source_file})
-
-        return image_rows
+        ordered = sorted(stats.items(), key=lambda pair: (-pair[1]['heat_score'], pair[0]))
+        return [
+            HotSectorHistorySector(
+                name=name,
+                heat_score=payload['heat_score'],
+                trend_tag=None,
+                trend_label=self._build_trend_label(None, None),
+                rank_today=int(index),
+                max_board_count=payload['max_board_count'],
+            )
+            for index, (name, payload) in enumerate(ordered, start=1)
+        ]
 
     def resolve_stock(self, query: str) -> StockResolveResponse:
         """
@@ -275,10 +261,9 @@ class MarketDataService:
             return StockResolveResponse(status='not_found', message='股票清单尚未初始化，请先上传股票清单')
 
         # 1. Exact ts_code match (e.g. '000001.SZ')
-        row = self._stock_list_repo.get_active_by_ts_code_upper(q)
+        row = self._stock_list_repo.get_by_full_code_upper(q)
         if row:
-            # ts_code like '000001.SZ' → symbol = first 6 digits
-            symbol = str(row['ts_code']).split('.')[0]
+            symbol = str(row['code']).zfill(6)
             if not self._has_local_market_data(symbol):
                 return StockResolveResponse(
                     status='not_found',
@@ -292,16 +277,16 @@ class MarketDataService:
             )
 
         # 2. Exact 6-digit symbol match (e.g. '000001')
-        raw_rows = self._stock_list_repo.list_active_by_symbol(q.zfill(6))
-        rows = [r for r in raw_rows if self._has_local_market_data(str(r['ts_code']).split('.')[0])]
+        raw_rows = self._stock_list_repo.list_by_code(q.zfill(6))
+        rows = [r for r in raw_rows if self._has_local_market_data(str(r['code']).zfill(6))]
         if raw_rows and not rows:
-            first_symbol = str(raw_rows[0]['ts_code']).split('.')[0]
+            first_symbol = str(raw_rows[0]['code']).zfill(6)
             return StockResolveResponse(
                 status='not_found',
                 message=f'已匹配股票 {first_symbol} {raw_rows[0]["name"]}，但本地暂无行情数据，请先执行重新初始化市场数据。',
             )
         if len(rows) == 1:
-            symbol = str(rows[0]['ts_code']).split('.')[0]
+            symbol = str(rows[0]['code']).zfill(6)
             return StockResolveResponse(
                 status='ok',
                 stock_code=symbol,
@@ -313,21 +298,21 @@ class MarketDataService:
                 status='ambiguous',
                 message='匹配到多只股票，请输入更完整代码/简称',
                 candidates=[
-                    StockCandidate(stock_code=str(r['ts_code']).split('.')[0], stock_name=str(r['name']))
+                    StockCandidate(stock_code=str(r['code']).zfill(6), stock_name=str(r['name']))
                     for r in rows
                 ],
             )
 
         # 3. Exact cnspell match
-        raw_rows = self._stock_list_repo.list_active_by_cnspell_exact(q)
-        rows = [r for r in raw_rows if self._has_local_market_data(str(r['ts_code']).split('.')[0])]
+        raw_rows = self._stock_list_repo.list_by_cnspell_exact(q)
+        rows = [r for r in raw_rows if self._has_local_market_data(str(r['code']).zfill(6))]
         if raw_rows and not rows:
             return StockResolveResponse(
                 status='not_found',
                 message='已匹配到股票清单，但本地暂无对应行情数据，请先执行重新初始化市场数据。',
             )
         if len(rows) == 1:
-            symbol = str(rows[0]['ts_code']).split('.')[0]
+            symbol = str(rows[0]['code']).zfill(6)
             return StockResolveResponse(
                 status='ok',
                 stock_code=symbol,
@@ -339,21 +324,21 @@ class MarketDataService:
                 status='ambiguous',
                 message='匹配到多只股票，请输入更完整代码/简称',
                 candidates=[
-                    StockCandidate(stock_code=str(r['ts_code']).split('.')[0], stock_name=str(r['name']))
+                    StockCandidate(stock_code=str(r['code']).zfill(6), stock_name=str(r['name']))
                     for r in rows
                 ],
             )
 
         # 4. cnspell prefix match
-        raw_rows = self._stock_list_repo.list_active_by_cnspell_prefix(q, limit=20)
-        rows = [r for r in raw_rows if self._has_local_market_data(str(r['ts_code']).split('.')[0])]
+        raw_rows = self._stock_list_repo.list_by_cnspell_prefix(q, limit=20)
+        rows = [r for r in raw_rows if self._has_local_market_data(str(r['code']).zfill(6))]
         if raw_rows and not rows:
             return StockResolveResponse(
                 status='not_found',
                 message='已匹配到股票清单，但本地暂无对应行情数据，请先执行重新初始化市场数据。',
             )
         if len(rows) == 1:
-            symbol = str(rows[0]['ts_code']).split('.')[0]
+            symbol = str(rows[0]['code']).zfill(6)
             return StockResolveResponse(
                 status='ok',
                 stock_code=symbol,
@@ -365,7 +350,7 @@ class MarketDataService:
                 status='ambiguous',
                 message='匹配到多只股票，请输入更完整代码/简称',
                 candidates=[
-                    StockCandidate(stock_code=str(r['ts_code']).split('.')[0], stock_name=str(r['name']))
+                    StockCandidate(stock_code=str(r['code']).zfill(6), stock_name=str(r['name']))
                     for r in rows
                 ],
             )
@@ -384,21 +369,21 @@ class MarketDataService:
         if not q or not self._sqlite_path.exists():
             return []
 
-        rows = self._stock_list_repo.list_active_for_search(q, limit * 3)
+        rows = self._stock_list_repo.list_for_search(q, limit * 3)
 
         if not rows:
             return []
 
-        symbols = [str(r['ts_code']).split('.')[0] for r in rows]
+        symbols = [str(r['code']).zfill(6) for r in rows]
         stocks_with_data = self._get_stocks_with_data(symbols)
 
         candidates = [
             StockCandidate(
-                stock_code=str(r['ts_code']).split('.')[0],
+                stock_code=str(r['code']).zfill(6),
                 stock_name=str(r['name']),
             )
             for r in rows
-            if str(r['ts_code']).split('.')[0] in stocks_with_data
+            if str(r['code']).zfill(6) in stocks_with_data
         ]
         return candidates[:limit]
 
@@ -406,13 +391,14 @@ class MarketDataService:
         """Return the subset of *symbols* that have at least one local daily bar."""
         if not symbols or not self._duckdb_path.exists():
             return set()
+        full_codes = [_to_full_code(symbol) for symbol in symbols]
         connection = connect_duckdb(self._duckdb_path)
         try:
-            placeholders = ','.join(['?' for _ in symbols])
+            placeholders = ','.join(['?' for _ in full_codes])
             rows = connection.execute(
-                f"SELECT DISTINCT SPLIT_PART(ts_code, '.', 1) AS stock_code "
-                f'FROM daily_bars WHERE SPLIT_PART(ts_code, \'.\', 1) IN ({placeholders})',
-                symbols,
+                f"SELECT DISTINCT SPLIT_PART(full_code, '.', 1) AS stock_code "
+                f'FROM day_level_trade_data WHERE full_code IN ({placeholders})',
+                full_codes,
             ).fetchall()
             return {row[0] for row in rows}
         except Exception:
@@ -426,11 +412,12 @@ class MarketDataService:
 
     def _has_stock_daily_bars(self, stock_code: str) -> bool:
         if self._duckdb_path.exists():
+            full_code = self._to_query_full_code(stock_code)
             connection = connect_duckdb(self._duckdb_path)
             try:
                 row = connection.execute(
-                    'SELECT 1 FROM daily_bars WHERE SPLIT_PART(ts_code, \'.\', 1) = ? LIMIT 1',
-                    [stock_code],
+                    'SELECT 1 FROM day_level_trade_data WHERE full_code = ? LIMIT 1',
+                    [full_code],
                 ).fetchone()
                 if row:
                     return True
@@ -448,7 +435,7 @@ class MarketDataService:
         connection = connect_duckdb(self._duckdb_path)
         try:
             latest_trade_date_row = connection.execute(
-                'SELECT MAX(trade_date) AS trade_date FROM daily_bars'
+                'SELECT MAX(trade_date) AS trade_date FROM day_level_trade_data'
             ).fetchone()
             latest_trade_date = str(latest_trade_date_row[0] or '').strip() if latest_trade_date_row else ''
             if not latest_trade_date:
@@ -457,14 +444,14 @@ class MarketDataService:
             stock_rows = connection.execute(
                 '''
                 SELECT
-                    SPLIT_PART(ts_code, '.', 1) AS stock_code,
+                    full_code,
                     trade_date,
                     close,
                     amount,
-                    LAG(close) OVER (PARTITION BY ts_code ORDER BY trade_date) AS prev_close
-                FROM daily_bars
-                QUALIFY trade_date = ?
-                ORDER BY amount DESC, ts_code ASC
+                    pre_close
+                FROM day_level_trade_data
+                WHERE trade_date = ?
+                ORDER BY amount DESC, full_code ASC
                 ''',
                 [latest_trade_date],
             ).fetchall()
@@ -477,7 +464,8 @@ class MarketDataService:
 
         stocks = []
         for row in stock_rows:
-            stock_code = str(row[0])
+            full_code = str(row[0])
+            stock_code = full_code.split('.')[0]
             trade_date = str(row[1])
             current_price = float(row[2])
             turnover_amount_billion = float(row[3] or 0.0)
@@ -521,61 +509,24 @@ class MarketDataService:
         }
 
     def _load_hot_sectors_from_sqlite(self, trade_date: str) -> list[dict[str, Any]]:
-        """Load hot sectors for *trade_date* from SQLite (image pipeline tables only)."""
+        """Load hot sectors for *trade_date* from SQLite daily_hot_info if available."""
         if not self._sqlite_path.exists():
             return []
 
         connection = connect_sqlite(self._sqlite_path)
         try:
-            hot_sectors = self._load_hot_sectors_from_image_pipeline(connection, trade_date)
+            rows = get_hot_info_rows_by_date(connection, trade_date)
         finally:
             connection.close()
 
-        return hot_sectors
-
-    def _load_hot_sectors_from_image_pipeline(self, connection: Any, trade_date: str) -> list[dict[str, Any]]:
-        preferred_trade_date_row = connection.execute(
-            '''
-            SELECT MAX(trade_date) AS trade_date
-            FROM hot_sector_daily_aggregates
-            WHERE trade_date <= ?
-            ''',
-            [trade_date],
-        ).fetchone()
-        target_trade_date = str(preferred_trade_date_row['trade_date'] or '').strip() if preferred_trade_date_row else ''
-        if not target_trade_date:
-            latest_trade_date_row = connection.execute(
-                'SELECT MAX(trade_date) AS trade_date FROM hot_sector_daily_aggregates'
-            ).fetchone()
-            target_trade_date = str(latest_trade_date_row['trade_date'] or '').strip() if latest_trade_date_row else ''
-        if not target_trade_date:
-            return []
-
-        rows = connection.execute(
-            '''
-            SELECT
-                daily.trade_date,
-                daily.sector_name_canonical AS name,
-                daily.heat_score,
-                recent.days_present_3d,
-                recent.trend_tag
-            FROM hot_sector_daily_aggregates AS daily
-            LEFT JOIN hot_sector_recent_3d AS recent
-              ON recent.trade_date = daily.trade_date
-             AND recent.sector_name_canonical = daily.sector_name_canonical
-            WHERE daily.trade_date = ?
-            ORDER BY daily.rank_today ASC, daily.sector_name_canonical ASC
-            ''',
-            [target_trade_date],
-        ).fetchall()
         return [
             {
-                'trade_date': row['trade_date'],
-                'name': row['name'],
-                'trend_label': self._build_trend_label(row['trend_tag'], row['days_present_3d']),
-                'heat_score': row['heat_score'],
+                'trade_date': trade_date,
+                'name': sector.name,
+                'trend_label': sector.trend_label or '新晋热点',
+                'heat_score': sector.heat_score,
             }
-            for row in rows
+            for sector in self._build_hot_sector_history_sectors(rows)
         ]
 
     def _build_trend_label(self, trend_tag: str | None, days_present_3d: int | None) -> str:
@@ -589,6 +540,7 @@ class MarketDataService:
         if not self._duckdb_path.exists():
             return None
 
+        full_code = self._to_query_full_code(stock_code)
         connection = connect_duckdb(self._duckdb_path)
         try:
             row = connection.execute(
@@ -600,13 +552,13 @@ class MarketDataService:
                     low AS low_price,
                     close AS close_price,
                     amount AS turnover_amount_billion,
-                    LAG(close) OVER (PARTITION BY ts_code ORDER BY trade_date) AS prev_close
-                FROM daily_bars
-                WHERE SPLIT_PART(ts_code, '.', 1) = ?
+                    pre_close
+                FROM day_level_trade_data
+                WHERE full_code = ?
                 ORDER BY trade_date DESC
                 LIMIT 1
                 ''',
-                [stock_code],
+                [full_code],
             ).fetchone()
         finally:
             connection.close()
@@ -709,15 +661,16 @@ class MarketDataService:
     def _latest_trade_date_for_stock(self, stock_code: str) -> str | None:
         if not self._duckdb_path.exists():
             return None
+        full_code = self._to_query_full_code(stock_code)
         connection = connect_duckdb(self._duckdb_path)
         try:
             row = connection.execute(
                 '''
                 SELECT MAX(trade_date)
-                FROM daily_bars
-                WHERE SPLIT_PART(ts_code, '.', 1) = ?
+                FROM day_level_trade_data
+                WHERE full_code = ?
                 ''',
-                [stock_code],
+                [full_code],
             ).fetchone()
         finally:
             connection.close()
@@ -738,20 +691,19 @@ class MarketDataService:
         if not self._duckdb_path.exists():
             return []
 
+        full_code = self._to_query_full_code(stock_code)
         connection = connect_duckdb(self._duckdb_path)
         try:
             rows = connection.execute(
                 '''
                 SELECT trade_date, open AS open_price, high AS high_price, low AS low_price, close AS close_price, pre_close, change AS change_amount, pct_chg AS change_pct, vol AS volume, amount AS turnover_amount_billion, COALESCE (is_up_limit, FALSE) AS is_up_limit, COALESCE (is_down_limit, FALSE) AS is_down_limit
-                FROM daily_bars
-                WHERE SPLIT_PART(ts_code
-                    , '.'
-                    , 1) = ?
+                FROM day_level_trade_data
+                WHERE full_code = ?
                   AND trade_date >= ?
                   AND trade_date <= ?
                 ORDER BY trade_date
                 ''',
-                [stock_code, start_date, target_end_date],
+                [full_code, start_date, target_end_date],
             ).fetchall()
         except Exception:
             return []
@@ -763,16 +715,17 @@ class MarketDataService:
     def _has_more_daily_bars_before(self, stock_code: str, oldest_trade_date: str | None) -> bool:
         if not oldest_trade_date or not self._duckdb_path.exists():
             return False
+        full_code = self._to_query_full_code(stock_code)
         connection = connect_duckdb(self._duckdb_path)
         try:
             row = connection.execute(
                 '''
                 SELECT 1
-                FROM daily_bars
-                WHERE SPLIT_PART(ts_code, '.', 1) = ?
+                FROM day_level_trade_data
+                WHERE full_code = ?
                   AND trade_date < ? LIMIT 1
                 ''',
-                [stock_code, oldest_trade_date],
+                [full_code, oldest_trade_date],
             ).fetchone()
             return bool(row)
         except Exception:
@@ -791,6 +744,7 @@ class MarketDataService:
         if not self._duckdb_path.exists():
             return []
 
+        full_code = self._to_query_full_code(stock_code)
         connection = connect_duckdb(self._duckdb_path)
         try:
             rows = connection.execute(
@@ -804,11 +758,11 @@ class MarketDataService:
                        amount AS turnover_amount_billion,
                        COALESCE(is_up_limit, FALSE) AS is_up_limit,
                        COALESCE(is_down_limit, FALSE) AS is_down_limit
-                FROM daily_bars
-                WHERE SPLIT_PART(ts_code, '.', 1) = ?
+                FROM day_level_trade_data
+                WHERE full_code = ?
                 ORDER BY trade_date
                 ''',
-                [stock_code],
+                [full_code],
             ).fetchall()
         except Exception:
             return []
@@ -821,6 +775,7 @@ class MarketDataService:
         if not self._daily_bars_parquet_path.exists():
             return []
 
+        full_code = self._to_query_full_code(stock_code)
         connection = connect_duckdb(self._duckdb_path)
         parquet_path = str(self._daily_bars_parquet_path).replace('\\', '/').replace("'", "''")
         try:
@@ -839,15 +794,21 @@ class MarketDataService:
                        COALESCE(is_up_limit, FALSE) AS is_up_limit,
                        COALESCE(is_down_limit, FALSE) AS is_down_limit
                 FROM read_parquet('{parquet_path}')
-                WHERE SPLIT_PART(ts_code, '.', 1) = ?
+                WHERE full_code = ?
                 ORDER BY trade_date
                 ''',
-                [stock_code],
+                [full_code],
             ).fetchall()
         finally:
             connection.close()
 
         return self._serialize_daily_bar_rows(rows)
+
+    def _to_query_full_code(self, stock_code: str) -> str:
+        normalized = str(stock_code or '').strip().upper()
+        if '.' in normalized:
+            return normalized
+        return _to_full_code(normalized)
 
     def _load_stock_name_map(self) -> dict[str, str]:
         if not self._sqlite_path.exists():

@@ -27,7 +27,7 @@ def test_rate_limited_call_caps_at_45_per_minute() -> None:
         return {'ok': True, **kwargs}
 
     with (
-        patch.object(data_source, 'settings', SimpleNamespace(tushare_rate_limit=999)),
+        patch.object(data_source, 'settings', SimpleNamespace(market_data_rate_limit=999)),
         patch('app.modules.market_data.data_source.time.monotonic', side_effect=fake_monotonic),
         patch('app.modules.market_data.data_source.time.sleep', side_effect=fake_sleep),
     ):

@@ -6,15 +6,15 @@ from pydantic import BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
-# Legacy schemas (kept for backward compatibility)
+# Base schemas
 # ---------------------------------------------------------------------------
 
 
 class InitStatusResponse(BaseModel):
     status: str = Field(..., description='idle | running | done | error')
     trade_date: str = Field('', description='当前处理日期')
-    total_stocks: int = Field(0, description='总天数（兼容字段）')
-    processed_stocks: int = Field(0, description='已处理天数（兼容字段）')
+    total_stocks: int = Field(0, description='总任务项数量')
+    processed_stocks: int = Field(0, description='已处理任务项数量')
     started_at: str = Field('', description='开始时间 (ISO 8601 UTC)')
     finished_at: str = Field('', description='完成时间 (ISO 8601 UTC)')
     error_message: str = Field('', description='错误信息')
@@ -34,18 +34,15 @@ class UpdateResult(BaseModel):
     processed_trade_dates: list[str] = Field(default_factory=list, description='已补齐的交易日列表')
 
 
-class TokenConfigResponse(BaseModel):
-    is_configured: bool = Field(..., description='Tushare token 是否已配置')
+class MairuiLicenceConfigResponse(BaseModel):
+    configured: bool = Field(False, description='麦蕊 licence 是否已配置')
+    masked_licence: str | None = Field(None, description='脱敏后的 licence，用于页面展示')
+    source: str = Field('none', description='配置来源：env | file | none')
 
 
-class SaveTokenRequest(BaseModel):
-    token: str = Field(..., min_length=1, description='Tushare API token')
+class SaveMairuiLicenceRequest(BaseModel):
+    licence: str = Field(..., min_length=1, description='麦蕊 licence 原文')
 
-
-class StockListUploadResponse(BaseModel):
-    total_stocks: int = Field(..., description='CSV 中股票总数（含退市）')
-    active_stocks: int = Field(..., description='当前上市股票数（list_status=L）')
-    boards: dict[str, int] = Field(..., description='各板块上市股票数量')
 
 
 # ---------------------------------------------------------------------------
@@ -55,9 +52,7 @@ class StockListUploadResponse(BaseModel):
 
 class InitOverviewResponse(BaseModel):
     init_completed: bool = Field(..., description='是否已完成初始化（status=done）')
-    token_configured: bool = Field(..., description='Tushare token 是否已配置')
-    stock_list_uploaded: bool = Field(..., description='股票清单 CSV 是否已上传')
-    stock_list_updated_at: str | None = Field(None, description='股票清单最后上传时间（ISO 8601 UTC）')
+    market_data_configured: bool = Field(..., description='行情数据源凭据是否已配置')
     daily_quote_cutoff_time: str | None = Field(None, description='每日行情更新截止时间（ISO 8601）')
     market_data_start_date: str | None = Field(None, description='本地已入库行情起始交易日（YYYY-MM-DD）')
     market_data_end_date: str | None = Field(None, description='本地已入库行情截止交易日（YYYY-MM-DD）')
@@ -72,54 +67,50 @@ class InitOverviewResponse(BaseModel):
 
 class CreateTaskRequest(BaseModel):
     start_date: str = Field(
-        ...,
-        pattern=r'^\d{8}$',
-        description='导入起始日期（YYYYMMDD）',
+        '',
+        pattern=r'^(\d{8}|)$',
+        description='导入起始日期（YYYYMMDD）；STOCK_LIST_SYNC 可留空，后端自动填当日',
     )
     end_date: str = Field(
-        ...,
-        pattern=r'^\d{8}$',
-        description='导入截止日期（YYYYMMDD）',
+        '',
+        pattern=r'^(\d{8}|)$',
+        description='导入截止日期（YYYYMMDD）；STOCK_LIST_SYNC 可留空',
     )
-    mode: str = Field('RANGE', description='任务模式：RANGE | REIMPORT_DAY')
-    task_type: str = Field('MARKET_DATA', description='任务类型：MARKET_DATA | JYGS_REVIEW')
+    mode: str = Field('FULL_SYNC', description='任务模式：FULL_SYNC | INCREMENTAL_SYNC | RANGE（旧别名）')
+    task_type: str = Field('MARKET_DATA', description='任务类型：STOCK_LIST_SYNC | MARKET_DATA | JYGS_REVIEW')
 
 
 class TaskResponse(BaseModel):
     task_id: str
-    task_type: str = Field('MARKET_DATA', description='任务类型：MARKET_DATA | JYGS_REVIEW')
-    mode: str
+    task_type: str = Field('MARKET_DATA', description='任务类型：STOCK_LIST_SYNC | MARKET_DATA | JYGS_REVIEW')
     start_date: str
     end_date: str
     status: str = Field(..., description='PENDING | RUNNING | SUCCESS | FAILED | TERMINATED')
-    total_days: int
-    processed_days: int
-    current_date: str = Field('', description='当前正在处理的日期（YYYYMMDD）')
+    total_items: int
+    processed_items: int
+    current_label: str = Field('', description='当前处理项标签')
     error_message: str = ''
-    created_at: str = ''
-    started_at: str = ''
-    finished_at: str = ''
+    task_start_date: str = ''
+    task_end_date: str = ''
     progress_percent: float = Field(0.0, description='整体进度百分比（0–100）')
 
     @classmethod
     def from_db_row(cls, row: dict[str, Any]) -> 'TaskResponse':
-        total = row.get('total_days', 0)
-        processed = row.get('processed_days', 0)
+        total = row.get('total_items', 0)
+        processed = row.get('processed_items', 0)
         pct = round(processed / total * 100, 1) if total > 0 else 0.0
         return cls(
             task_id=row['task_id'],
             task_type=row.get('task_type', 'MARKET_DATA'),
-            mode=row.get('mode', 'RANGE'),
             start_date=row.get('start_date', ''),
             end_date=row.get('end_date', ''),
             status=row.get('status', 'PENDING'),
-            total_days=total,
-            processed_days=processed,
-            current_date=row.get('current_date', ''),
+            total_items=total,
+            processed_items=processed,
+            current_label=row.get('current_label', ''),
             error_message=row.get('error_message', ''),
-            created_at=row.get('created_at', ''),
-            started_at=row.get('started_at', ''),
-            finished_at=row.get('finished_at', ''),
+            task_start_date=row.get('task_start_date', ''),
+            task_end_date=row.get('task_end_date', ''),
             progress_percent=pct,
         )
 
@@ -160,8 +151,6 @@ class InitV2OverviewResponse(BaseModel):
     running_task: TaskResponse | None = None
     latest_task: TaskResponse | None = None
     data_range: DataRangeInfo = Field(default_factory=DataRangeInfo)
-    token_configured: bool = False
-    stock_list_uploaded: bool = False
-    stock_list_updated_at: str | None = None
+    market_data_configured: bool = False
     daily_quote_cutoff_time: str | None = None
     board_counts: dict[str, int] = Field(default_factory=dict)

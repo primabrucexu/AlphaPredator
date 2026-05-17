@@ -191,10 +191,10 @@ export function HomeSearchPage() {
               )}
             </Space>
 
-            {/* Token */}
+              {/* Market data credential */}
             <Space wrap>
-              <Tag color={overview.token_configured ? 'blue' : 'default'}>
-                {overview.token_configured ? '✓ Token 已配置' : '✗ Token 未配置'}
+                <Tag color={overview.market_data_configured ? 'blue' : 'default'}>
+                    {overview.market_data_configured ? '✓ 行情数据源已配置' : '✗ 行情数据源未配置'}
               </Tag>
             </Space>
 

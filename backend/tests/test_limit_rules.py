@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -59,7 +60,7 @@ class TestDetectBoard:
     def test_unknown_exchange(self) -> None:
         assert detect_board('000001.XX') is None
 
-    def test_malformed_ts_code(self) -> None:
+    def test_malformed_full_code(self) -> None:
         assert detect_board('000001') is None
 
     def test_sh_non_6_prefix(self) -> None:
@@ -103,7 +104,6 @@ class TestDetectIsST:
 class TestIsNoLimitDay:
     def _patch_trading(self, trading_dates: set[str]):
         """Patch _is_trading_day_local to treat only listed dates as trading days."""
-        from datetime import date, datetime
 
         def mock_trading(d: date) -> bool:
             return d.strftime('%Y%m%d') in trading_dates
@@ -158,25 +158,25 @@ class TestComputeLimitFields:
 
     def test_main_board_normal(self) -> None:
         result = compute_limit_fields(
-            ts_code='000001.SZ',
+            full_code='000001.SZ',
             trade_date='20240102',
             pre_close=10.0,
             close=10.5,
         )
         assert result['limit_status'] == 'NORMAL'
         assert result['limit_rule'] == BOARD_MAIN
-        assert result['limit_pct'] == pytest.approx(0.10)
+        assert result['limit_pct'] == Decimal('0.10')
         # 10.0 * 1.1 = 11.0, ROUND_HALF_UP → 11.00
-        assert result['limit_up_price'] == pytest.approx(11.0)
+        assert result['limit_up_price'] == Decimal('11.00')
         # 10.0 * 0.9 = 9.0, ROUND_HALF_UP → 9.00
-        assert result['limit_down_price'] == pytest.approx(9.0)
+        assert result['limit_down_price'] == Decimal('9.00')
         assert result['is_limit_up'] == 0
         assert result['is_limit_down'] == 0
         assert result['limit_rule_version'] == LIMIT_RULE_VERSION
 
     def test_main_board_limit_up_hit(self) -> None:
         result = compute_limit_fields(
-            ts_code='000001.SZ',
+            full_code='000001.SZ',
             trade_date='20240102',
             pre_close=10.0,
             close=11.0,  # exactly at limit_up
@@ -186,7 +186,7 @@ class TestComputeLimitFields:
 
     def test_main_board_limit_down_hit(self) -> None:
         result = compute_limit_fields(
-            ts_code='000001.SZ',
+            full_code='000001.SZ',
             trade_date='20240102',
             pre_close=10.0,
             close=9.0,  # exactly at limit_down
@@ -197,71 +197,71 @@ class TestComputeLimitFields:
     def test_main_board_rounding_half_up(self) -> None:
         # 10.05 * 1.1 = 11.055 → ROUND_HALF_UP to 11.06
         result = compute_limit_fields(
-            ts_code='600036.SH',
+            full_code='600036.SH',
             trade_date='20240102',
             pre_close=10.05,
             close=10.0,
         )
-        assert result['limit_up_price'] == pytest.approx(11.06)
+        assert result['limit_up_price'] == Decimal('11.06')
 
     # --- NORMAL path: ChiNext ---
 
     def test_chinext_board_20pct(self) -> None:
         result = compute_limit_fields(
-            ts_code='300308.SZ',
+            full_code='300308.SZ',
             trade_date='20240102',
             pre_close=20.0,
             close=22.0,
         )
         assert result['limit_rule'] == BOARD_CHINEXT
-        assert result['limit_pct'] == pytest.approx(0.20)
-        assert result['limit_up_price'] == pytest.approx(24.0)
-        assert result['limit_down_price'] == pytest.approx(16.0)
+        assert result['limit_pct'] == Decimal('0.20')
+        assert result['limit_up_price'] == Decimal('24.00')
+        assert result['limit_down_price'] == Decimal('16.00')
 
     # --- NORMAL path: STAR market ---
 
     def test_star_market_20pct(self) -> None:
         result = compute_limit_fields(
-            ts_code='688001.SH',
+            full_code='688001.SH',
             trade_date='20240102',
             pre_close=100.0,
             close=110.0,
         )
         assert result['limit_rule'] == BOARD_STAR
-        assert result['limit_pct'] == pytest.approx(0.20)
-        assert result['limit_up_price'] == pytest.approx(120.0)
-        assert result['limit_down_price'] == pytest.approx(80.0)
+        assert result['limit_pct'] == Decimal('0.20')
+        assert result['limit_up_price'] == Decimal('120.00')
+        assert result['limit_down_price'] == Decimal('80.00')
 
     # --- NORMAL path: BSE (向下取整) ---
 
     def test_bse_30pct_floor_rounding(self) -> None:
         # 10.0 * 1.3 = 13.0 exactly, no rounding needed
         result = compute_limit_fields(
-            ts_code='830799.BJ',
+            full_code='830799.BJ',
             trade_date='20240102',
             pre_close=10.0,
             close=10.5,
         )
         assert result['limit_rule'] == BOARD_BSE
-        assert result['limit_pct'] == pytest.approx(0.30)
-        assert result['limit_up_price'] == pytest.approx(13.0)
-        assert result['limit_down_price'] == pytest.approx(7.0)
+        assert result['limit_pct'] == Decimal('0.30')
+        assert result['limit_up_price'] == Decimal('13.00')
+        assert result['limit_down_price'] == Decimal('7.00')
 
     def test_bse_floor_rounding_applied(self) -> None:
         # 10.05 * 1.3 = 13.065 → ROUND_FLOOR → 13.06
         result = compute_limit_fields(
-            ts_code='830799.BJ',
+            full_code='830799.BJ',
             trade_date='20240102',
             pre_close=10.05,
             close=11.0,
         )
-        assert result['limit_up_price'] == pytest.approx(13.06)
+        assert result['limit_up_price'] == Decimal('13.06')
 
     # --- INVALID cases ---
 
     def test_invalid_when_pre_close_zero(self) -> None:
         result = compute_limit_fields(
-            ts_code='000001.SZ',
+            full_code='000001.SZ',
             trade_date='20240102',
             pre_close=0.0,
             close=10.0,
@@ -274,7 +274,7 @@ class TestComputeLimitFields:
 
     def test_invalid_when_pre_close_none(self) -> None:
         result = compute_limit_fields(
-            ts_code='000001.SZ',
+            full_code='000001.SZ',
             trade_date='20240102',
             pre_close=None,
             close=10.0,
@@ -283,7 +283,7 @@ class TestComputeLimitFields:
 
     def test_invalid_when_board_unrecognised(self) -> None:
         result = compute_limit_fields(
-            ts_code='000001.XX',
+            full_code='000001.XX',
             trade_date='20240102',
             pre_close=10.0,
             close=10.0,
@@ -299,7 +299,7 @@ class TestComputeLimitFields:
             return_value=True,
         ):
             result = compute_limit_fields(
-                ts_code='000001.SZ',
+                full_code='000001.SZ',
                 trade_date='20240102',
                 pre_close=10.0,
                 close=15.0,
@@ -315,7 +315,7 @@ class TestComputeLimitFields:
 
     def test_st_detected_from_name(self) -> None:
         result = compute_limit_fields(
-            ts_code='000001.SZ',
+            full_code='000001.SZ',
             trade_date='20240102',
             pre_close=10.0,
             close=10.5,
@@ -326,7 +326,7 @@ class TestComputeLimitFields:
 
     def test_non_st_name(self) -> None:
         result = compute_limit_fields(
-            ts_code='000001.SZ',
+            full_code='000001.SZ',
             trade_date='20240102',
             pre_close=10.0,
             close=10.5,
@@ -340,10 +340,10 @@ class TestComputeLimitFields:
     def test_limit_down_floor_at_min_price(self) -> None:
         # Very low price stock; raw limit_down should be floored at 0.01
         result = compute_limit_fields(
-            ts_code='000001.SZ',
+            full_code='000001.SZ',
             trade_date='20240102',
             pre_close=0.02,  # 0.02 * 0.9 = 0.018 → rounds to 0.02, not below 0.01
             close=0.02,
         )
         assert result['limit_status'] == 'NORMAL'
-        assert result['limit_down_price'] >= 0.01
+        assert result['limit_down_price'] >= Decimal('0.01')

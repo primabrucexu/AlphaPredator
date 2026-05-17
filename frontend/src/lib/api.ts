@@ -134,14 +134,10 @@ export interface UpdateResult {
   processed_trade_dates: string[];
 }
 
-export interface TokenConfigResponse {
-  is_configured: boolean;
-}
-
-export interface StockListUploadResponse {
-  total_stocks: number;
-  active_stocks: number;
-  boards: Record<string, number>;
+export interface MairuiLicenceConfigResponse {
+    configured: boolean;
+    masked_licence: string | null;
+    source: 'env' | 'file' | 'none';
 }
 
 export type MarketBoard = '主板' | '创业板' | '科创板' | '北交所';
@@ -153,7 +149,7 @@ export const ALL_MARKET_BOARDS: MarketBoard[] = ['主板', '创业板', '科创�
 
 export type TaskStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'TERMINATED';
 
-export type TaskType = 'MARKET_DATA' | 'JYGS_REVIEW';
+export type TaskType = 'STOCK_LIST_SYNC' | 'MARKET_DATA' | 'JYGS_REVIEW';
 
 export interface TaskResponse {
   task_id: string;
@@ -207,9 +203,7 @@ export interface InitV2OverviewResponse {
   running_task: TaskResponse | null;
   latest_task: TaskResponse | null;
   data_range: DataRangeInfo;
-  token_configured: boolean;
-  stock_list_uploaded: boolean;
-  stock_list_updated_at: string | null;
+    market_data_configured: boolean;
   daily_quote_cutoff_time: string | null;
   board_counts: Record<string, number>;
 }
@@ -311,27 +305,14 @@ export function triggerDailyUpdate(): Promise<UpdateResult> {
   return postJson<UpdateResult>('/api/data-init/update');
 }
 
-export function getTokenConfig(): Promise<TokenConfigResponse> {
-  return fetchJson<TokenConfigResponse>('/api/data-init/token');
+export function getMairuiLicenceConfig(): Promise<MairuiLicenceConfigResponse> {
+    return fetchJson<MairuiLicenceConfigResponse>('/api/data-init/licence');
 }
 
-export function saveTokenConfig(token: string): Promise<TokenConfigResponse> {
-  return postJson<TokenConfigResponse>('/api/data-init/token', { token });
+export function saveMairuiLicence(licence: string): Promise<MairuiLicenceConfigResponse> {
+    return postJson<MairuiLicenceConfigResponse>('/api/data-init/licence', {licence});
 }
 
-export async function uploadStockList(file: File): Promise<StockListUploadResponse> {
-  const formData = new FormData();
-  formData.append('file', file);
-  const response = await fetch(`${API_BASE_URL}/api/data-init/upload-stock-list`, {
-    method: 'POST',
-    body: formData,
-  });
-  if (!response.ok) {
-    const responseText = await response.text();
-    throw new Error(responseText || `Request failed: ${response.status}`);
-  }
-  return response.json() as Promise<StockListUploadResponse>;
-}
 
 // ---------------------------------------------------------------------------
 // V2 Init API functions
@@ -340,7 +321,7 @@ export async function uploadStockList(file: File): Promise<StockListUploadRespon
 export function createInitTask(
   startDate: string,
   endDate: string,
-  mode: string = 'RANGE',
+  mode: string = 'FULL_SYNC',
   taskType: TaskType = 'MARKET_DATA',
 ): Promise<TaskResponse> {
   return postJson<TaskResponse>('/api/data-init/tasks', {
@@ -401,9 +382,7 @@ export interface StockResolveResponse {
 
 export interface InitOverviewResponse {
   init_completed: boolean;
-  token_configured: boolean;
-  stock_list_uploaded: boolean;
-  stock_list_updated_at: string | null;
+    market_data_configured: boolean;
   daily_quote_cutoff_time: string | null;
   market_data_start_date: string | null;
   market_data_end_date: string | null;

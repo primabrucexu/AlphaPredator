@@ -21,16 +21,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.api_route('/proxy', methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH'])
-@router.api_route('/proxy/{path:path}', methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH'])
-async def retired_proxy(path: str = '') -> JSONResponse:
-    """Proxy flow is retired; login now uses local Playwright browser."""
-    logger.info('JYGS proxy route requested but retired: %s', path)
-    return JSONResponse(
-        {'ok': False, 'error': '代理登录已下线，请使用 Playwright 一键登录。'},
-        status_code=410,
-    )
-
 
 # ---------------------------------------------------------------------------
 # 鉴权管理接口（手动 SESSION）

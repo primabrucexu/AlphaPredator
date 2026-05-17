@@ -15,9 +15,9 @@ market_data_import_dir = "data/imports/market-data"
 hot_sector_import_dir = "data/imports/hot-sector-images"
 
 [market_data]
-# Tushare API token (leave empty to configure via the UI or TUSHARE_TOKEN env var)
-tushare_token = ""
-# Max Tushare API requests per minute (free tier: 500; set to 450 for headroom)
-tushare_rate_limit = 450
-# Historical data start date for full initialization
-tushare_history_start = "2024-01-01"
+# Provider: currently only mairui is supported
+source = "mairui"
+# Mairui licence key
+mairui_licence = ""
+# Max market-data API requests per minute
+market_data_rate_limit = 45

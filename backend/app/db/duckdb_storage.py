@@ -8,23 +8,67 @@ import duckdb
 
 from app.core.settings import settings
 
-DAILY_BARS_SCHEMA_SQL = '''
-CREATE TABLE IF NOT EXISTS daily_bars (
-    ts_code VARCHAR NOT NULL,
+DAY_LEVEL_TRADE_DATA_SCHEMA_SQL = '''
+                                  CREATE TABLE IF NOT EXISTS day_level_trade_data
+                                  (
+                                      full_code
+                                      VARCHAR
+                                      NOT
+                                      NULL,
     trade_date VARCHAR NOT NULL,
-    open DOUBLE NOT NULL,
-    high DOUBLE NOT NULL,
-    low DOUBLE NOT NULL,
-    close DOUBLE NOT NULL,
-    pre_close DOUBLE NOT NULL DEFAULT 0.0,
-    change DOUBLE NOT NULL DEFAULT 0.0,
-    pct_chg DOUBLE NOT NULL DEFAULT 0.0,
-    vol DOUBLE NOT NULL DEFAULT 0.0,
-    amount DOUBLE NOT NULL DEFAULT 0.0,
+                                      open
+                                      DECIMAL
+                                  (
+                                      20,
+                                      6
+                                  ) NOT NULL,
+                                      high DECIMAL
+                                  (
+                                      20,
+                                      6
+                                  ) NOT NULL,
+                                      low DECIMAL
+                                  (
+                                      20,
+                                      6
+                                  ) NOT NULL,
+                                      close DECIMAL
+                                  (
+                                      20,
+                                      6
+                                  ) NOT NULL,
+                                      pre_close DECIMAL
+                                  (
+                                      20,
+                                      6
+                                  ) NOT NULL DEFAULT 0,
+                                      change DECIMAL
+                                  (
+                                      20,
+                                      6
+                                  ) NOT NULL DEFAULT 0,
+                                      pct_chg DECIMAL
+                                  (
+                                      20,
+                                      6
+                                  ) NOT NULL DEFAULT 0,
+                                      vol DECIMAL
+                                  (
+                                      24,
+                                      6
+                                  ) NOT NULL DEFAULT 0,
+                                      amount DECIMAL
+                                  (
+                                      24,
+                                      6
+                                  ) NOT NULL DEFAULT 0,
     is_up_limit BOOLEAN NOT NULL DEFAULT FALSE,
     is_down_limit BOOLEAN NOT NULL DEFAULT FALSE
 )
 '''
+
+# Backward-compat alias; kept so older import paths still resolve
+DAILY_PRICE_SCHEMA_SQL = DAY_LEVEL_TRADE_DATA_SCHEMA_SQL
 
 
 def ensure_duckdb_parent(duckdb_path: Path | None = None, parquet_dir: Path | None = None) -> tuple[Path, Path]:
@@ -43,30 +87,11 @@ def connect_duckdb(duckdb_path: Path | None = None) -> duckdb.DuckDBPyConnection
 def ensure_duckdb_schema(duckdb_path: Path | None = None) -> None:
     connection = connect_duckdb(duckdb_path)
     try:
-        # Migration: if old schema (stock_code column) exists, drop to recreate with spec schema
-        try:
-            cols = {row[0] for row in connection.execute('DESCRIBE daily_bars').fetchall()}
-            if 'stock_code' in cols:
-                connection.execute('DROP TABLE daily_bars')
-        except Exception:  # noqa: BLE001
-            pass  # table doesn't exist yet, that's fine
-        connection.execute(DAILY_BARS_SCHEMA_SQL)
-        # Migration: add any missing columns for partial upgrades
-        existing_cols = {row[0] for row in connection.execute('DESCRIBE daily_bars').fetchall()}
-        for col_name, col_def in [
-            ('pre_close', 'DOUBLE DEFAULT 0.0'),
-            ('change', 'DOUBLE DEFAULT 0.0'),
-            ('pct_chg', 'DOUBLE DEFAULT 0.0'),
-            ('is_up_limit', 'BOOLEAN DEFAULT FALSE'),
-            ('is_down_limit', 'BOOLEAN DEFAULT FALSE'),
-        ]:
-            if col_name not in existing_cols:
-                try:
-                    connection.execute(
-                        f'ALTER TABLE daily_bars ADD COLUMN {col_name} {col_def}'
-                    )
-                except Exception:  # noqa: BLE001
-                    pass
+        # Migration: rename legacy daily_price table to day_level_trade_data if it still exists
+        tables = {row[0] for row in connection.execute('SHOW TABLES').fetchall()}
+        if 'daily_price' in tables and 'day_level_trade_data' not in tables:
+            connection.execute('ALTER TABLE daily_price RENAME TO day_level_trade_data')
+        connection.execute(DAY_LEVEL_TRADE_DATA_SCHEMA_SQL)
     finally:
         connection.close()
 
@@ -125,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         parsed_params = _parse_sql_params(args.params)
-        rows = run_sql(args.sql, params=parsed_params, duckdb_path=target_path)
+        rows = run_sql(args.sql, params=parsed_params, duckdb_path=settings.duckdb_path)
     except Exception as exc:  # noqa: BLE001
         print(f'SQL execution failed: {exc}', file=sys.stderr)
         return 1

@@ -13,7 +13,9 @@ from uuid import uuid4
 
 import httpx
 
+from app.db.sqlite import ensure_sqlite_schema
 from app.modules.jygs.flow_trace import append_trace_event, build_request_structure, sanitize_headers
+from app.repositories.jygs_repo import JygsRepo
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +39,6 @@ def _preview_secret(value: str) -> str:
 
 
 def _repo():
-    from app.repositories.jygs_repo import JygsRepo
-    from app.db.sqlite import ensure_sqlite_schema
     ensure_sqlite_schema()
     return JygsRepo()
 

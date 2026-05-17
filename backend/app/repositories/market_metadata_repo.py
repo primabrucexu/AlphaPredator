@@ -21,11 +21,11 @@ class MarketMetadataRepo:
             for row in profile_rows
             if row.get('stock_code') and row.get('stock_name')
         }
-        for row in self._stock_list_repo.list_active_symbol_name_pairs():
-            symbol = str(row.get('symbol') or '').zfill(6)
+        for row in self._stock_list_repo.list_code_name_pairs():
+            stock_code = str(row.get('code') or '').zfill(6)
             name = str(row.get('name') or '')
-            if symbol and name:
-                name_map[symbol] = name
+            if stock_code and name:
+                name_map[stock_code] = name
         return name_map
 
     def get_stock_profile_payload(self, stock_code: str) -> dict[str, Any] | None:

@@ -1,16 +1,16 @@
 """Market data initialization V2.
 
-Date-driven approach:
-1. Create a task with start_date / end_date (YYYYMMDD format).
-2. For each calendar date in the range (ascending order):
-   - call tushare pro.daily(trade_date=YYYYMMDD)
-   - atomically write rows to DuckDB ``daily_bars`` (delete-then-insert)
-   - mark day success even when Tushare returns empty rows
-3. Update task status and data-range metadata on completion.
+Task types:
+- STOCK_LIST_SYNC: Fetch stock list from Mairui and persist to SQLite.  No date
+  range iteration; finishes in one step.
+- MARKET_DATA (FULL_SYNC): Fetch all historical daily bars for every stock in
+  the provided date range.
+- MARKET_DATA (INCREMENTAL_SYNC): Automatically detect the latest trade date in
+  DuckDB ``day_level_trade_data`` and fetch only newer data.
+- JYGS_REVIEW: Fetch and parse JYGS hotlist review data date by date.
 
 Key properties:
 - No CSV / file intermediaries; all data flows in-memory -> direct DB write.
-- Single-day atomicity: if fetch/write fails, the day and task are marked FAILED.
 - One task may be RUNNING at a time (prevented by _task_lock + DB check).
 - Supports explicit task termination and retry.
 """
@@ -21,11 +21,19 @@ import logging
 import threading
 import time
 import uuid
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_parent, ensure_duckdb_schema
+from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
 from app.core.settings import settings
+from app.modules.market_data.data_source import _get_mairui_licence, _resolve_stock_universe, \
+    _mairui_fetch_history_rows, fetch_daily_bars_by_date, sync_stock_list_to_sqlite
+from app.modules.market_data.jygs_review import check_jygs_auth_available, fetch_and_parse_jygs_review_for_date
+from app.modules.market_data.limit_rules import compute_limit_fields
 from app.repositories.init_task_repo import InitTaskRepo
 
 logger = logging.getLogger(__name__)
@@ -55,12 +63,10 @@ def _generate_date_list(start_date: str, end_date: str) -> list[str]:
 
 
 def _connect(sqlite_path: Path | None = None):
-    from app.db.sqlite import connect_sqlite
     return connect_sqlite(sqlite_path)
 
 
 def _connect_duckdb(duckdb_path: Path | None = None):
-    from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_parent, ensure_duckdb_schema
     target = duckdb_path or settings.duckdb_path
     ensure_duckdb_parent(target)
     ensure_duckdb_schema(target)
@@ -68,12 +74,26 @@ def _connect_duckdb(duckdb_path: Path | None = None):
 
 
 def _ensure_schema(sqlite_path: Path | None = None) -> None:
-    from app.db.sqlite import ensure_sqlite_schema
     ensure_sqlite_schema(sqlite_path)
 
 
 def _task_repo(sqlite_path: Path | None = None) -> InitTaskRepo:
     return InitTaskRepo(sqlite_path)
+
+
+def _to_decimal(value: Any, default: str = '0') -> Decimal:
+    """Parse provider numeric fields as Decimal to keep exact arithmetic."""
+    if value is None:
+        return Decimal(default)
+    if isinstance(value, Decimal):
+        return value
+    text = str(value).strip()
+    if not text:
+        return Decimal(default)
+    try:
+        return Decimal(text)
+    except (InvalidOperation, ValueError, TypeError):
+        return Decimal(default)
 
 
 # ---------------------------------------------------------------------------
@@ -84,56 +104,65 @@ def _task_repo(sqlite_path: Path | None = None) -> InitTaskRepo:
 def create_task(
     start_date: str,
     end_date: str,
-    mode: str = 'RANGE',
+        mode: str = 'FULL_SYNC',
     task_type: str = 'MARKET_DATA',
     sqlite_path: Path | None = None,
 ) -> dict[str, Any]:
     """Create a new init task record in SQLite and return it as a dict.
 
     *start_date* / *end_date*: YYYYMMDD format.
-    *mode*: ``'RANGE'`` for a range import; ``'REIMPORT_DAY'`` for a single day.
-    *task_type*: ``'MARKET_DATA'`` or ``'JYGS_REVIEW'``.
+    *mode*: Ignored; kept for API backward compat. Time range is determined by task_type.
+    *task_type*: ``'STOCK_LIST_SYNC'`` | ``'MARKET_DATA'`` | ``'JYGS_REVIEW'``.
 
-    Raises ValueError if credentials not configured (Tushare for MARKET_DATA, JYGS for JYGS_REVIEW).
+    Raises ValueError if credentials not configured.
     """
     _ensure_schema(sqlite_path)
 
     # Validate credentials based on task type
-    if task_type == 'MARKET_DATA':
-        from app.modules.market_data.data_source import _get_token
-        if not _get_token():
+    if task_type in ('MARKET_DATA', 'STOCK_LIST_SYNC'):
+        if not _get_mairui_licence():
             raise ValueError(
-                'Tushare token not configured. '
-                'Please set it via the initialization page before starting.'
+                'Market data credentials not configured. '
+                'Please set Mairui licence via the initialization page before starting.'
             )
     elif task_type == 'JYGS_REVIEW':
-        from app.modules.jygs.auth import load_credentials
-        if not load_credentials():
+        try:
+            auth_result = check_jygs_auth_available(sqlite_path)
+        except Exception as exc:  # noqa: BLE001
             raise ValueError(
-                'JYGS credentials not configured. '
-                'Please login via韭研公社 connection page before starting.'
+                f'韭研公社凭据校验失败，请重新登录后再启动任务。错误：{exc}'
+            ) from exc
+        if not auth_result.get('is_valid'):
+            error = auth_result.get('last_error') or '凭据无效或未登录'
+            raise ValueError(
+                f'韭研公社凭据无效，请重新登录后再启动任务。错误：{error}'
             )
     else:
         raise ValueError(f'Unknown task_type: {task_type}')
 
-    dates = _generate_date_list(start_date, end_date)
-    total_days = len(dates)
-    trading_days = total_days
+    # Determine total_items based on task type
+    if task_type == 'STOCK_LIST_SYNC':
+        today = datetime.now().strftime('%Y%m%d')
+        start_date = today
+        end_date = today
+        total_items = 1
+    elif task_type == 'JYGS_REVIEW':
+        # Date-based loop: total_items = number of days
+        dates = _generate_date_list(start_date, end_date)
+        total_items = len(dates)
+    else:  # MARKET_DATA
+        # Stock-based loop: total_items will be set after resolving stock universe in _run_task
+        total_items = 0
 
     task_id = str(uuid.uuid4())
-    created_at = _now_iso()
 
     repo = _task_repo(sqlite_path)
     repo.create_task_with_days(
         task_id=task_id,
         task_type=task_type,
-        mode=mode,
         start_date=start_date,
         end_date=end_date,
-        total_days=total_days,
-        trading_days=trading_days,
-        created_at=created_at,
-        dates=dates,
+        total_items=total_items,
     )
 
     task = get_task(task_id, sqlite_path)
@@ -163,7 +192,6 @@ def start_task(task_id: str, sqlite_path: Path | None = None, duckdb_path: Path 
     thread.start()
     return True
 
-
 def get_task(task_id: str, sqlite_path: Path | None = None) -> dict[str, Any] | None:
     """Return the task record as a dict, or None if not found."""
     return _task_repo(sqlite_path).get_task(task_id)
@@ -173,27 +201,18 @@ def list_tasks(
     limit: int = 20,
     sqlite_path: Path | None = None,
 ) -> list[dict[str, Any]]:
-    """Return recent tasks ordered by created_at descending."""
+    """Return recent tasks ordered by latest inserted id descending."""
     _ensure_schema(sqlite_path)
     return _task_repo(sqlite_path).list_tasks(limit)
 
 
-def get_task_days(
-    task_id: str,
-    page: int = 1,
-    per_page: int = 50,
-    sqlite_path: Path | None = None,
-) -> dict[str, Any]:
-    """Return paginated day details for a task."""
-    return _task_repo(sqlite_path).get_task_days_page(task_id, page, per_page)
-
 
 def reimport_day(trade_date: str, sqlite_path: Path | None = None, duckdb_path: Path | None = None) -> dict[str, Any]:
-    """Create and immediately start a REIMPORT_DAY task for *trade_date* (YYYYMMDD).
+    """Create and immediately start a one-day MARKET_DATA task for *trade_date* (YYYYMMDD).
 
     If another task is already RUNNING the new task will remain in PENDING state.
     """
-    task = create_task(trade_date, trade_date, mode='REIMPORT_DAY', sqlite_path=sqlite_path)
+    task = create_task(trade_date, trade_date, task_type='MARKET_DATA', sqlite_path=sqlite_path)
     start_task(task['task_id'], sqlite_path=sqlite_path, duckdb_path=duckdb_path)
     return get_task(task['task_id'], sqlite_path) or task
 
@@ -210,7 +229,7 @@ def retry_task(task_id: str, sqlite_path: Path | None = None, duckdb_path: Path 
             return None
         if repo.find_running_task_id():
             return None
-        repo.reset_task_for_retry(task_id, _now_iso())
+        repo.reset_task_for_retry(task_id)
 
     started = start_task(task_id, sqlite_path=sqlite_path, duckdb_path=duckdb_path)
     if not started:
@@ -250,7 +269,7 @@ def get_overview(sqlite_path: Path | None = None) -> dict[str, Any]:
 
 
 def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None = None) -> None:
-    """Background thread: process every date in the task's date range."""
+    """Background thread: process task items based on task_type."""
     logger.info('Task %s: started', task_id)
     try:
         task_row = _task_repo(sqlite_path).get_task(task_id)
@@ -261,21 +280,67 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
 
         task = dict(task_row)
         task_type = task.get('task_type', 'MARKET_DATA')
-        dates = _generate_date_list(task['start_date'], task['end_date'])
-        logger.info(
-            'Task %s: started for type=%s, processing %d calendar days (%s → %s)',
-            task_id, task_type, len(dates), task['start_date'], task['end_date'],
-        )
 
-        for date_str in dates:
-            if _is_task_terminated(task_id, sqlite_path):
-                logger.info('Task %s: terminated by user before processing %s', task_id, date_str)
-                return
-            # Returns False when the task must be aborted due to a fatal error.
-            if not _process_one_day(task_id, date_str, sqlite_path, duckdb_path, task_type):
+        if task_type == 'STOCK_LIST_SYNC':
+            # ── 股票列表同步：只调一次 Mairui API ─────────────
+            logger.info('Task %s: running stock list sync (force=True)', task_id)
+            try:
+                df = sync_stock_list_to_sqlite(sqlite_path=sqlite_path, force=True)
+                row_count = len(df)
+                logger.info('Task %s: stock list sync done, %d rows', task_id, row_count)
+                _task_repo(sqlite_path).increment_processed_items(task_id)
+            except Exception as exc:
+                logger.exception('Task %s: stock list sync failed: %s', task_id, exc)
+                _task_repo(sqlite_path).mark_task_failed(task_id, _now_iso(), str(exc))
                 return
 
-        # All dates processed
+        elif task_type == 'MARKET_DATA':
+            # ── 股票级别行情数据同步 ────────────────────────────────────────────
+            start_date = task['start_date']
+            end_date = task['end_date']
+
+            stock_list_df = _resolve_stock_universe(
+                market_filters=None,
+                sqlite_path=sqlite_path,
+                use_uploaded_universe=True,
+            )
+            total_stocks = len(stock_list_df)
+            logger.info(
+                'Task %s: MARKET_DATA, processing %d stocks (%s → %s)',
+                task_id, total_stocks, start_date, end_date,
+            )
+
+            # Set total_items now that we know stock count
+            _task_repo(sqlite_path).set_total_items(task_id, total_stocks)
+
+            for idx, (_, stock) in enumerate(stock_list_df.iterrows()):
+                if _is_task_terminated(task_id, sqlite_path):
+                    logger.info('Task %s: terminated by user after processing %d/%d stocks', task_id, idx, total_stocks)
+                    return
+                stock_code = str(stock['full_code']).strip().upper()
+                if not stock_code:
+                    continue
+                if not _process_one_stock(task_id, stock_code, start_date, end_date, sqlite_path, duckdb_path):
+                    return
+
+            logger.info('Task %s: completed %d stocks', task_id, total_stocks)
+
+        else:  # JYGS_REVIEW
+            # ── 韭研公社复盘：按日期迭代 ──────────────────────────────────────
+            dates = _generate_date_list(task['start_date'], task['end_date'])
+            logger.info(
+                'Task %s: started for JYGS_REVIEW, processing %d dates (%s → %s)',
+                task_id, len(dates), task['start_date'], task['end_date'],
+            )
+
+            for date_str in dates:
+                if _is_task_terminated(task_id, sqlite_path):
+                    logger.info('Task %s: terminated by user before processing %s', task_id, date_str)
+                    return
+                if not _process_jygs_review_day(task_id, date_str, sqlite_path):
+                    return
+
+        # All items processed
         updated = _task_repo(sqlite_path).finalize_task_success_if_running(task_id, _now_iso())
 
         if not updated:
@@ -294,7 +359,7 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
 
     except Exception as exc:
         logger.exception('Task %s: unexpected error: %s', task_id, exc)
-        _mark_task_failed(task_id, str(exc), sqlite_path)
+        _task_repo(sqlite_path).mark_task_failed(task_id, _now_iso(), str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -302,119 +367,171 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
 # ---------------------------------------------------------------------------
 
 
-def _process_one_day(
+def _process_one_stock(
     task_id: str,
-    date_str: str,
-    sqlite_path: Path | None,
-    duckdb_path: Path | None = None,
-    task_type: str = 'MARKET_DATA',
-) -> bool:
-    """Process a single calendar date for a running task.
-
-    Returns True on success (including empty fetch responses).
-    Returns False when a fatal error occurred and the task must be aborted.
-    """
-    logger.debug('Task %s: processing %s (type=%s)', task_id, date_str, task_type)
-
-    # Update current_date and set status to RUNNING
-    _task_repo(sqlite_path).set_current_date_and_mark_day_running(task_id, date_str, _now_iso())
-
-    # Dispatch to appropriate processor based on task_type
-    if task_type == 'JYGS_REVIEW':
-        return _process_jygs_review_day(task_id, date_str, sqlite_path)
-    else:  # Default to MARKET_DATA
-        return _process_trading_day(task_id, date_str, sqlite_path, duckdb_path)
-
-
-def _process_trading_day(
-    task_id: str,
-    date_str: str,
+        stock_code: str,
+        start_date: str,
+        end_date: str,
     sqlite_path: Path | None,
     duckdb_path: Path | None = None,
 ) -> bool:
-    """Fetch data from Tushare and atomically write it for a single calendar date.
+    """Fetch and write daily bars for a single stock across a date range.
 
-    Empty responses are treated as successful writes of zero rows.
-    Returns True on success, False on any fatal error.
+    Returns True on success, False on fatal error.
+    Note: Progress tracking is done at the task level in _run_task().
     """
     t0 = time.monotonic()
 
-    # Fetch
-    logger.info('Task %s: fetching %s …', task_id, date_str)
+    stock_name = ''
     try:
-        rows = _fetch_daily_raw(date_str, sqlite_path)
+        conn = _connect(sqlite_path)
+        try:
+            row = conn.execute(
+                'SELECT name FROM stock_list WHERE full_code = ?',
+                [stock_code]
+            ).fetchone()
+            if row:
+                stock_name = row['name'] or ''
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+    _task_repo(sqlite_path).set_current_label(task_id, stock_code)
+
+    # Fetch all daily bars for this stock across the entire date range
+    logger.info('Task %s: fetching %s [%s ~ %s] …', task_id, stock_code, start_date, end_date)
+    try:
+        raw_rows = _mairui_fetch_history_rows(stock_code, start_date, end_date)
     except Exception as exc:
-        logger.exception('Task %s: fetch failed for %s: %s', task_id, date_str, exc)
-        _mark_day_failed(task_id, date_str, str(exc), sqlite_path)
-        _mark_task_failed(task_id, f'Fetch failed on {date_str}: {exc}', sqlite_path)
+        logger.exception('Task %s: fetch failed for %s: %s', task_id, stock_code, exc)
+        _task_repo(sqlite_path).mark_task_failed(task_id, _now_iso(), f'Fetch failed for {stock_code}: {exc}')
         return False
 
     fetch_elapsed = time.monotonic() - t0
     logger.info(
         'Task %s: fetched %s — %d rows in %.1fs',
-        task_id, date_str, len(rows), fetch_elapsed,
+        task_id, stock_code, len(raw_rows), fetch_elapsed,
     )
 
-    # Mark as WRITING
-    _task_repo(sqlite_path).mark_day_writing(task_id, date_str)
+    if not raw_rows:
+        # No data for this stock in the date range, mark as success anyway
+        logger.info('Task %s: %s has no data in range, skip write', task_id, stock_code)
+        _task_repo(sqlite_path).increment_processed_items(task_id)
+        return True
 
-    # Write atomically (SQLite + DuckDB)
+    # Enrich rows with limit fields
     t1 = time.monotonic()
+    updated_at = _now_iso()
+    enriched_rows: list[dict[str, Any]] = []
+    name_map = {stock_code: stock_name}
+
+    for row in raw_rows:
+        try:
+            full_code = str(row.get('full_code') or '').strip().upper()
+            if not full_code:
+                continue
+            pre_close = _to_decimal(row.get('pre_close'))
+            close = _to_decimal(row.get('close'))
+            trade_date_yyyymmdd = str(row['trade_date']).replace('-', '')  # Convert to YYYYMMDD if needed
+
+            limit_fields = compute_limit_fields(
+                full_code=full_code,
+                trade_date=trade_date_yyyymmdd,
+                pre_close=pre_close,
+                close=close,
+                stock_name=name_map.get(full_code, stock_name),
+                list_date=None,
+            )
+
+            enriched_row = {
+                'trade_date': row['trade_date'],  # Use normalized trade date
+                'full_code': full_code,
+                'open': _to_decimal(row.get('open')),
+                'high': _to_decimal(row.get('high')),
+                'low': _to_decimal(row.get('low')),
+                'close': close,
+                'pre_close': pre_close,
+                'change': _to_decimal(row.get('change')),
+                'pct_chg': _to_decimal(row.get('pct_chg')),
+                'vol': _to_decimal(row.get('vol')),
+                'amount': _to_decimal(row.get('amount')),
+                'updated_at': updated_at,
+            }
+            # Add limit fields (with defaults if missing)
+            for k, v in limit_fields.items():
+                enriched_row[k] = v
+
+            enriched_rows.append(enriched_row)
+        except (ValueError, TypeError) as e:
+            logger.warning('Task %s: could not enrich row for %s: %s', task_id, stock_code, e)
+            continue
+
+    if not enriched_rows:
+        logger.warning('Task %s: %s has no valid rows after enrichment', task_id, stock_code)
+        _task_repo(sqlite_path).increment_processed_items(task_id)
+        return True
+
+    # Group rows by trade_date and write to DuckDB
+    write_elapsed_start = time.monotonic()
+    rows_by_date = defaultdict(list)
+    for row in enriched_rows:
+        rows_by_date[row['trade_date']].append(row)
+
     try:
-        _atomic_write_day(date_str, rows, sqlite_path, duckdb_path)
+        for trade_date, date_rows in rows_by_date.items():
+            # Normalize trade_date to YYYYMMDD format for DuckDB write
+            trade_date_yyyymmdd = trade_date.replace('-', '') if '-' in trade_date else trade_date
+            _write_duckdb_day(trade_date_yyyymmdd, date_rows, duckdb_path)
     except Exception as exc:
-        logger.exception('Task %s: write failed for %s: %s', task_id, date_str, exc)
-        _mark_day_failed(task_id, date_str, str(exc), sqlite_path)
-        _mark_task_failed(task_id, f'Write failed on {date_str}: {exc}', sqlite_path)
+        logger.exception('Task %s: write failed for %s: %s', task_id, stock_code, exc)
+        _task_repo(sqlite_path).mark_task_failed(task_id, _now_iso(), f'Write failed for {stock_code}: {exc}')
         return False
 
-    write_elapsed = time.monotonic() - t1
-
-    # Day succeeded
-    _task_repo(sqlite_path).mark_day_success_and_increment(task_id, date_str, _now_iso(), len(rows))
+    write_elapsed = time.monotonic() - write_elapsed_start
 
     total_elapsed = time.monotonic() - t0
     logger.info(
-        'Task %s: %s done — %d rows written (fetch=%.1fs write=%.1fs total=%.1fs)',
-        task_id, date_str, len(rows), fetch_elapsed, write_elapsed, total_elapsed,
+        'Task %s: %s done — %d rows written in %d dates (fetch=%.1fs write=%.1fs total=%.1fs)',
+        task_id, stock_code, len(enriched_rows), len(rows_by_date), fetch_elapsed, write_elapsed, total_elapsed,
     )
+    _task_repo(sqlite_path).increment_processed_items(task_id)
     return True
+
 
 
 def _fetch_daily_raw(
     date_str: str,
     sqlite_path: Path | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch full-market daily quote from Tushare for *date_str* (YYYYMMDD).
+    """Fetch full-market daily quote for *date_str* (YYYYMMDD) via the configured data source.
 
-    Returns a list of row dicts matching the fetched Tushare daily quote columns,
-    including computed limit-up/down prices and ST flags.
+    Routes through the unified multi-source contract in data_source.py, then enriches
+    rows with accurate limit-up/down fields via compute_limit_fields().
+    Returns rows ready for _write_duckdb_day() with amount already in 亿元.
     """
-    from app.modules.market_data.data_source import _get_tushare_api, _rate_limited_call
-    from app.modules.market_data.limit_rules import compute_limit_fields
+    # Convert YYYYMMDD → YYYY-MM-DD for the unified data source interface
+    trade_date_iso = f'{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}'
 
-    pro = _get_tushare_api()
     logger.info('_fetch_daily_raw start. trade_date=%s', date_str)
-    df = _rate_limited_call(pro.daily, trade_date=date_str)
-    if df is None or df.empty:
-        logger.info('_fetch_daily_raw empty response. trade_date=%s', date_str)
-        return []
-    logger.info('_fetch_daily_raw raw dataframe received. trade_date=%s rows=%d', date_str, len(df))
+    try:
+        raw_rows = fetch_daily_bars_by_date(trade_date_iso, sqlite_path=sqlite_path)
+    except Exception as exc:
+        logger.error('_fetch_daily_raw: data source fetch failed for %s: %s', date_str, exc)
+        raise
+    logger.info('_fetch_daily_raw raw rows received. trade_date=%s rows=%d', date_str, len(raw_rows))
 
-    # Load stock universe metadata (name, list_date) for limit-field enrichment.
-    # Gracefully skip when the stock_list table is empty or unavailable.
+    # Load stock universe metadata (name only) for limit-field enrichment.
     name_map: dict[str, str] = {}
-    list_date_map: dict[str, str] = {}
     try:
         conn = _connect(sqlite_path)
         try:
             univ_rows = conn.execute(
-                'SELECT ts_code, name, list_date FROM stock_list'
+                'SELECT full_code, name FROM stock_list'
             ).fetchall()
             for r in univ_rows:
-                ts = r['ts_code']
+                ts = r['full_code']
                 name_map[ts] = r['name'] or ''
-                list_date_map[ts] = r['list_date'] or ''
         finally:
             conn.close()
     except Exception as _exc:  # noqa: BLE001
@@ -426,35 +543,37 @@ def _fetch_daily_raw(
 
     updated_at = _now_iso()
     rows: list[dict[str, Any]] = []
-    for _, row in df.iterrows():
+    for row in raw_rows:
         try:
-            ts_code = str(row['ts_code'])
-            pre_close = float(row.get('pre_close') or 0)
-            close = float(row.get('close') or 0)
-            stock_name = name_map.get(ts_code, '')
-            list_date = list_date_map.get(ts_code) or None
+            full_code = str(row.get('full_code') or '').strip().upper()
+            if not full_code:
+                continue
+            pre_close = _to_decimal(row.get('pre_close'))
+            close = _to_decimal(row.get('close'))
+            stock_name = name_map.get(full_code, '')
 
             limit_fields = compute_limit_fields(
-                ts_code=ts_code,
+                full_code=full_code,
                 trade_date=date_str,
                 pre_close=pre_close,
                 close=close,
                 stock_name=stock_name,
-                list_date=list_date,
+                list_date=None,
             )
 
             rows.append({
                 'trade_date': date_str,
-                'ts_code': ts_code,
-                'open': float(row.get('open') or 0),
-                'high': float(row.get('high') or 0),
-                'low': float(row.get('low') or 0),
+                'full_code': full_code,
+                'open': _to_decimal(row.get('open')),
+                'high': _to_decimal(row.get('high')),
+                'low': _to_decimal(row.get('low')),
                 'close': close,
                 'pre_close': pre_close,
-                'change': float(row.get('change') or 0),
-                'pct_chg': float(row.get('pct_chg') or 0),
-                'vol': float(row.get('vol') or 0),
-                'amount': float(row.get('amount') or 0),
+                'change': _to_decimal(row.get('change')),
+                'pct_chg': _to_decimal(row.get('pct_chg')),
+                'vol': _to_decimal(row.get('vol')),
+                # amount is already in 亿元 from fetch_daily_bars_by_date contract
+                'amount': _to_decimal(row.get('amount')),
                 'updated_at': updated_at,
                 **limit_fields,
             })
@@ -483,14 +602,14 @@ def _write_duckdb_day(
     rows: list[dict[str, Any]],
     duckdb_path: Path | None = None,
 ) -> None:
-    """Write *rows* for *date_str* into DuckDB's ``daily_bars`` table.
+    """Write *rows* for *date_str* into DuckDB's ``day_level_trade_data`` table.
 
-    Stores all 13 spec-defined columns:
-    - ts_code (e.g. '000001.SZ') stored as-is
+    Stores quote rows with canonical ``full_code``.
+    - full_code (e.g. '000001.SZ') stored as-is
     - trade_date 'YYYYMMDD' → 'YYYY-MM-DD' for consistent internal format
-    - open, high, low, close, pre_close, change, pct_chg from Tushare row
-    - vol stored as float (lots)
-    - amount (千元) / 1e6 stored in units matching turnover_amount_billion display
+    - open, high, low, close, pre_close, change, pct_chg from source row
+    - vol stored as Decimal (lots)
+    - amount in 亿元 (already converted upstream by data_source contract)
     - is_up_limit / is_down_limit from compute_limit_fields output
 
     Deletes existing rows for the date before inserting (idempotent).
@@ -499,19 +618,19 @@ def _write_duckdb_day(
 
     duckdb_rows = [
         (
-            str(r['ts_code']),                            # ts_code (full format)
+            str(r.get('full_code') or ''),  # full_code (full format)
             trade_date_str,
-            float(r['open']),
-            float(r['high']),
-            float(r['low']),
-            float(r['close']),
-            float(r.get('pre_close') or 0),
-            float(r.get('change') or 0),
-            float(r.get('pct_chg') or 0),
-            float(r.get('vol') or 0),
-            round(float(r.get('amount') or 0)),  # 千元
-            bool(r.get('is_limit_up', False)),              # is_up_limit
-            bool(r.get('is_limit_down', False)),            # is_down_limit
+            _to_decimal(r.get('open')),
+            _to_decimal(r.get('high')),
+            _to_decimal(r.get('low')),
+            _to_decimal(r.get('close')),
+            _to_decimal(r.get('pre_close')),
+            _to_decimal(r.get('change')),
+            _to_decimal(r.get('pct_chg')),
+            _to_decimal(r.get('vol')),
+            _to_decimal(r.get('amount')),  # 亿元 (already converted)
+            bool(r.get('is_limit_up', False)),  # is_up_limit
+            bool(r.get('is_limit_down', False)),  # is_down_limit
         )
         for r in rows
     ]
@@ -519,14 +638,17 @@ def _write_duckdb_day(
     conn = _connect_duckdb(duckdb_path)
     try:
         conn.execute('BEGIN TRANSACTION')
-        conn.execute('DELETE FROM daily_bars WHERE trade_date = ?', [trade_date_str])
+        conn.execute('DELETE FROM day_level_trade_data WHERE trade_date = ?', [trade_date_str])
         if duckdb_rows:
             conn.executemany(
-                'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'INSERT INTO day_level_trade_data ('
+                'full_code, trade_date, open, high, low, close, '
+                'pre_close, change, pct_chg, vol, amount, is_up_limit, is_down_limit'
+                ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 duckdb_rows,
             )
         written = conn.execute(
-            'SELECT COUNT(*) FROM daily_bars WHERE trade_date = ?', [trade_date_str]
+            'SELECT COUNT(*) FROM day_level_trade_data WHERE trade_date = ?', [trade_date_str]
         ).fetchone()[0]
         if written != len(duckdb_rows):
             conn.rollback()
@@ -536,7 +658,7 @@ def _write_duckdb_day(
             )
         conn.commit()
         logger.debug(
-            '_write_duckdb_day: %s → %d rows written to daily_bars', date_str, len(duckdb_rows)
+            '_write_duckdb_day: %s → %d rows written to day_level_trade_data', date_str, len(duckdb_rows)
         )
     except Exception:
         conn.rollback()
@@ -546,17 +668,16 @@ def _write_duckdb_day(
 
 
 def _export_parquet(duckdb_path: Path | None = None) -> None:
-    """Re-export all daily_bars rows from DuckDB to the Parquet fallback file."""
-    from app.core.settings import settings as _settings
-    parquet_path = _settings.daily_bars_parquet_path
-    target_duckdb = duckdb_path or _settings.duckdb_path
+    """Re-export all day_level_trade_data rows from DuckDB to the Parquet fallback file."""
+    parquet_path = settings.daily_bars_parquet_path
+    target_duckdb = duckdb_path or settings.duckdb_path
 
     conn = _connect_duckdb(target_duckdb)
     try:
         parquet_path.unlink(missing_ok=True)
         parquet_str = str(parquet_path).replace('\\', '/').replace("'", "''")
         conn.execute(
-            f"COPY (SELECT * FROM daily_bars ORDER BY ts_code, trade_date) "
+            f"COPY (SELECT * FROM day_level_trade_data ORDER BY full_code, trade_date) "
             f"TO '{parquet_str}' (FORMAT PARQUET)"
         )
         logger.info('_export_parquet: Parquet file regenerated at %s', parquet_path)
@@ -564,36 +685,19 @@ def _export_parquet(duckdb_path: Path | None = None) -> None:
         conn.close()
 
 
-def _mark_day_failed(
-    task_id: str,
-    date_str: str,
-    error_message: str,
-    sqlite_path: Path | None,
-) -> None:
-    _task_repo(sqlite_path).mark_day_failed(task_id, date_str, _now_iso(), error_message)
-
-
-def _mark_task_failed(
-    task_id: str,
-    error_message: str,
-    sqlite_path: Path | None,
-) -> None:
-    _task_repo(sqlite_path).mark_task_failed(task_id, _now_iso(), error_message)
-
-
 def _is_task_terminated(task_id: str, sqlite_path: Path | None) -> bool:
     return _task_repo(sqlite_path).is_task_terminated(task_id)
 
 
 def _update_data_range_meta(sqlite_path: Path | None, duckdb_path: Path | None = None) -> None:
-    """Refresh data_range_meta from DuckDB daily_bars contents."""
+    """Refresh data_range_meta from DuckDB day_level_trade_data contents."""
     dconn = _connect_duckdb(duckdb_path)
     try:
         row = dconn.execute(
             '''SELECT MIN(trade_date) AS min_td,
                       MAX(trade_date) AS max_td,
                       COUNT(DISTINCT trade_date) AS cnt
-               FROM daily_bars'''
+               FROM day_level_trade_data'''
         ).fetchone()
     finally:
         dconn.close()
@@ -606,7 +710,7 @@ def _update_data_range_meta(sqlite_path: Path | None, duckdb_path: Path | None =
         conn.execute(
                 '''INSERT OR REPLACE INTO data_range_meta
                    (dataset, min_trade_date, max_trade_date, trading_day_count, updated_at)
-                   VALUES ('daily_bars', ?, ?, ?, ?)''',
+                   VALUES ('day_level_trade_data', ?, ?, ?, ?)''',
                 (str(row[0]), str(row[1]), int(row[2]), _now_iso()),
         )
         conn.commit()
@@ -614,13 +718,40 @@ def _update_data_range_meta(sqlite_path: Path | None, duckdb_path: Path | None =
         conn.close()
 
 
+def _detect_incremental_start(duckdb_path: Path | None = None) -> str | None:
+    """Query day_level_trade_data for MAX(trade_date) and return the next day as YYYYMMDD.
+
+    Returns None if the table is empty (no existing data to build on).
+    """
+    try:
+        conn = _connect_duckdb(duckdb_path)
+        try:
+            row = conn.execute('SELECT MAX(trade_date) AS max_td FROM day_level_trade_data').fetchone()
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning('_detect_incremental_start: DuckDB query failed: %s', exc)
+        return None
+
+    if not row or not row[0]:
+        return None
+
+    max_td_str = str(row[0])  # 'YYYY-MM-DD'
+    try:
+        max_td = datetime.strptime(max_td_str[:10], '%Y-%m-%d').date()
+        next_day = max_td + timedelta(days=1)
+        return next_day.strftime('%Y%m%d')
+    except ValueError:
+        return None
+
+
 # ---------------------------------------------------------------------------
-# Legacy compatibility shim (supports old /status endpoint)
+# Status helpers
 # ---------------------------------------------------------------------------
 
 
 def read_init_status(status_dir: Any = None) -> dict[str, Any]:  # noqa: ARG001
-    """Return current init state in the legacy format (reads from SQLite)."""
+    """Return current init state (reads from SQLite)."""
     try:
         overview = get_overview()
         task = overview.get('running_task') or overview.get('latest_task')
@@ -635,11 +766,11 @@ def read_init_status(status_dir: Any = None) -> dict[str, Any]:  # noqa: ARG001
         }
         return {
             'status': status_map.get(task['status'], 'idle'),
-            'trade_date': task.get('current_date', ''),
-            'total_stocks': task.get('total_days', 0),
-            'processed_stocks': task.get('processed_days', 0),
-            'started_at': task.get('started_at', ''),
-            'finished_at': task.get('finished_at', ''),
+            'trade_date': task.get('current_label', ''),
+            'total_stocks': task.get('total_items', 0),
+            'processed_stocks': task.get('processed_items', 0),
+            'started_at': task.get('task_start_date', ''),
+            'finished_at': task.get('task_end_date', ''),
             'error_message': task.get('error_message', ''),
         }
     except Exception:  # noqa: BLE001
@@ -670,20 +801,15 @@ def _process_jygs_review_day(
     """
     t0 = time.monotonic()
 
-    try:
-        # Import here to avoid circular dependency
-        from app.modules.market_data.jygs_review import fetch_and_parse_jygs_review_for_date
+    # Set current label to the date being processed
+    _task_repo(sqlite_path).set_current_label(task_id, date_str)
 
+    try:
         review_count = fetch_and_parse_jygs_review_for_date(date_str)
         elapsed = time.monotonic() - t0
 
-        # Mark day as SUCCESS and advance overall task progress.
-        _task_repo(sqlite_path).mark_day_success_and_increment(
-            task_id,
-            date_str,
-            _now_iso(),
-            review_count,
-        )
+        # Mark date as processed and advance overall task progress
+        _task_repo(sqlite_path).increment_processed_items(task_id)
 
         logger.info(
             'Task %s: %s SUCCESS (parsed %d reviews in %.1fs)',
@@ -695,15 +821,11 @@ def _process_jygs_review_day(
         elapsed = time.monotonic() - t0
         error_msg = str(exc)[:500]
 
-        repo = _task_repo(sqlite_path)
-        repo.mark_day_failed(task_id, date_str, _now_iso(), error_msg)
-        # Keep prior behavior: JYGS day failure is counted as processed and task continues.
-        repo.mark_task_progress_processed_only(task_id)
+        # Mark the whole task as FAILED: a single day failure means the task is incomplete.
+        _task_repo(sqlite_path).mark_task_failed(task_id, _now_iso(), f'{date_str} failed: {error_msg}')
 
         logger.error(
             'Task %s: %s FAILED in %.1fs: %s',
             task_id, date_str, elapsed, error_msg,
         )
-        # Return True to continue processing other days, only False for fatal errors
-        return True
-
+        return False  # Abort remaining days

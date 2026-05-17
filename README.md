@@ -74,7 +74,7 @@ AlphaPredator/
 │   │   │   └── duckdb_storage.py   # DuckDB 连接与 schema
 │   │   ├── modules/
 │   │   │   └── market_data/
-│   │   │       ├── data_source.py      # Tushare 数据源
+│   │   │       ├── data_source.py      # 行情数据源
 │   │   │       ├── initializer.py      # 数据初始化任务
 │   │   │       ├── updater.py          # 每日增量更新
 │   │   │       ├── importer.py         # 批次导入

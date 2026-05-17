@@ -5,12 +5,13 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from playwright.sync_api import sync_playwright
+
 from app.core.settings import settings
 
 
 def login_and_capture_session(timeout_seconds: int = 300) -> dict[str, Any]:
     """Open JYGS web login page and wait for SESSION cookie from a real browser login."""
-    from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)

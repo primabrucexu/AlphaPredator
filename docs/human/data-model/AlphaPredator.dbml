@@ -7,7 +7,7 @@ Table stock_list [headercolor: #175e7a] {
 	market varchar(255) [ note: '所属市场，有且仅有四个：主板、创业板、科创板、北交所' ]
 
 	indexes {
-		(symbol, name, cnspell) [ name: 'stock_list_index_0' ]
+		(name, cnspell, code) [ name: 'stock_list_index_0' ]
 	}
 
 	Note: '股票列表'
@@ -58,28 +58,25 @@ Table task_info [headercolor: #175e7a] {
 	start_date date [ not null, note: '数据起始日期 YYYYMMDD' ]
 	end_date date [ not null, note: '数据截至日期 YYYYMMDD' ]
 	status varchar(255) [ not null, default: 'PENDING', note: '任务状态。PENDING、RUNNING、FAILED、SUCCESS、TERMINATED' ]
-	total_days integer [ not null, default: 0 ]
-	processed_days integer [ not null, default: 0 ]
-	trading_days integer [ not null, default: 0 ]
-	done_trading_days integer [ not null, default: 0 ]
-	current_date varchar(255) [ not null ]
+	total_items integer [ not null, default: 0, note: '所有子任务数量' ]
+	processed_items integer [ not null, default: 0, note: '已完成子任务数量' ]
+	current_label varchar(255) [ not null, default: '', note: '当前正在处理的项标签：MARKET_DATA 时为股票代码如 000001.SZ，JYGS_REVIEW 时为日期如 20241101，STOCK_LIST_SYNC 时为空' ]
 	error_message text [ not null ]
 	task_type varchar(255) [ not null, default: 'MARKET_DATA', note: '任务类型。当前仅有JYGS_REVIEW（韭研公社涨停信信息复盘）MARKET_DATA_LOAD（市场天级交易数据拉取）' ]
 	task_start_date datetime [ note: '任务开始时间 YYYYMMDD HH:mm:ss' ]
 	task_end_date datetime [ note: '任务结束时间 YYYYMMDD HH:mm:ss' ]
 }
 
-Table daily_task_info [headercolor: #175e7a] {
-	task_id varchar(255) [ pk, not null ]
-	trade_date date [ pk, not null, note: '天级别子任务获取的是哪一天的数据 YYYYMMDD' ]
-	is_trading_day boolean [ not null, note: '是否是交易日。如果能解析到数据则为true，如果不能则false' ]
+Table task_item_info [headercolor: #175e7a] {
+	id integer [ pk, increment ]
+	task_id varchar(255) [ not null, unique ]
+	item varchar(255) [ note: '子任务内容描述' ]
 	status varchar(255) [ not null, default: 'PENDING', note: 'PENDING, RUNNING, SKIP（非交易日标记为跳过）, SUCCESS, FAILED' ]
-	row_count integer [ not null, default: 0, note: '获取到的数据有多少行' ]
+	error_message text [ not null, note: '错误信息' ]
 	started_at datetime [ not null, note: '开始时间 YYYYMMDD HH:mm:ss' ]
 	finished_at datetime [ not null, note: '结束时间 YYYYMMDD HH:mm:ss' ]
-	error_message text [ not null ]
 
-	Note: '日级别子任务信息'
+	Note: '子任务信息'
 }
 
 Table user_trade_history [headercolor: #175e7a] {
@@ -112,7 +109,7 @@ Table model_info [headercolor: #175e7a] {
 }
 
 Table day_level_trade_data [headercolor: #175e7a] {
-	stock_code varchar [ not null, note: '6位数字格式股票代码，如 000001' ]
+	full_code varchar [ not null, note: '带交易所后缀的6位数字格式股票代码，如 000001.SZ' ]
 	trade_date date [ not null, note: '交易日期，YYYYMMDD' ]
 	open numeric [ not null, note: '开盘价' ]
 	high numeric [ not null, note: '最高价' ]
@@ -122,12 +119,12 @@ Table day_level_trade_data [headercolor: #175e7a] {
 	change numeric [ not null, note: '涨跌额' ]
 	pct_chg numeric [ not null, note: '涨跌幅（%）' ]
 	vol numeric [ not null, note: '成交量，单位是手，也就是100股' ]
-	amount numeric [ not null, note: '成交额，单位是元' ]
+	amount numeric [ not null, note: '成交额，单位是亿元' ]
 	is_up_limit boolean [ not null, note: '该日是否涨停' ]
 	is_down_limit boolean [ not null, note: '该日是否跌停' ]
 	is_stop boolean [ not null, note: '是否停牌' ]
 
-	Note: '股票日级别交易数据，采用duckdb存储'
+	Note: '股票日级别交易数据'
 }
 
 Table review_note [headercolor: #175e7a] {
@@ -146,7 +143,7 @@ Ref fk_user_stock_samples_pick_model_id_pick_models {
 }
 
 Ref fk_task_info_task_id_daily_task_info {
-	task_info.task_id - daily_task_info.task_id [ delete: no action, update: no action ]
+	task_info.task_id - task_item_info.task_id [ delete: no action, update: no action ]
 }
 
 Ref fk_user_trade_history_id_review_note {

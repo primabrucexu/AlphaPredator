@@ -1,164 +1,142 @@
-import json
+"""Phase 2 hot-review API tests.
+
+All assertions are based on the authoritative data model tables:
+  - daily_hot_pic  (复盘图片)
+  - daily_hot_info (涨停解析)
+
+The legacy hot_sector_* tables are no longer tested here.
+"""
 from pathlib import Path
 
 from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
 from app.modules.market_data.service import MarketDataService
 
 
-def test_market_service_reads_unified_hot_review_tables(tmp_path: Path) -> None:
-    sqlite_path = tmp_path / 'alphapredator.db'
-    duckdb_path = tmp_path / 'alphapredator.duckdb'
-    ensure_sqlite_schema(sqlite_path)
-
+def _seed_hot_data(sqlite_path: Path, trade_date: str = '2026-05-07') -> None:
+    """Insert sample data into daily_hot_pic and daily_hot_info."""
     conn = connect_sqlite(sqlite_path)
     try:
         conn.execute(
-            '''
-            INSERT INTO hot_sector_daily_aggregates (
-                trade_date, sector_name_canonical, source_stock_count, max_board_count,
-                representative_stock_codes_json, representative_stock_names_json,
-                heat_score, rank_today, aggregate_confidence, needs_review
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''',
-            (
-                '2026-05-07', '银行', 1, 2,
-                '["000001"]', '["平安银行"]',
-                26, 1, 1.0, 0,
-            ),
+            'INSERT INTO daily_hot_pic (trade_date, summary_image_url, source) VALUES (?, ?, ?)',
+            (trade_date, 'https://example.com/review-1.png', 'jygs'),
         )
         conn.execute(
-            '''
-            INSERT INTO hot_sector_image_sources (trade_date, source_file, source_type, import_batch, parse_status,
-                                                  parse_notes)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ''',
-            (
-                '2026-05-07',
-                'jygs_api_2026-05-07',
-                'jiuyangongshe_review_image',
-                'jygs-api-2026-05-07',
-                'parsed',
-                json.dumps(
-                    {
-                        'summary_image_count': 2,
-                        'summary_image_urls': [
-                            'https://example.com/review-1.png',
-                            'https://example.com/review-2.png',
-                        ],
-                    },
-                    ensure_ascii=False,
-                ),
-            ),
+            'INSERT INTO daily_hot_pic (trade_date, summary_image_url, source) VALUES (?, ?, ?)',
+            (trade_date, 'https://example.com/review-2.png', 'jygs'),
         )
+        # 2-board streak
         conn.execute(
             '''
-            INSERT INTO hot_sector_recent_3d (
-                trade_date, sector_name_canonical, days_present_3d, heat_sum_3d,
-                heat_avg_3d, best_rank_3d, latest_rank, trend_tag
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO daily_hot_info
+            (trade_date, limit_up_time, stock_code, name, streak_text, hot_theme, reason, source, short_reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''',
-            ('2026-05-07', '银行', 2, 40, 20.0, 1, 1, 'persistent'),
+            (trade_date, '09:45:00', 1, '平安银行', '两天两板', '银行', '季报增长', 'jygs', ''),
         )
+        # 3-board streak, different theme
         conn.execute(
             '''
-            INSERT INTO hot_sector_stock_facts (
-                trade_date, source_file, stock_code, stock_name, board_count,
-                limit_up_time, reason_raw, reason_clean, ocr_confidence, needs_review
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO daily_hot_info
+            (trade_date, limit_up_time, stock_code, name, streak_text, hot_theme, reason, source, short_reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''',
-            (
-                '2026-05-07', 'jygs_api_2026-05-07', '000001', '平安银行', 2,
-                '09:45:00', '测试原因', '测试原因', 1.0, 0,
-            ),
+            (trade_date, '10:02:00', 300001, '某科技', '三连板', '半导体', '国产替代', 'jygs', ''),
         )
+        # first-board stock should be excluded from min_boards=2 query
         conn.execute(
             '''
-            INSERT INTO hot_sector_sector_mappings (
-                trade_date, source_file, stock_code, sector_name_canonical, sector_alias_hit,
-                is_primary_sector, mapping_method, mapping_confidence, needs_review
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO daily_hot_info
+            (trade_date, limit_up_time, stock_code, name, streak_text, hot_theme, reason, source, short_reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''',
-            (
-                '2026-05-07', 'jygs_api_2026-05-07', '000001', '银行', '银行',
-                1, 'api_theme', 1.0, 0,
-            ),
+            (trade_date, '14:55:00', 600001, '某银行', '首板', '银行', '利好', 'jygs', ''),
         )
         conn.commit()
     finally:
         conn.close()
 
-    service = MarketDataService(sqlite_path=sqlite_path, duckdb_path=duckdb_path)
 
-    history = service.get_hot_sector_history(days=7)
-    assert history.trade_dates == ['2026-05-07']
-    assert history.days[0].sectors[0].name == '银行'
+def test_service_reads_hot_review_images_from_daily_hot_pic(tmp_path: Path) -> None:
+    """get_hot_review_images() must read from daily_hot_pic."""
+    sqlite_path = tmp_path / 'alphapredator.db'
+    ensure_sqlite_schema(sqlite_path)
+    _seed_hot_data(sqlite_path)
 
-    streaks = service.get_limit_up_streaks(trade_date='2026-05-07', min_boards=2)
-    assert streaks.trade_date == '2026-05-07'
-    assert streaks.streaks[0].stock_code == '000001'
-    assert streaks.streaks[0].board_count == 2
-
+    service = MarketDataService(sqlite_path=sqlite_path, duckdb_path=tmp_path / 'duck.db')
     images = service.get_hot_review_images(trade_date='2026-05-07')
+
     assert images.trade_date == '2026-05-07'
-    assert [image.url for image in images.images] == [
-        'https://example.com/review-1.png',
-        'https://example.com/review-2.png',
-    ]
+    urls = [img.url for img in images.images]
+    assert 'https://example.com/review-1.png' in urls
+    assert 'https://example.com/review-2.png' in urls
+    assert len(urls) == 2
 
 
-def test_daily_hot_pic_and_daily_hot_info_tables(tmp_path: Path) -> None:
-    """Test that daily_hot_pic and daily_hot_info tables (per data-storage.md) are properly populated from JYGS API."""
+def test_service_reads_limit_up_streaks_from_daily_hot_info(tmp_path: Path) -> None:
+    """get_limit_up_streaks() must derive board_count from streak_text in daily_hot_info."""
     sqlite_path = tmp_path / 'alphapredator.db'
-    duckdb_path = tmp_path / 'alphapredator.duckdb'
+    ensure_sqlite_schema(sqlite_path)
+    _seed_hot_data(sqlite_path)
+
+    service = MarketDataService(sqlite_path=sqlite_path, duckdb_path=tmp_path / 'duck.db')
+    streaks = service.get_limit_up_streaks(trade_date='2026-05-07', min_boards=2)
+
+    assert streaks.trade_date == '2026-05-07'
+    codes = [s.stock_code for s in streaks.streaks]
+    # 平安银行 (2-board) and 某科技 (3-board) should be present
+    assert '1' in codes or '000001' in codes or '1' in codes
+    assert all(s.board_count >= 2 for s in streaks.streaks)
+    # 某科技 (3-board) should rank before 平安银行 (2-board)
+    board_counts = [s.board_count for s in streaks.streaks]
+    assert board_counts == sorted(board_counts, reverse=True)
+    # first-board stock (600001) must be excluded
+    assert '600001' not in codes
+
+
+def test_service_reads_hot_sector_history_from_daily_hot_info(tmp_path: Path) -> None:
+    """get_hot_sector_history() must aggregate themes from daily_hot_info."""
+    sqlite_path = tmp_path / 'alphapredator.db'
+    ensure_sqlite_schema(sqlite_path)
+    _seed_hot_data(sqlite_path)
+
+    service = MarketDataService(sqlite_path=sqlite_path, duckdb_path=tmp_path / 'duck.db')
+    history = service.get_hot_sector_history(days=7)
+
+    assert history.trade_dates == ['2026-05-07']
+    sector_names = [s.name for s in history.days[0].sectors]
+    assert '银行' in sector_names
+    assert '半导体' in sector_names
+    # 银行 has 2 stocks, 半导体 has 1 → 银行 should rank first
+    bank = next(s for s in history.days[0].sectors if s.name == '银行')
+    assert bank.heat_score == 2
+    assert bank.rank_today == 1
+
+
+def test_daily_hot_pic_schema_has_correct_columns(tmp_path: Path) -> None:
+    """Verify that daily_hot_pic table has the columns defined in AlphaPredator.dbml."""
+    sqlite_path = tmp_path / 'alphapredator.db'
     ensure_sqlite_schema(sqlite_path)
 
     conn = connect_sqlite(sqlite_path)
     try:
-        # Insert test data into data-storage.md compliant tables
-        conn.execute(
-            '''
-            INSERT INTO daily_hot_pic (trade_date, summary_image_url, source)
-            VALUES (?, ?, ?)
-            ''',
-            ('2026-05-07', 'https://example.com/review.png', 'jygs'),
-        )
-
-        conn.execute(
-            '''
-            INSERT INTO daily_hot_info (trade_date, limit_up_time, stock_code, name, streak_text, hot_theme, reason,
-                                        source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''',
-            (
-                '2026-05-07', '09:45:00', 1, '平安银行', '2天2板', '银行', '季报增长', 'jygs',
-            ),
-        )
-        conn.commit()
+        cols = {row[1] for row in conn.execute('PRAGMA table_info(daily_hot_pic)').fetchall()}
     finally:
         conn.close()
+
+    assert {'id', 'trade_date', 'summary_image_url', 'source'}.issubset(cols)
+
+
+def test_daily_hot_info_schema_has_short_reason(tmp_path: Path) -> None:
+    """Verify that daily_hot_info includes the short_reason column per AlphaPredator.dbml."""
+    sqlite_path = tmp_path / 'alphapredator.db'
+    ensure_sqlite_schema(sqlite_path)
 
     conn = connect_sqlite(sqlite_path)
     try:
-        # Verify daily_hot_pic table
-        pic_row = conn.execute(
-            'SELECT trade_date, summary_image_url, source FROM daily_hot_pic WHERE trade_date = ?',
-            ('2026-05-07',),
-        ).fetchone()
-        assert pic_row is not None
-        assert pic_row['trade_date'] == '2026-05-07'
-        assert pic_row['summary_image_url'] == 'https://example.com/review.png'
-        assert pic_row['source'] == 'jygs'
-
-        # Verify daily_hot_info table
-        info_row = conn.execute(
-            'SELECT trade_date, stock_code, name, hot_theme, streak_text FROM daily_hot_info WHERE trade_date = ?',
-            ('2026-05-07',),
-        ).fetchone()
-        assert info_row is not None
-        assert info_row['trade_date'] == '2026-05-07'
-        assert info_row['stock_code'] == 1
-        assert info_row['name'] == '平安银行'
-        assert info_row['hot_theme'] == '银行'
-        assert info_row['streak_text'] == '2天2板'
+        cols = {row[1] for row in conn.execute('PRAGMA table_info(daily_hot_info)').fetchall()}
     finally:
         conn.close()
+
+    required = {'id', 'trade_date', 'limit_up_time', 'stock_code', 'name',
+                'streak_text', 'hot_theme', 'reason', 'source', 'short_reason'}
+    assert required.issubset(cols), f'Missing columns: {required - cols}'

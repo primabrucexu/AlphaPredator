@@ -1,6 +1,6 @@
 """Daily incremental updater (DuckDB-first).
 
-Daily quote facts are persisted into DuckDB ``daily_bars`` only.
+Daily quote facts are persisted into DuckDB ``day_level_trade_data`` only.
 SQLite is used for metadata tables (e.g. stock profiles), not daily quote facts.
 """
 
@@ -13,11 +13,13 @@ from pathlib import Path
 from typing import Any
 
 from app.core.settings import settings
+from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_parent, ensure_duckdb_schema
 from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
 from app.modules.market_data.data_source import (
     fetch_daily_bars_by_date,
     fetch_spot_snapshot,
     fetch_stock_pool,
+    sync_stock_list_to_sqlite,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,9 +43,12 @@ def run_daily_update(
     target_parquet = daily_bars_parquet_path or settings.daily_bars_parquet_path
 
     trade_date = date.today().strftime('%Y-%m-%d')
+    logger.info('Daily update: syncing stock list to SQLite …')
+    sync_stock_list_to_sqlite(sqlite_path=target_sqlite)
+
     logger.info('Daily update: fetching spot snapshot for %s …', trade_date)
-    snapshot_rows = fetch_spot_snapshot(trade_date)
-    stock_pool = fetch_stock_pool(snapshot_rows)
+    snapshot_rows = fetch_spot_snapshot(trade_date, sqlite_path=target_sqlite)
+    stock_pool = fetch_stock_pool(snapshot_rows, sqlite_path=target_sqlite)
 
     # Upsert stock profile metadata only (no daily quote facts in SQLite)
     ensure_sqlite_schema(target_sqlite)
@@ -51,7 +56,7 @@ def run_daily_update(
 
     # Fetch today's bars and append to DuckDB / Parquet
     logger.info('Daily update: fetching today\'s bars for %d stocks …', len(stock_pool))
-    today_bars = _fetch_today_bars(stock_pool, trade_date)
+    today_bars = _fetch_today_bars(stock_pool, trade_date, sqlite_path=target_sqlite)
     _upsert_duckdb(target_duckdb, target_parquet, today_bars)
 
     # Refresh data-range metadata from DuckDB and rebuild market snapshot JSON
@@ -83,7 +88,6 @@ def _upsert_sqlite_profiles(
     sqlite_path: Path,
     stock_pool: list[dict[str, Any]],
 ) -> None:
-    from app.db.sqlite import connect_sqlite
     conn = connect_sqlite(sqlite_path)
     try:
         conn.execute('PRAGMA foreign_keys = ON')
@@ -115,9 +119,11 @@ def _upsert_sqlite_profiles(
 def _fetch_today_bars(
     stock_pool: list[dict[str, Any]],
     trade_date: str,
+        *,
+        sqlite_path: Path,
 ) -> list[dict[str, Any]]:
     """Fetch today's daily bars for all stocks in one bulk API call."""
-    return fetch_daily_bars_by_date(trade_date)
+    return fetch_daily_bars_by_date(trade_date, sqlite_path=sqlite_path)
 
 
 def _upsert_duckdb(
@@ -128,7 +134,6 @@ def _upsert_duckdb(
     if not today_bars:
         return
 
-    from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_parent, ensure_duckdb_schema
     ensure_duckdb_parent(duckdb_path, daily_bars_parquet_path.parent)
     ensure_duckdb_schema(duckdb_path)
 
@@ -138,13 +143,16 @@ def _upsert_duckdb(
         # Delete existing rows for the same trade_date then insert
         trade_dates = {r['trade_date'] for r in today_bars}
         for td in trade_dates:
-            conn.execute('DELETE FROM daily_bars WHERE trade_date = ?', [td])
+            conn.execute('DELETE FROM day_level_trade_data WHERE trade_date = ?', [td])
 
         conn.executemany(
-            'INSERT INTO daily_bars VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO day_level_trade_data ('
+            'full_code, trade_date, open, high, low, close, '
+            'pre_close, change, pct_chg, vol, amount, is_up_limit, is_down_limit'
+            ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [
                 (
-                    r['ts_code'],
+                    r.get('full_code') or '',
                     r['trade_date'],
                     r['open'],
                     r['high'],
@@ -166,7 +174,7 @@ def _upsert_duckdb(
         daily_bars_parquet_path.unlink(missing_ok=True)
         parquet_path = str(daily_bars_parquet_path).replace('\\', '/').replace("'", "''")
         conn.execute(
-            f"COPY (SELECT * FROM daily_bars ORDER BY ts_code, trade_date) TO '{parquet_path}' (FORMAT PARQUET)"
+            f"COPY (SELECT * FROM day_level_trade_data ORDER BY full_code, trade_date) TO '{parquet_path}' (FORMAT PARQUET)"
         )
         conn.commit()
     except Exception:
@@ -226,7 +234,6 @@ def _rebuild_snapshot(
 
 
 def _update_data_range_meta(sqlite_path: Path, duckdb_path: Path) -> None:
-    from app.db.duckdb_storage import connect_duckdb
 
     dconn = connect_duckdb(duckdb_path)
     try:
@@ -234,7 +241,7 @@ def _update_data_range_meta(sqlite_path: Path, duckdb_path: Path) -> None:
             '''SELECT MIN(trade_date) AS min_td,
                       MAX(trade_date) AS max_td,
                       COUNT(DISTINCT trade_date) AS cnt
-               FROM daily_bars'''
+               FROM day_level_trade_data'''
         ).fetchone()
     finally:
         dconn.close()
@@ -247,7 +254,7 @@ def _update_data_range_meta(sqlite_path: Path, duckdb_path: Path) -> None:
         conn.execute(
             '''INSERT OR REPLACE INTO data_range_meta
                (dataset, min_trade_date, max_trade_date, trading_day_count, updated_at)
-               VALUES ('daily_bars', ?, ?, ?, datetime('now'))''',
+               VALUES ('day_level_trade_data', ?, ?, ?, datetime('now'))''',
             (str(row[0]), str(row[1]), int(row[2])),
         )
         conn.commit()

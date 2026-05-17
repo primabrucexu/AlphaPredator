@@ -1,13 +1,11 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from app.db.sqlite import connect_sqlite
-from app.queries.market_queries import (
-    get_stock_list_active_board_count_rows,
-    get_stock_list_latest_uploaded_at,
-)
+from app.queries.market_queries import get_stock_list_active_board_count_rows
 
 
 class StockListRepo:
@@ -17,100 +15,117 @@ class StockListRepo:
     def _connect(self):
         return connect_sqlite(self._sqlite_path)
 
-    def replace_all(self, rows: list[tuple[str, str, str, str, str, str, str, str, str]]) -> None:
+    @staticmethod
+    def _row_to_dict(row: Any) -> dict[str, Any]:
+        return cast(dict[str, Any], dict(row))
+
+    def replace_all(self, rows: list[tuple[str, str, str, int, str, str]]) -> None:
+        """Upsert incoming rows into stock_list.
+
+        Guard: if *rows* is empty, the existing data is preserved and the
+        method returns without touching the table.  This prevents an
+        accidental full wipe when the upstream provider returns nothing.
+
+        Strategy: never delete existing rows during sync.
+        """
+        if not rows:
+            logging.getLogger(__name__).warning(
+                'replace_all called with empty rows – keeping existing stock_list data'
+            )
+            return
         conn = self._connect()
         try:
-            conn.execute('DELETE FROM stock_list')
-            if rows:
-                conn.executemany(
-                    '''INSERT OR REPLACE INTO stock_list
-                       (ts_code, symbol, name, cnspell, market, list_status, list_date, delist_date, uploaded_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                    rows,
-                )
+            conn.executemany(
+                '''INSERT OR REPLACE INTO stock_list
+                   (full_code, code, name, is_st, cnspell, market)
+                   VALUES (?, ?, ?, ?, ?, ?)''',
+                rows,
+            )
             conn.commit()
         finally:
             conn.close()
 
-    def get_active_by_ts_code_upper(self, ts_code_upper: str) -> dict[str, Any] | None:
+    def get_by_full_code_upper(self, full_code_upper: str) -> dict[str, Any] | None:
         conn = self._connect()
         try:
             row = conn.execute(
-                "SELECT ts_code, symbol, name FROM stock_list WHERE UPPER(ts_code) = ? AND list_status = 'L' LIMIT 1",
-                [ts_code_upper],
+                'SELECT full_code, code, name, is_st, cnspell, market FROM stock_list WHERE UPPER(full_code) = ? LIMIT 1',
+                [full_code_upper],
             ).fetchone()
-            return dict(row) if row else None
+            return self._row_to_dict(row) if row else None
         finally:
             conn.close()
 
-    def list_active_by_symbol(self, symbol: str) -> list[dict[str, Any]]:
+    def list_by_code(self, code: str) -> list[dict[str, Any]]:
         conn = self._connect()
         try:
             rows = conn.execute(
-                "SELECT ts_code, symbol, name FROM stock_list WHERE symbol = ? AND list_status = 'L'",
-                [symbol],
+                'SELECT full_code, code, name, is_st, cnspell, market FROM stock_list WHERE code = ?',
+                [code],
             ).fetchall()
-            return [dict(r) for r in rows]
+            return [self._row_to_dict(r) for r in rows]
         finally:
             conn.close()
 
-    def list_active_by_cnspell_exact(self, cnspell_upper: str) -> list[dict[str, Any]]:
+    def list_by_cnspell_exact(self, cnspell_upper: str) -> list[dict[str, Any]]:
         conn = self._connect()
         try:
             rows = conn.execute(
-                "SELECT ts_code, symbol, name FROM stock_list WHERE cnspell = ? AND list_status = 'L'",
+                'SELECT full_code, code, name, is_st, cnspell, market FROM stock_list WHERE cnspell = ?',
                 [cnspell_upper],
             ).fetchall()
-            return [dict(r) for r in rows]
+            return [self._row_to_dict(r) for r in rows]
         finally:
             conn.close()
 
-    def list_active_by_cnspell_prefix(self, cnspell_prefix_upper: str, limit: int = 20) -> list[dict[str, Any]]:
+    def list_by_cnspell_prefix(self, cnspell_prefix_upper: str, limit: int = 20) -> list[dict[str, Any]]:
         conn = self._connect()
         try:
             rows = conn.execute(
-                "SELECT ts_code, symbol, name FROM stock_list WHERE cnspell LIKE ? AND list_status = 'L' LIMIT ?",
+                'SELECT full_code, code, name, is_st, cnspell, market FROM stock_list WHERE cnspell LIKE ? LIMIT ?',
                 [cnspell_prefix_upper + '%', limit],
             ).fetchall()
-            return [dict(r) for r in rows]
+            return [self._row_to_dict(r) for r in rows]
         finally:
             conn.close()
 
-    def list_active_for_search(self, query_upper: str, limit: int) -> list[dict[str, Any]]:
+    def list_for_search(self, query_upper: str, limit: int) -> list[dict[str, Any]]:
         conn = self._connect()
         try:
             if query_upper.isdigit():
                 rows = conn.execute(
-                    "SELECT ts_code, symbol, name FROM stock_list WHERE symbol LIKE ? AND list_status = 'L' LIMIT ?",
+                    'SELECT full_code, code, name, is_st, cnspell, market FROM stock_list WHERE code LIKE ? LIMIT ?',
                     [query_upper + '%', limit],
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT ts_code, symbol, name FROM stock_list WHERE cnspell LIKE ? AND list_status = 'L' LIMIT ?",
+                    'SELECT full_code, code, name, is_st, cnspell, market FROM stock_list WHERE cnspell LIKE ? LIMIT ?',
                     [query_upper + '%', limit],
                 ).fetchall()
-            return [dict(r) for r in rows]
+            return [self._row_to_dict(r) for r in rows]
         finally:
             conn.close()
 
-    def list_active_symbol_name_pairs(self) -> list[dict[str, Any]]:
+    def list_code_name_pairs(self) -> list[dict[str, Any]]:
         conn = self._connect()
         try:
-            rows = conn.execute(
-                "SELECT symbol, name FROM stock_list WHERE list_status = 'L'"
-            ).fetchall()
-            return [dict(r) for r in rows]
+            rows = conn.execute('SELECT code, name FROM stock_list').fetchall()
+            return [self._row_to_dict(r) for r in rows]
         finally:
             conn.close()
 
-    def get_latest_uploaded_at(self) -> str | None:
+    def count_rows(self) -> int:
         conn = self._connect()
         try:
-            return get_stock_list_latest_uploaded_at(conn)
+            row = conn.execute('SELECT COUNT(*) AS cnt FROM stock_list').fetchone()
+            return int(row['cnt'] if row else 0)
         finally:
             conn.close()
 
-    def get_active_board_counts(self) -> dict[str, int]:
+    def has_rows(self) -> bool:
+        return self.count_rows() > 0
+
+    def get_board_counts(self) -> dict[str, int]:
         conn = self._connect()
         try:
             rows = get_stock_list_active_board_count_rows(conn)

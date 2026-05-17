@@ -4,7 +4,7 @@ Tests migrated from the old Phase 2.9 initializer.
 The V2 initializer replaces the old CSV-based approach.  This file retains
 the following tests that remain relevant after the V2 refactor:
 - Updater (run_daily_update): unmodified, still uses the same API.
-- Data source helpers (load_stock_list, _to_ts_code): unchanged utilities.
+- Data source helpers (load_stock_list, _to_full_code): unchanged utilities.
 
 Tests removed (exercised old CSV-based V1 initializer only):
 - test_read_init_status_returns_idle_when_no_file
@@ -23,7 +23,15 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pandas as pd
 import pytest
+
+from app.db.duckdb_storage import ensure_duckdb_parent, ensure_duckdb_schema
+from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
+from app.modules.market_data.data_source import _market_board_from_code, _to_full_code, load_stock_list, \
+    sync_stock_list_to_sqlite
+from app.modules.market_data.updater import run_daily_update
+from app.repositories.stock_list_repo import StockListRepo
 
 MOCK_SNAPSHOT_ROWS = [
     {
@@ -50,7 +58,7 @@ MOCK_SNAPSHOT_ROWS = [
 
 MOCK_BARS = [
     {
-        'ts_code': '000001.SZ',
+        'full_code': '000001.SZ',
         'trade_date': '2026-05-03',
         'open': 11.13,
         'high': 11.31,
@@ -65,7 +73,7 @@ MOCK_BARS = [
         'is_down_limit': False,
     },
     {
-        'ts_code': '300308.SZ',
+        'full_code': '300308.SZ',
         'trade_date': '2026-05-03',
         'open': 165.90,
         'high': 168.40,
@@ -82,17 +90,17 @@ MOCK_BARS = [
 ]
 
 MOCK_STOCK_LIST_CSV = (
-    'ts_code,symbol,name,industry,cnspell,market,list_date,list_status,delist_date\n'
-    '000001.SZ,000001,平安银行,银行,payh,主板,19910403,L,\n'
-    '300308.SZ,300308,中际旭创,通信,zjxc,创业板,20130124,L,\n'
+    'full_code,code,name,is_st,cnspell,market\n'
+    '000001.SZ,000001,平安银行,0,payh,主板\n'
+    '300308.SZ,300308,中际旭创,0,zjxc,创业板\n'
 )
 
 
-def _mock_fetch_spot_snapshot(trade_date=None, *, market_filters=None):  # noqa: ARG001
+def _mock_fetch_spot_snapshot(trade_date=None, *, market_filters=None, sqlite_path=None):  # noqa: ARG001
     return MOCK_SNAPSHOT_ROWS
 
 
-def _mock_fetch_stock_pool(snapshot_rows=None, *, market_filters=None):
+def _mock_fetch_stock_pool(snapshot_rows=None, *, market_filters=None, sqlite_path=None):  # noqa: ARG001
     rows = snapshot_rows or MOCK_SNAPSHOT_ROWS
     return [
         {'stock_code': r['stock_code'], 'stock_name': r['stock_name'], 'sectors': '', 'ai_quick_summary': ''}
@@ -100,7 +108,8 @@ def _mock_fetch_stock_pool(snapshot_rows=None, *, market_filters=None):
     ]
 
 
-def _mock_fetch_daily_bars_by_date(trade_date, *, use_uploaded_universe=True, market_filters=None):  # noqa: ARG001
+def _mock_fetch_daily_bars_by_date(trade_date, *, use_uploaded_universe=True, market_filters=None,
+                                   sqlite_path=None):  # noqa: ARG001
     return list(MOCK_BARS)
 
 
@@ -110,10 +119,6 @@ def _mock_fetch_daily_bars_by_date(trade_date, *, use_uploaded_universe=True, ma
 
 
 def test_run_daily_update_succeeds(tmp_path: Path) -> None:
-    from app.db.sqlite import ensure_sqlite_schema
-    from app.db.duckdb_storage import ensure_duckdb_parent, ensure_duckdb_schema
-    from app.modules.market_data.updater import run_daily_update
-
     sqlite_path = tmp_path / 'alphapredator.db'
     duckdb_path = tmp_path / 'alphapredator.duckdb'
     daily_bars_parquet_path = tmp_path / 'parquet' / 'stock_daily_bars.parquet'
@@ -124,6 +129,7 @@ def test_run_daily_update_succeeds(tmp_path: Path) -> None:
     ensure_duckdb_schema(duckdb_path)
 
     with (
+        patch('app.modules.market_data.updater.sync_stock_list_to_sqlite'),
         patch('app.modules.market_data.updater.fetch_spot_snapshot', side_effect=_mock_fetch_spot_snapshot),
         patch('app.modules.market_data.updater.fetch_stock_pool', side_effect=_mock_fetch_stock_pool),
         patch('app.modules.market_data.updater.fetch_daily_bars_by_date', side_effect=_mock_fetch_daily_bars_by_date),
@@ -144,6 +150,13 @@ def test_run_daily_update_succeeds(tmp_path: Path) -> None:
     assert len(payload['stocks']) == 2
     assert payload['summary']['rising_count'] == 2
 
+    conn = connect_sqlite(sqlite_path)
+    try:
+        stock_list_count = conn.execute('SELECT COUNT(*) FROM stock_list').fetchone()[0]
+    finally:
+        conn.close()
+    assert stock_list_count == 0
+
 
 # ---------------------------------------------------------------------------
 # Data source unit tests
@@ -151,48 +164,71 @@ def test_run_daily_update_succeeds(tmp_path: Path) -> None:
 
 
 def test_load_stock_list_filters_by_market(tmp_path: Path) -> None:
-    from unittest.mock import MagicMock
+    mock_df = pd.DataFrame(
+        [
+            {'full_code': '000001.SZ', 'code': '000001', 'name': '平安银行', 'is_st': False, 'cnspell': 'PAYH',
+             'market': '主板'},
+            {'full_code': '300308.SZ', 'code': '300308', 'name': '中际旭创', 'is_st': False, 'cnspell': 'ZJXC',
+             'market': '创业板'},
+        ]
+    )
 
-    from app.modules.market_data.data_source import load_stock_list
-
-    stock_list_path = tmp_path / 'config' / 'stock_list.csv'
-    stock_list_path.parent.mkdir(parents=True, exist_ok=True)
-    stock_list_path.write_text(MOCK_STOCK_LIST_CSV, encoding='utf-8')
-
-    mock_settings = MagicMock()
-    mock_settings.stock_list_path = stock_list_path
-
-    with patch('app.modules.market_data.data_source.settings', mock_settings):
+    with patch('app.modules.market_data.data_source._mairui_fetch_stock_list', return_value=mock_df):
         df_all = load_stock_list()
         assert len(df_all) == 2
 
         df_main = load_stock_list(market_filters=['主板'])
         assert len(df_main) == 1
-        assert df_main.iloc[0]['symbol'] == '000001'
+        assert next(iter(df_main['code'])) == '000001'
 
         df_cyb = load_stock_list(market_filters=['创业板'])
         assert len(df_cyb) == 1
-        assert df_cyb.iloc[0]['symbol'] == '300308'
+        assert next(iter(df_cyb['code'])) == '300308'
 
 
-def test_load_stock_list_raises_when_file_missing(tmp_path: Path) -> None:
-    from unittest.mock import MagicMock
-
-    from app.modules.market_data.data_source import load_stock_list
-
-    mock_settings = MagicMock()
-    mock_settings.stock_list_path = tmp_path / 'no_such_file.csv'
-
-    with patch('app.modules.market_data.data_source.settings', mock_settings):
-        with pytest.raises(FileNotFoundError):
+def test_load_stock_list_raises_when_provider_unavailable() -> None:
+    with patch(
+            'app.modules.market_data.data_source._mairui_fetch_stock_list',
+            side_effect=RuntimeError('provider unavailable'),
+    ):
+        with pytest.raises(RuntimeError):
             load_stock_list()
 
 
-def test_to_ts_code_conversion() -> None:
-    from app.modules.market_data.data_source import _to_ts_code
+def test_to_full_code_conversion() -> None:
+    assert _to_full_code('000001') == '000001.SZ'
+    assert _to_full_code('600036') == '600036.SH'
+    assert _to_full_code('300308') == '300308.SZ'
+    assert _to_full_code('688009') == '688009.SH'
+    assert _to_full_code('830799') == '830799.BJ'
 
-    assert _to_ts_code('000001') == '000001.SZ'
-    assert _to_ts_code('600036') == '600036.SH'
-    assert _to_ts_code('300308') == '300308.SZ'
-    assert _to_ts_code('688009') == '688009.SH'
-    assert _to_ts_code('830799') == '830799.BJ'
+
+def test_market_board_from_code_matches_latest_doc_rules() -> None:
+    assert _market_board_from_code('000001') == '主板'
+    assert _market_board_from_code('600036') == '主板'
+    assert _market_board_from_code('300308') == '创业板'
+    assert _market_board_from_code('301183') == '创业板'
+    assert _market_board_from_code('688009') == '科创板'
+    assert _market_board_from_code('689009') == '科创板'
+    assert _market_board_from_code('920001') == '北交所'
+
+
+def test_sync_stock_list_to_sqlite_persists_rows(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / 'alphapredator.db'
+    mock_df = pd.DataFrame(
+        [
+            {'full_code': '000001.SZ', 'code': '000001', 'name': '平安银行', 'is_st': False, 'cnspell': '',
+             'market': '主板'},
+            {'full_code': '688009.SH', 'code': '688009', 'name': '中国通号', 'is_st': False, 'cnspell': '',
+             'market': '科创板'},
+        ]
+    )
+
+    with patch('app.modules.market_data.data_source._mairui_fetch_stock_list', return_value=mock_df):
+        synced_df = sync_stock_list_to_sqlite(sqlite_path=sqlite_path)
+
+    assert len(synced_df) == 2
+    repo = StockListRepo(sqlite_path)
+    assert repo.get_by_full_code_upper('000001.SZ') is not None
+    assert repo.count_rows() == 2
+    assert repo.get_board_counts() == {'主板': 1, '科创板': 1}

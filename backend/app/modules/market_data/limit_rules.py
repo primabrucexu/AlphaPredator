@@ -2,7 +2,7 @@
 Limit price (涨跌停) calculation rules for Chinese A-shares.
 
 Provides:
-- Board/market segment detection from ts_code.
+- Board/market segment detection from full_code.
 - Limit-up / limit-down price calculation using Decimal arithmetic.
 - ST flag detection from stock name prefix.
 - No-limit-day detection for newly listed stocks (first 5 trading days).
@@ -51,13 +51,27 @@ _NO_LIMIT_CALENDAR_WINDOW = 30
 _ST_PREFIX_RE = re.compile(r'^(\*ST|SST|S\*ST|ST)\s*')
 
 
+def _coerce_decimal(value: Any) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return Decimal(text)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Board detection
 # ---------------------------------------------------------------------------
 
 
-def detect_board(ts_code: str) -> str | None:
-    """Return the board constant for *ts_code*, or None if unrecognised.
+def detect_board(full_code: str) -> str | None:
+    """Return the board constant for *full_code*, or None if unrecognised.
 
     Mapping rules (V1):
     - ``XXXXXX.BJ``            → BSE  (北交所)
@@ -65,7 +79,8 @@ def detect_board(ts_code: str) -> str | None:
     - ``3XXXXX.SZ``            → CHINEXT (创业板)
     - ``6XXXXX.SH``, ``0XXXXX.SZ``, ``1XXXXX.SZ``, ``2XXXXX.SZ`` → MAIN (主板)
     """
-    parts = ts_code.split('.')
+    normalized_full_code = str(full_code or '').strip().upper()
+    parts = normalized_full_code.split('.')
     if len(parts) != 2:
         return None
     code, exchange = parts
@@ -111,7 +126,7 @@ def detect_is_st(name: str) -> bool:
 def _is_trading_day_local(d: date) -> bool:
     """Weekday-only approximation used for no-limit-day window detection.
 
-    Tushare's empty response is the authoritative non-trading-day signal
+    Provider empty response is the authoritative non-trading-day signal
     during import; this function is only used to count trading days within
     the new-listing 5-day window for limit-rule classification.
     """
@@ -164,10 +179,10 @@ def is_no_limit_day(trade_date: str, list_date: str | None) -> bool:
 
 
 def compute_limit_fields(
-    ts_code: str,
+        full_code: str,
     trade_date: str,
-    pre_close: float | None,
-    close: float | None,
+        pre_close: Decimal | None,
+        close: Decimal | None,
     stock_name: str = '',
     list_date: str | None = None,
 ) -> dict[str, Any]:
@@ -213,7 +228,10 @@ def compute_limit_fields(
         return result
 
     # --- Rule priority 2: board-based rule ---
-    board = detect_board(ts_code)
+    pre_close_d = _coerce_decimal(pre_close)
+    close_d = _coerce_decimal(close)
+
+    board = detect_board(full_code)
     if board is None:
         result['limit_status'] = 'INVALID'
         return result
@@ -224,7 +242,7 @@ def compute_limit_fields(
         return result
 
     # --- prev_close validation (§7.6) ---
-    if pre_close is None or pre_close <= 0:
+    if pre_close_d is None or pre_close_d <= 0:
         result['limit_status'] = 'INVALID'
         return result
 
@@ -233,24 +251,22 @@ def compute_limit_fields(
         pct = board_rule['limit_pct']
         rounding = board_rule['rounding']
 
-        prev_close_d = Decimal(str(pre_close))
-        raw_up = prev_close_d * (1 + pct)
-        raw_down = prev_close_d * (1 - pct)
+        raw_up = pre_close_d * (1 + pct)
+        raw_down = pre_close_d * (1 - pct)
 
         limit_up = raw_up.quantize(TICK_SIZE, rounding=rounding)
         limit_down_raw = raw_down.quantize(TICK_SIZE, rounding=rounding)
         # Floor at minimum tick size (§7.3: limit_down_price ≥ 0.01)
         limit_down = max(limit_down_raw, MIN_PRICE)
 
-        result['limit_up_price'] = float(limit_up)
-        result['limit_down_price'] = float(limit_down)
-        result['limit_pct'] = float(pct)
+        result['limit_up_price'] = limit_up
+        result['limit_down_price'] = limit_down
+        result['limit_pct'] = pct
         result['limit_rule'] = board
         result['limit_status'] = 'NORMAL'
 
         # --- Hit detection (§7.5) ---
-        if close is not None and close > 0:
-            close_d = Decimal(str(close))
+        if close_d is not None and close_d > 0:
             result['is_limit_up'] = 1 if close_d >= limit_up else 0
             result['is_limit_down'] = 1 if close_d <= limit_down else 0
 

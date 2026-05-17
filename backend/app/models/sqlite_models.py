@@ -13,48 +13,28 @@ class StockProfile(SQLModel, table=True):
 class StockList(SQLModel, table=True):
     __tablename__ = 'stock_list'
 
-    ts_code: str = Field(primary_key=True)
-    symbol: str
+    full_code: str = Field(primary_key=True)
+    code: str
     name: str
+    is_st: bool = False
     cnspell: str = ''
     market: str = ''
-    list_status: str = ''
-    list_date: str = ''
-    delist_date: str = ''
-    uploaded_at: str
 
 
-class InitTask(SQLModel, table=True):
-    __tablename__ = 'init_task'
+class TaskInfo(SQLModel, table=True):
+    __tablename__ = 'task_info'
 
     task_id: str = Field(primary_key=True)
     task_type: str = 'MARKET_DATA'
-    mode: str = 'RANGE'
     start_date: str
     end_date: str
     status: str = 'PENDING'
-    total_days: int = 0
-    processed_days: int = 0
-    trading_days: int = 0
-    done_trading_days: int = 0
-    current_date: str = ''
+    total_items: int = 0
+    processed_items: int = 0
+    current_label: str = ''
     error_message: str = ''
-    created_at: str = ''
-    started_at: str = ''
-    finished_at: str = ''
-
-
-class InitTaskDay(SQLModel, table=True):
-    __tablename__ = 'init_task_day'
-
-    task_id: str = Field(primary_key=True)
-    trade_date: str = Field(primary_key=True)
-    is_trading_day: int = 0
-    status: str = 'PENDING'
-    row_count: int = 0
-    started_at: str = ''
-    finished_at: str = ''
-    error_message: str = ''
+    task_start_date: str = ''
+    task_end_date: str = ''
 
 
 class DataRangeMeta(SQLModel, table=True):

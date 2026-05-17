@@ -23,9 +23,7 @@ import {
   DatabaseOutlined,
   DisconnectOutlined,
   LinkOutlined,
-  LockOutlined,
   SyncOutlined,
-  UploadOutlined,
 } from '@ant-design/icons';
 import {
   clearJygsSession,
@@ -34,21 +32,19 @@ import {
   getInitTaskDays,
   getInitV2Overview,
   getJygsAuthStatus,
-  getTokenConfig,
+  getMairuiLicenceConfig,
   type InitV2OverviewResponse,
   type JygsAuthStatus,
   loginJygsWithPlaywright,
+  type MairuiLicenceConfigResponse,
   retryInitTask,
-  saveTokenConfig,
-  type StockListUploadResponse,
+  saveMairuiLicence,
   type TaskDayItem,
   type TaskResponse,
   type TaskType,
   terminateInitTask,
-  type TokenConfigResponse,
   triggerDailyUpdate,
   type UpdateResult,
-  uploadStockList,
 } from '../lib/api';
 
 const POLL_INTERVAL_MS = 2000;
@@ -122,27 +118,28 @@ function dayStatusTag(s: string) {
 }
 
 function taskTypeLabel(taskType: string | undefined): string {
-  return taskType === 'JYGS_REVIEW' ? '韭研复盘抓取' : '行情初始化';
+  switch (taskType) {
+    case 'STOCK_LIST_SYNC':
+      return '股票列表同步';
+    case 'JYGS_REVIEW':
+      return '韭研复盘抓取';
+    default:
+      return '行情数据同步';
+  }
 }
 
 export function InitializePage() {
-  // Token
-  const [tokenConfig, setTokenConfig] = useState<TokenConfigResponse | null>(null);
-  const [tokenInput, setTokenInput] = useState('');
-  const [tokenSaving, setTokenSaving] = useState(false);
-  const [tokenSuccess, setTokenSuccess] = useState(false);
-
   // JYGS auth
   const [jygsStatus, setJygsStatus] = useState<JygsAuthStatus | null>(null);
   const [jygsError, setJygsError] = useState<string | null>(null);
     const [jygsLoginLoading, setJygsLoginLoading] = useState(false);
 
-  // Stock list
+  const [mairuiConfig, setMairuiConfig] = useState<MairuiLicenceConfigResponse | null>(null);
+  const [mairuiLicenceInput, setMairuiLicenceInput] = useState('');
+  const [mairuiSaveLoading, setMairuiSaveLoading] = useState(false);
+  const [mairuiMessage, setMairuiMessage] = useState<string | null>(null);
+
   const [initOverview, setInitOverview] = useState<InitV2OverviewResponse | null>(null);
-  const [stockListFile, setStockListFile] = useState<File | null>(null);
-  const [stockListUploading, setStockListUploading] = useState(false);
-  const [stockListResult, setStockListResult] = useState<StockListUploadResponse | null>(null);
-  const stockListInputRef = useRef<HTMLInputElement | null>(null);
 
   // Task
   const [startDate, setStartDate] = useState<string>(DEFAULT_START_DATE);
@@ -150,6 +147,7 @@ export function InitializePage() {
   const [startLoading, setStartLoading] = useState(false);
   const [currentTask, setCurrentTask] = useState<TaskResponse | null>(null);
   const [selectedTaskType, setSelectedTaskType] = useState<TaskType>('MARKET_DATA');
+  const [selectedMode, setSelectedMode] = useState<string>('FULL_SYNC');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Day details
@@ -169,12 +167,12 @@ export function InitializePage() {
 
   // Initial load
   useEffect(() => {
-    Promise.all([getTokenConfig(), getInitV2Overview(), getJygsAuthStatus()])
-      .then(([token, overview, jygs]) => {
-        setTokenConfig(token);
+    Promise.all([getInitV2Overview(), getJygsAuthStatus(), getMairuiLicenceConfig()])
+        .then(([overview, jygs, mairui]) => {
         setInitOverview(overview);
         setCurrentTask(overview.running_task ?? overview.latest_task ?? null);
         setJygsStatus(jygs);
+          setMairuiConfig(mairui);
       })
       .catch(() => {});
   }, []);
@@ -228,30 +226,17 @@ export function InitializePage() {
     }
   }
 
-  // Handlers
-  const handleSaveToken = async () => {
-    if (!tokenInput.trim()) return;
-    setTokenSaving(true);
-    setTokenSuccess(false);
-    try {
-      const result = await saveTokenConfig(tokenInput.trim());
-      setTokenConfig(result);
-      setTokenInput('');
-      setTokenSuccess(true);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '保存 Token 失败');
-    } finally {
-      setTokenSaving(false);
-    }
-  };
-
   const handleStartInit = async () => {
     setError(null);
     setStartLoading(true);
     setCurrentTask(null);
     setShowDays(false);
     try {
-      const task = await createInitTask(startDate, endDate, 'RANGE', selectedTaskType);
+      // STOCK_LIST_SYNC uses today as placeholder date; backend ignores it
+      const sd = selectedTaskType === 'STOCK_LIST_SYNC' ? todayYYYYMMDD() : startDate;
+      const ed = selectedTaskType === 'STOCK_LIST_SYNC' ? todayYYYYMMDD() : endDate;
+      const mode = selectedTaskType === 'MARKET_DATA' ? selectedMode : 'FULL_SYNC';
+      const task = await createInitTask(sd, ed, mode, selectedTaskType);
       setCurrentTask(task);
     } catch (e) {
       setError(e instanceof Error ? e.message : '启动初始化失败');
@@ -283,23 +268,27 @@ export function InitializePage() {
     }
   };
 
-  const handleUploadStockList = async () => {
-    if (!stockListFile) return;
+  const handleSaveMairuiLicence = async () => {
+    const value = mairuiLicenceInput.trim();
+    if (!value) {
+      setError('请输入有效的 Mairui licence');
+      return;
+    }
+
     setError(null);
-    setStockListUploading(true);
+    setMairuiMessage(null);
+    setMairuiSaveLoading(true);
     try {
-      const result = await uploadStockList(stockListFile);
-      setStockListResult(result);
-      setStockListFile(null);
-      if (stockListInputRef.current) {
-        stockListInputRef.current.value = '';
-      }
+      const config = await saveMairuiLicence(value);
+      setMairuiConfig(config);
+      setMairuiLicenceInput('');
+      setMairuiMessage('Mairui licence 已保存');
       const overview = await getInitV2Overview();
       setInitOverview(overview);
     } catch (e) {
-      setError(e instanceof Error ? e.message : '上传股票清单失败');
+      setError(e instanceof Error ? e.message : '保存 Mairui licence 失败');
     } finally {
-      setStockListUploading(false);
+      setMairuiSaveLoading(false);
     }
   };
 
@@ -360,8 +349,8 @@ export function InitializePage() {
   const isDone = currentTask?.status === 'SUCCESS';
   const isFailed = currentTask?.status === 'FAILED';
   const isTerminated = currentTask?.status === 'TERMINATED';
-  const isMarketTask = selectedTaskType === 'MARKET_DATA';
-  const canStartTask = isMarketTask ? !!tokenConfig?.is_configured : !!jygsStatus?.valid;
+  const isMarketTask = selectedTaskType === 'MARKET_DATA' || selectedTaskType === 'STOCK_LIST_SYNC';
+  const canStartTask = isMarketTask ? !!initOverview?.market_data_configured : !!jygsStatus?.valid;
 
   const progressPercent = currentTask && currentTask.total_days > 0
     ? Math.round(currentTask.progress_percent)
@@ -403,7 +392,7 @@ export function InitializePage() {
           市场数据初始化
         </Typography.Title>
         <Typography.Text type="secondary">
-          通过 Tushare 接入全市场 A 股历史日线数据，支持按日期区间全量初始化。
+          通过 Mairui 接入全市场 A 股历史日线数据，支持按日期区间全量初始化。
         </Typography.Text>
       </Space>
 
@@ -428,15 +417,62 @@ export function InitializePage() {
         />
       )}
 
-      {stockListResult && (
+      {mairuiMessage && (
         <Alert
           type="success"
           showIcon
           closable
-          message={`股票清单上传成功：共 ${stockListResult.total_stocks} 条，上市 ${stockListResult.active_stocks} 条`}
-          onClose={() => setStockListResult(null)}
+          message={mairuiMessage}
+          onClose={() => setMairuiMessage(null)}
         />
       )}
+
+      <Card
+          className="page-card"
+          title={
+            <Space>
+              <DatabaseOutlined/>
+              Mairui Licence 配置
+            </Space>
+          }
+      >
+        <Space direction="vertical" size={12} style={{width: '100%'}}>
+          <Space>
+            <Typography.Text>当前状态：</Typography.Text>
+            {mairuiConfig === null ? (
+                <Tag>检查中…</Tag>
+            ) : mairuiConfig.configured ? (
+                <Tag color="success" icon={<CheckCircleOutlined/>}>已配置</Tag>
+            ) : (
+                <Tag color="warning" icon={<CloseCircleOutlined/>}>未配置</Tag>
+            )}
+            {mairuiConfig?.configured && mairuiConfig.masked_licence && (
+                <Typography.Text type="secondary" style={{fontSize: 12}}>
+                  当前 Licence：{mairuiConfig.masked_licence}（来源：{mairuiConfig.source}）
+                </Typography.Text>
+            )}
+          </Space>
+
+          <Space.Compact style={{width: '100%', maxWidth: 640}}>
+            <Input.Password
+                value={mairuiLicenceInput}
+                placeholder="请输入 Mairui licence"
+                onChange={(e) => setMairuiLicenceInput(e.target.value)}
+            />
+            <Button
+                type="primary"
+                loading={mairuiSaveLoading}
+                onClick={handleSaveMairuiLicence}
+            >
+              保存 Licence
+            </Button>
+          </Space.Compact>
+
+          <Typography.Text type="secondary" style={{fontSize: 12}}>
+            保存后将写入后端配置文件，并用于后续麦蕊行情接口请求。
+          </Typography.Text>
+        </Space>
+      </Card>
 
       {/* 韭研公社连接 */}
       <Card
@@ -498,115 +534,6 @@ export function InitializePage() {
         </Space>
       </Card>
 
-      {/* Token config */}
-      <Card
-        className="page-card"
-        title={
-          <Space>
-            <LockOutlined />
-            Tushare Token 配置
-          </Space>
-        }
-      >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Space>
-            <Typography.Text>当前状态：</Typography.Text>
-            {tokenConfig === null ? (
-              <Tag>检查中…</Tag>
-            ) : tokenConfig.is_configured ? (
-              <Tag color="success" icon={<CheckCircleOutlined />}>已配置</Tag>
-            ) : (
-              <Tag color="warning" icon={<CloseCircleOutlined />}>未配置</Tag>
-            )}
-          </Space>
-          <Space wrap>
-            <Input.Password
-              placeholder="输入 Tushare API Token"
-              value={tokenInput}
-              onChange={(e) => setTokenInput(e.target.value)}
-              style={{ width: 320 }}
-              onPressEnter={handleSaveToken}
-            />
-            <Button
-              type="primary"
-              icon={<LockOutlined />}
-              loading={tokenSaving}
-              disabled={!tokenInput.trim()}
-              onClick={handleSaveToken}
-            >
-              保存 Token
-            </Button>
-            {tokenSuccess && <Typography.Text type="success">Token 已保存</Typography.Text>}
-          </Space>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Token 保存在服务端，不会在页面上显示。也可以通过环境变量 TUSHARE_TOKEN 配置。
-          </Typography.Text>
-        </Space>
-      </Card>
-
-      {/* Stock list upload */}
-      <Card
-        className="page-card"
-        title={
-          <Space>
-            <UploadOutlined />
-            股票清单上传
-          </Space>
-        }
-      >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Space>
-            <Typography.Text>当前状态：</Typography.Text>
-            {initOverview === null ? (
-              <Tag>检查中…</Tag>
-            ) : initOverview.stock_list_uploaded ? (
-              <Tag color="success" icon={<CheckCircleOutlined />}>已上传</Tag>
-            ) : (
-              <Tag color="warning" icon={<CloseCircleOutlined />}>未上传</Tag>
-            )}
-          </Space>
-
-          {initOverview?.stock_list_updated_at && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              最近上传：{formatIso(initOverview.stock_list_updated_at)}
-            </Typography.Text>
-          )}
-
-          <Space wrap>
-            <input
-              ref={stockListInputRef}
-              type="file"
-              accept=".csv"
-              onChange={(e) => setStockListFile(e.target.files?.[0] ?? null)}
-            />
-            <Button
-              type="primary"
-              icon={<UploadOutlined />}
-              loading={stockListUploading}
-              disabled={!stockListFile}
-              onClick={handleUploadStockList}
-            >
-              上传股票清单
-            </Button>
-            {stockListFile && (
-              <Typography.Text type="secondary">已选择：{stockListFile.name}</Typography.Text>
-            )}
-          </Space>
-
-          {!!initOverview && Object.keys(initOverview.board_counts).length > 0 && (
-            <Space wrap>
-              {Object.entries(initOverview.board_counts).map(([board, count]) => (
-                <Tag key={board}>{board}：{count}</Tag>
-              ))}
-            </Space>
-          )}
-
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            支持上传 Tushare 股票清单，用于首页搜索、代码解析与板块统计。
-          </Typography.Text>
-        </Space>
-      </Card>
-
       {/* V2 Init task creation */}
       <Card
         className="page-card"
@@ -619,38 +546,78 @@ export function InitializePage() {
       >
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <Typography.Text type="secondary">
-            支持两类任务：行情全量初始化（Tushare）和韭研复盘抓取（JYGS）。
+            支持三类任务：股票列表同步、行情数据同步（全量/增量）、韭研复盘抓取。
           </Typography.Text>
           <Space wrap>
             <Space direction="vertical" size={4}>
               <Typography.Text>任务类型：</Typography.Text>
               <Select<TaskType>
                 value={selectedTaskType}
-                onChange={setSelectedTaskType}
+                onChange={(v) => {
+                  setSelectedTaskType(v);
+                  if (v === 'MARKET_DATA') setSelectedMode('FULL_SYNC');
+                }}
                 disabled={isRunning}
                 style={{ width: 220 }}
                 options={[
-                  { label: '行情全量初始化', value: 'MARKET_DATA' },
+                  {label: '股票列表同步', value: 'STOCK_LIST_SYNC'},
+                  {label: '行情数据同步', value: 'MARKET_DATA'},
                   { label: '韭研复盘抓取', value: 'JYGS_REVIEW' },
                 ]}
               />
             </Space>
-            <Space direction="vertical" size={4}>
-              <Typography.Text>导入区间：</Typography.Text>
-              <DatePicker.RangePicker
-                format="YYYYMMDD"
-                value={[
-                  startDate ? dayjs(startDate, 'YYYYMMDD') : null,
-                  endDate ? dayjs(endDate, 'YYYYMMDD') : null,
-                ]}
-                onChange={(dates) => {
-                  if (dates?.[0]) setStartDate(dates[0].format('YYYYMMDD'));
-                  if (dates?.[1]) setEndDate(dates[1].format('YYYYMMDD'));
-                }}
-                disabled={isRunning}
-                allowClear={false}
-              />
-            </Space>
+
+            {selectedTaskType === 'MARKET_DATA' && (
+                <Space direction="vertical" size={4}>
+                  <Typography.Text>同步模式：</Typography.Text>
+                  <Select<string>
+                      value={selectedMode}
+                      onChange={setSelectedMode}
+                      disabled={isRunning}
+                      style={{width: 180}}
+                      options={[
+                        {label: '全量同步', value: 'FULL_SYNC'},
+                        {label: '增量同步（自动续接）', value: 'INCREMENTAL_SYNC'},
+                      ]}
+                  />
+                </Space>
+            )}
+
+            {selectedTaskType !== 'STOCK_LIST_SYNC' && (
+                <Space direction="vertical" size={4}>
+                  <Typography.Text>
+                    {selectedTaskType === 'MARKET_DATA' && selectedMode === 'INCREMENTAL_SYNC'
+                        ? '截止日期（起始日期自动检测）：'
+                        : '导入区间：'}
+                  </Typography.Text>
+                  {selectedMode === 'INCREMENTAL_SYNC' && selectedTaskType === 'MARKET_DATA' ? (
+                      <DatePicker
+                          format="YYYYMMDD"
+                          value={endDate ? dayjs(endDate, 'YYYYMMDD') : null}
+                          onChange={(d) => {
+                            if (d) setEndDate(d.format('YYYYMMDD'));
+                          }}
+                          disabled={isRunning}
+                          allowClear={false}
+                      />
+                  ) : (
+                      <DatePicker.RangePicker
+                          format="YYYYMMDD"
+                          value={[
+                            startDate ? dayjs(startDate, 'YYYYMMDD') : null,
+                            endDate ? dayjs(endDate, 'YYYYMMDD') : null,
+                          ]}
+                          onChange={(dates) => {
+                            if (dates?.[0]) setStartDate(dates[0].format('YYYYMMDD'));
+                            if (dates?.[1]) setEndDate(dates[1].format('YYYYMMDD'));
+                          }}
+                          disabled={isRunning}
+                          allowClear={false}
+                      />
+                  )}
+                </Space>
+            )}
+
             <Button
               type="primary"
               icon={<DatabaseOutlined />}
@@ -659,7 +626,11 @@ export function InitializePage() {
               onClick={handleStartInit}
               style={{ marginTop: 20 }}
             >
-              {isRunning ? '任务运行中…' : `开始${selectedTaskType === 'JYGS_REVIEW' ? '韭研复盘抓取' : '全量初始化'}`}
+              {isRunning ? '任务运行中…' : (
+                  selectedTaskType === 'STOCK_LIST_SYNC' ? '同步股票列表' :
+                      selectedTaskType === 'JYGS_REVIEW' ? '开始韭研复盘抓取' :
+                          selectedMode === 'INCREMENTAL_SYNC' ? '增量同步行情' : '全量同步行情'
+              )}
             </Button>
           </Space>
           {!canStartTask && (
@@ -669,7 +640,7 @@ export function InitializePage() {
               message={
                 selectedTaskType === 'JYGS_REVIEW'
                   ? '请先完成韭研公社连接，再启动复盘抓取任务。'
-                  : '请先配置 Tushare Token，再启动行情初始化任务。'
+                    : '请先配置 Mairui licence，再启动行情初始化任务。'
               }
             />
           )}

@@ -1,27 +1,33 @@
 """
-Tushare data source adapter.
+Mairui data source adapter.
 
-Fetches A-share market data via Tushare Pro and converts it into
+Fetches A-share market data via Mairui and converts it into
 the internal batch format used by import_market_data_batch().
 
 Rate limiting: strict cap at 45 req/min (or lower if configured).
-Stock universe: loaded from the CSV uploaded via the /api/data-init/upload-stock-list
-endpoint (settings.stock_list_path).
+Stock universe: fetched from Mairui remote API.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import json
 import threading
 import time
 from collections import deque
-from datetime import date, timedelta
+from datetime import date
+from urllib import error as urllib_error
+from urllib import parse as urllib_parse
+from urllib import request as urllib_request
 from typing import Any
 
 import pandas as pd
+from pypinyin import Style, lazy_pinyin
 
 from app.core.settings import settings
+from app.db.sqlite import ensure_sqlite_schema
+from app.repositories.stock_list_repo import StockListRepo
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +42,7 @@ _call_timestamps: deque[float] = deque()  # monotonic timestamps of recent calls
 
 def _rate_limited_call(func: Any, **kwargs: Any) -> Any:
     """Call *func* while enforcing the configured requests-per-minute limit."""
-    rate_limit = max(1, min(int(settings.tushare_rate_limit), 45))
+    rate_limit = max(1, min(int(settings.market_data_rate_limit), 45))
     window = 60.0  # seconds
 
     with _rate_lock:
@@ -56,10 +62,10 @@ def _rate_limited_call(func: Any, **kwargs: Any) -> Any:
         return func(**kwargs)
     except Exception as exc:  # noqa: BLE001
         logger.error(
-            'Tushare call failed. func=%s trade_date=%s ts_code=%s start_date=%s end_date=%s error=%s',
+            'Rate-limited call failed. func=%s trade_date=%s full_code=%s start_date=%s end_date=%s error=%s',
             getattr(func, '__name__', str(func)),
             kwargs.get('trade_date'),
-            kwargs.get('ts_code'),
+            kwargs.get('full_code'),
             kwargs.get('start_date'),
             kwargs.get('end_date'),
             exc,
@@ -67,49 +73,226 @@ def _rate_limited_call(func: Any, **kwargs: Any) -> Any:
         raise
 
 
+def _rate_limited_http_get(url: str) -> Any:
+    rate_limit = max(1, int(settings.market_data_rate_limit))
+    window = 60.0
+
+    with _rate_lock:
+        while True:
+            now = time.monotonic()
+            while _call_timestamps and now - _call_timestamps[0] >= window:
+                _call_timestamps.popleft()
+            if len(_call_timestamps) < rate_limit:
+                _call_timestamps.append(now)
+                break
+
+            wait = window - (now - _call_timestamps[0])
+            if wait > 0:
+                time.sleep(wait)
+
+    with urllib_request.urlopen(url, timeout=30) as response:
+        payload = response.read()
+    return payload
+
+
 # ---------------------------------------------------------------------------
-# Token helpers
+# Credential helpers
 # ---------------------------------------------------------------------------
 
 
-def _get_token() -> str:
-    """Return the Tushare token from env var or the persisted token file."""
-    token = os.environ.get('TUSHARE_TOKEN', '').strip()
-    if not token:
-        path = settings.tushare_token_path
+def _get_mairui_licence() -> str:
+    licence = os.environ.get('MAIRUI_LICENCE', '').strip()
+    if not licence:
+        path = settings.mairui_licence_path
         if path.exists():
-            token = path.read_text(encoding='utf-8').strip()
-    return token
+            licence = path.read_text(encoding='utf-8').strip()
+    return licence
 
 
-def _get_tushare_api() -> Any:
-    """Return an initialised Tushare Pro API instance."""
-    import tushare as ts
+def _get_market_data_source() -> str:
+    configured = settings.market_data_source.strip().lower()
+    if configured == 'mairui':
+        return configured
+    if _get_mairui_licence():
+        return 'mairui'
+    return 'mairui'
 
-    token = _get_token()
-    if not token:
-        raise ValueError(
-            'Tushare token not configured. '
-            'Please set it via the initialization page or the TUSHARE_TOKEN environment variable.'
+
+def _normalize_trade_date(value: str) -> str:
+    text = str(value).strip().replace('/', '-').replace('.', '-')
+    if not text:
+        return ''
+    if len(text) >= 10 and text[4] == '-' and text[7] == '-':
+        return text[:10]
+    digits = ''.join(ch for ch in text if ch.isdigit())
+    if len(digits) >= 8:
+        return f'{digits[:4]}-{digits[4:6]}-{digits[6:8]}'
+    return text[:10]
+
+
+def _market_board_from_code(stock_code: str) -> str:
+    digits = str(stock_code).split('.')[0].zfill(6)
+    if digits.startswith('920') or digits.startswith(('8', '4')):
+        return '北交所'
+    if digits.startswith(('688', '689')):
+        return '科创板'
+    if digits.startswith(('300', '301')):
+        return '创业板'
+    if digits.startswith(('60', '00')):
+        return '主板'
+    return '主板'
+
+
+def _to_cnspell(name: str) -> str:
+    text = str(name or '').strip()
+    if not text:
+        return ''
+
+    parts: list[str] = []
+    for char in text:
+        if char.isascii() and char.isalpha():
+            parts.append(char.upper())
+            continue
+
+        letters = lazy_pinyin(char, style=Style.FIRST_LETTER, strict=False, errors='ignore')
+        parts.extend(str(item).upper() for item in letters if str(item).isalpha())
+    return ''.join(parts)
+
+
+def _normalize_market_code(stock_code: str) -> str:
+    code = str(stock_code).strip().upper()
+    if '.' in code:
+        return code
+    code = code.zfill(6)
+    if code.startswith('6'):
+        return f'{code}.SH'
+    if code.startswith(('8', '4')):
+        return f'{code}.BJ'
+    return f'{code}.SZ'
+
+
+def _build_mairui_url(path: str, *, params: dict[str, Any] | None = None) -> str:
+    url = f"{settings.mairui_base_url.rstrip('/')}/{path.lstrip('/')}"
+    if params:
+        query = urllib_parse.urlencode({k: v for k, v in params.items() if v not in (None, '')})
+        if query:
+            url = f'{url}?{query}'
+    return url
+
+
+def _mairui_get_json(path: str, *, params: dict[str, Any] | None = None) -> Any:
+    url = _build_mairui_url(path, params=params)
+    try:
+        raw = _rate_limited_http_get(url)
+    except urllib_error.URLError as exc:  # noqa: BLE001
+        logger.error('Mairui request failed: %s', url)
+        raise RuntimeError(f'Mairui request failed: {exc}') from exc
+    try:
+        return json.loads(raw.decode('utf-8'))
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f'Invalid Mairui JSON response from {url}') from exc
+
+
+def _mairui_rows_to_stock_list_frame(rows: list[dict[str, Any]]):
+    normalized: list[dict[str, Any]] = []
+    for row in rows:
+        full_code = str(row.get('dm', '')).strip().upper()
+        if not full_code:
+            continue
+        code = full_code.split('.')[0].zfill(6)
+        name = str(row.get('mc', '')).strip()
+        normalized.append(
+            {
+                'full_code': full_code,
+                'code': code,
+                'name': name,
+                'is_st': 'ST' in name.upper(),
+                'cnspell': _to_cnspell(name),
+                'market': _market_board_from_code(code),
+            }
         )
-    ts.set_token(token)
-    return ts.pro_api()
+    return pd.DataFrame(
+        normalized,
+        columns=['full_code', 'code', 'name', 'is_st', 'cnspell', 'market'],
+    )
+
+
+def _mairui_fetch_stock_list() -> Any:
+    licence = _get_mairui_licence()
+    if not licence:
+        raise ValueError('Mairui licence not configured. Please set MAIRUI_LICENCE or save it to the licence file.')
+    payload = _mairui_get_json(f'hslt/list/{licence}')
+    if not isinstance(payload, list):
+        raise RuntimeError('Unexpected Mairui stock list payload')
+    return _mairui_rows_to_stock_list_frame([row for row in payload if isinstance(row, dict)])
+
+
+def _mairui_fetch_history_rows(stock_code: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
+    """Fetch daily K-line data for a stock across a date range.
+
+    Args:
+        stock_code: Stock code (e.g., '000001' or '000001.SZ')
+        start_date: Start date in YYYY-MM-DD format
+        end_date: End date in YYYY-MM-DD format
+
+    Returns:
+        List of daily bar dicts for all dates in [start_date, end_date]
+    """
+    licence = _get_mairui_licence()
+    if not licence:
+        raise ValueError('Mairui licence not configured. Please set MAIRUI_LICENCE or save it to the licence file.')
+    market_code = _normalize_market_code(stock_code)
+    payload = _mairui_get_json(
+        f'hsstock/history/{market_code}/d/n/{licence}',
+        params={'st': start_date.replace('-', ''), 'et': end_date.replace('-', '')},
+    )
+    if not isinstance(payload, list):
+        raise RuntimeError(f'Unexpected Mairui kline payload for {market_code}')
+
+    rows: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        normalized_trade_date = _normalize_trade_date(str(item.get('t', '')).strip())
+        close = float(item.get('c') or 0.0)
+        pre_close = float(item.get('pc') or 0.0)
+        change = close - pre_close if pre_close else float(item.get('c') or 0.0)
+        pct_chg = round((change / pre_close * 100), 4) if pre_close else 0.0
+        rows.append(
+            {
+                'full_code': market_code,
+                'trade_date': normalized_trade_date,
+                'open': float(item.get('o') or 0.0),
+                'high': float(item.get('h') or 0.0),
+                'low': float(item.get('l') or 0.0),
+                'close': close,
+                'pre_close': pre_close,
+                'change': round(change, 4),
+                'pct_chg': pct_chg,
+                'vol': float(item.get('v') or 0.0),
+                # Mairui amount 'a' is in 元; convert to 亿元 for internal contract
+                'amount': round(float(item.get('a') or 0.0) / 1e8, 4),
+                'is_up_limit': False,
+                'is_down_limit': False,
+            }
+        )
+    return rows
 
 
 # ---------------------------------------------------------------------------
 # Stock list helpers
 # ---------------------------------------------------------------------------
 
-# Required columns in the user-uploaded stock list CSV
-_REQUIRED_STOCK_LIST_COLS = {'ts_code', 'symbol', 'name', 'market', 'list_status'}
+# Required columns in the normalized stock list frame
+_REQUIRED_STOCK_LIST_COLS = {'full_code', 'code', 'name', 'is_st', 'cnspell', 'market'}
 
 # Supported market board values
-MARKET_BOARDS = ('主板', '创业板', '科创板')
+MARKET_BOARDS = ('主板', '创业板', '科创板', '北交所')
 
 
-def _to_ts_code(symbol: str) -> str:
-    """Convert a 6-digit stock symbol to Tushare ts_code (e.g. '000001' → '000001.SZ')."""
-    s = str(symbol).zfill(6)
+def _to_full_code(code: str) -> str:
+    """Convert a 6-digit stock code to full_code (e.g. '000001' -> '000001.SZ')."""
+    s = str(code).zfill(6)
     if s.startswith('6'):
         return s + '.SH'
     if s.startswith('8') or s.startswith('4'):
@@ -117,31 +300,129 @@ def _to_ts_code(symbol: str) -> str:
     return s + '.SZ'
 
 
+
 def load_stock_list(market_filters: list[str] | None = None) -> pd.DataFrame:
     """
-    Load the uploaded stock list CSV and optionally filter by market board.
-
-    Raises FileNotFoundError if the stock list has not been uploaded yet.
+    Load stock list from the configured remote provider and optionally filter by market board.
     """
-    path = settings.stock_list_path
-    if not path.exists():
-        raise FileNotFoundError(
-            'Stock list CSV not found. '
-            'Please upload it via the initialization page (上传股票清单 CSV).'
-        )
+    try:
+        df = _mairui_fetch_stock_list()
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f'Failed to load stock list from Mairui: {exc}') from exc
 
-    df = pd.read_csv(path, dtype=str)
     missing = _REQUIRED_STOCK_LIST_COLS - set(df.columns)
     if missing:
-        raise ValueError(f'Stock list CSV is missing required columns: {missing}')
-
-    # Only include actively listed stocks
-    df = df[df['list_status'].fillna('') == 'L'].copy()
+        raise ValueError(f'Stock list payload is missing required columns: {missing}')
 
     if market_filters:
         df = df[df['market'].isin(market_filters)].copy()
 
     return df.reset_index(drop=True)
+
+
+def load_stock_list_from_sqlite(
+        market_filters: list[str] | None = None,
+        *,
+        sqlite_path: Any = None,
+) -> pd.DataFrame:
+    repo = StockListRepo(sqlite_path)
+    conn = repo._connect()
+    try:
+        rows = conn.execute(
+            '''
+            SELECT full_code, code, name, is_st, cnspell, market
+            FROM stock_list
+            ORDER BY full_code
+            '''
+        ).fetchall()
+    finally:
+        conn.close()
+
+    df = pd.DataFrame(
+        [dict(row) for row in rows],
+        columns=['full_code', 'code', 'name', 'is_st', 'cnspell', 'market'],
+    )
+    if df.empty:
+        return df
+    if market_filters:
+        df = df[df['market'].isin(market_filters)].copy()
+    return df.reset_index(drop=True)
+
+
+def sync_stock_list_to_sqlite(
+        *,
+        sqlite_path: Any = None,
+        market_filters: list[str] | None = None,
+        force: bool = False,
+) -> pd.DataFrame:
+    """Fetch stock list from Mairui and persist it into SQLite stock_list.
+
+    If the remote provider returns an empty list the existing SQLite data is
+    kept unchanged (replaces nothing) and the empty DataFrame is returned.
+
+    *force*: when True, skip the row-count equality check and always write,
+    even if the incoming count matches the stored count.  Use this when a
+    task explicitly requests a fresh sync.
+    """
+    target_sqlite = sqlite_path or settings.sqlite_path
+    ensure_sqlite_schema(target_sqlite)
+
+    df = load_stock_list(market_filters=market_filters)
+
+    if df.empty:
+        logger.warning(
+            'sync_stock_list_to_sqlite: Mairui returned 0 stocks – '
+            'keeping existing stock_list data unchanged'
+        )
+        return df
+
+    rows_to_insert = [
+        (
+            str(row['full_code']).strip(),
+            str(row['code']).strip(),
+            str(row['name']).strip(),
+            int(bool(row.get('is_st', False))),
+            str(row.get('cnspell') or '').strip().upper(),
+            str(row.get('market') or '').strip(),
+        )
+        for _, row in df.iterrows()
+    ]
+
+    repo = StockListRepo(target_sqlite)
+    existing_count = repo.count_rows()
+    incoming_count = len(rows_to_insert)
+    if not force and existing_count == incoming_count:
+        logger.info(
+            'sync_stock_list_to_sqlite: stock_list already up-to-date '
+            '(%d rows), skipping write',
+            existing_count,
+        )
+        return df
+
+    logger.info(
+        'sync_stock_list_to_sqlite: updating stock_list %d → %d rows',
+        existing_count,
+        incoming_count,
+    )
+    repo.replace_all(rows_to_insert)
+    return df
+
+
+def _resolve_stock_universe(
+        *,
+        market_filters: list[str] | None = None,
+        sqlite_path: Any = None,
+        use_uploaded_universe: bool = True,
+) -> pd.DataFrame:
+    if use_uploaded_universe:
+        df = load_stock_list_from_sqlite(market_filters=market_filters, sqlite_path=sqlite_path)
+        if not df.empty:
+            return df
+        synced_df = sync_stock_list_to_sqlite(sqlite_path=sqlite_path)
+        if market_filters:
+            synced_df = synced_df[synced_df['market'].isin(market_filters)].copy()
+        return synced_df.reset_index(drop=True)
+    return load_stock_list(market_filters=market_filters)
 
 
 # ---------------------------------------------------------------------------
@@ -153,70 +434,48 @@ def fetch_spot_snapshot(
     trade_date: str | None = None,
     *,
     market_filters: list[str] | None = None,
+        sqlite_path: Any = None,
 ) -> list[dict[str, Any]]:
     """
-    Fetch A-share snapshot data from Tushare for a given trade date.
+    Fetch A-share snapshot data from Mairui for a given trade date.
 
-    Loads the stock list from the uploaded CSV, optionally filtered by
-    *market_filters*, then fetches that day's daily data from Tushare.
+    Loads stock list from the configured provider, optionally filtered by
+    *market_filters*, then fetches that day's daily data.
 
     Returns a list of dicts with keys:
         stock_code, stock_name, current_price, change_amount, change_pct,
         turnover_amount_billion, turnover_rate, trade_date
     """
-    pro = _get_tushare_api()
-
-    stock_list_df = load_stock_list(market_filters)
-    ts_code_set = set(stock_list_df['ts_code'].tolist())
-    name_map = dict(zip(stock_list_df['ts_code'], stock_list_df['name']))
-    symbol_map = dict(zip(stock_list_df['ts_code'], stock_list_df['symbol']))
-
     effective_date = trade_date or date.today().strftime('%Y-%m-%d')
-    ts_date = effective_date.replace('-', '')
-
-    # Bulk fetch – one API call for the whole market on this date
-    daily_df = _rate_limited_call(pro.daily, trade_date=ts_date)
-    if daily_df is None or daily_df.empty:
-        return []
-
-    # Attempt to enrich with turnover_rate (one extra bulk call)
-    try:
-        basic_df = _rate_limited_call(
-            pro.daily_basic,
-            trade_date=ts_date,
-            fields='ts_code,turnover_rate',
-        )
-        if basic_df is not None and not basic_df.empty:
-            daily_df = daily_df.merge(basic_df[['ts_code', 'turnover_rate']], on='ts_code', how='left')
-        else:
-            daily_df['turnover_rate'] = 0.0
-    except Exception as exc:  # noqa: BLE001
-        logger.warning('fetch_spot_snapshot: failed to fetch turnover_rate from daily_basic: %s', exc)
-        daily_df['turnover_rate'] = 0.0
-
-    # Filter to the uploaded stock list
-    daily_df = daily_df[daily_df['ts_code'].isin(ts_code_set)].copy()
+    daily_rows = fetch_daily_bars_by_date(
+        effective_date,
+        market_filters=market_filters,
+        sqlite_path=sqlite_path,
+    )
+    stock_list_df = _resolve_stock_universe(
+        market_filters=market_filters,
+        sqlite_path=sqlite_path,
+        use_uploaded_universe=True,
+    )
+    name_map = dict(zip(stock_list_df['full_code'], stock_list_df['name']))
+    code_map = dict(zip(stock_list_df['full_code'], stock_list_df['code']))
 
     rows: list[dict[str, Any]] = []
-    for _, row in daily_df.iterrows():
-        ts_code = str(row['ts_code'])
-        try:
-            close = float(row.get('close') or 0)
-            if close <= 0:
-                continue
-            rows.append({
-                'stock_code': str(symbol_map.get(ts_code, ts_code.split('.')[0])).zfill(6),
-                'stock_name': str(name_map.get(ts_code, '')).strip(),
-                'current_price': round(close, 4),
-                'change_amount': round(float(row.get('change') or 0), 4),
-                'change_pct': round(float(row.get('pct_chg') or 0), 4),
-                # Tushare amount is in 千元 (thousand yuan); convert to 亿元 (100M yuan)
-                'turnover_amount_billion': round(float(row.get('amount') or 0) / 1e6, 4),
-                'turnover_rate': round(float(row.get('turnover_rate') or 0), 4),
-                'trade_date': effective_date,
-            })
-        except (ValueError, TypeError):
+    for row in daily_rows:
+        close = float(row.get('close') or 0)
+        if close <= 0:
             continue
+        full_code = str(row['full_code'])
+        rows.append({
+            'stock_code': str(code_map.get(full_code, full_code.split('.')[0])).zfill(6),
+            'stock_name': str(name_map.get(full_code, '')).strip(),
+            'current_price': round(close, 4),
+            'change_amount': round(float(row.get('change') or 0), 4),
+            'change_pct': round(float(row.get('pct_chg') or 0), 4),
+            'turnover_amount_billion': round(float(row.get('amount') or 0), 4),
+            'turnover_rate': 0.0,
+            'trade_date': effective_date,
+        })
 
     return rows
 
@@ -225,6 +484,7 @@ def fetch_stock_pool(
     snapshot_rows: list[dict[str, Any]] | None = None,
     *,
     market_filters: list[str] | None = None,
+        sqlite_path: Any = None,
 ) -> list[dict[str, Any]]:
     """
     Build a stock pool from a pre-fetched snapshot list (or fetch a new one).
@@ -243,11 +503,15 @@ def fetch_stock_pool(
             for row in snapshot_rows
         ]
 
-    # Fallback for non-trading days or empty snapshot responses: use uploaded stock list
-    stock_list_df = load_stock_list(market_filters)
+    # Fallback for non-trading days or empty snapshot responses: use provider stock list
+    stock_list_df = _resolve_stock_universe(
+        market_filters=market_filters,
+        sqlite_path=sqlite_path,
+        use_uploaded_universe=True,
+    )
     return [
         {
-            'stock_code': str(row['symbol']).zfill(6),
+            'stock_code': str(row['code']).zfill(6),
             'stock_name': str(row['name']).strip(),
             'sectors': '',
             'ai_quick_summary': '',
@@ -256,137 +520,42 @@ def fetch_stock_pool(
     ]
 
 
-def fetch_daily_bars_for_stock(
-    stock_code: str,
-    *,
-    start_date: str,
-    end_date: str,
-    adjust: str = 'qfq',
-    retry: int = 2,
-    delay: float = 0.2,
-) -> list[dict[str, Any]]:
-    """
-    Fetch daily K-line bars for a single stock via Tushare.
-
-    Returns a list of dicts with keys:
-        stock_code, trade_date, open_price, high_price, low_price,
-        close_price, volume
-    """
-    pro = _get_tushare_api()
-    ts_code = _to_ts_code(stock_code)
-    ts_start = start_date.replace('-', '')
-    ts_end = end_date.replace('-', '')
-
-    # Tushare adj parameter: 'qfq' for forward-adjusted, 'hfq' for backward, None for raw
-    adj: str | None = adjust if adjust in ('qfq', 'hfq') else None
-    df = None
-
-    for attempt in range(retry + 1):
-        try:
-            df = _rate_limited_call(
-                pro.daily,
-                ts_code=ts_code,
-                start_date=ts_start,
-                end_date=ts_end,
-                adj=adj,
-            )
-            break
-        except Exception:  # noqa: BLE001
-            if attempt < retry:
-                time.sleep(delay)
-                continue
-            return []
-
-    if df is None or df.empty:
-        return []
-
-    rows: list[dict[str, Any]] = []
-    for _, row in df.iterrows():
-        try:
-            # Tushare trade_date is 'YYYYMMDD'; convert to 'YYYY-MM-DD'
-            td = str(row['trade_date'])
-            trade_date_str = f'{td[:4]}-{td[4:6]}-{td[6:8]}'
-            rows.append({
-                'stock_code': stock_code,
-                'trade_date': trade_date_str,
-                'open_price': round(float(row['open']), 4),
-                'high_price': round(float(row['high']), 4),
-                'low_price': round(float(row['low']), 4),
-                'close_price': round(float(row['close']), 4),
-                # Tushare vol is in 手 (100-share lots); keep as-is to match AkShare convention
-                'volume': int(float(row['vol'])),
-            })
-        except (ValueError, TypeError):
-            continue
-
-    return rows
-
-
-def get_default_history_start(history_days: int = 60) -> str:
-    """Return an ISO date string `history_days` calendar days before today."""
-    start = date.today() - timedelta(days=int(history_days * 1.5))
-    return start.strftime('%Y-%m-%d')
-
 
 def fetch_daily_bars_by_date(
     trade_date: str,
     *,
     use_uploaded_universe: bool = True,
     market_filters: list[str] | None = None,
+        sqlite_path: Any = None,
 ) -> list[dict[str, Any]]:
     """
     Fetch daily K-line bars for the whole market for a given trade_date.
 
-    Uses a single bulk API call (pro.daily(trade_date=...)) instead of per-stock loops.
-    Optionally filters to the uploaded stock list.
-
     Returns a list of dicts with keys matching the daily_bars DB schema:
-        ts_code, trade_date, open, high, low, close, pre_close, change, pct_chg,
-        vol, amount (千元/1e6 → 亿元), is_up_limit, is_down_limit
+        full_code, trade_date, open, high, low, close, pre_close, change, pct_chg,
+        vol, amount (元/1e8 -> 亿元), is_up_limit, is_down_limit
     """
-    pro = _get_tushare_api()
-    ts_date = trade_date.replace('-', '')
-
-    df = _rate_limited_call(pro.daily, trade_date=ts_date)
-    if df is None or df.empty:
+    target_date = _normalize_trade_date(trade_date)
+    stock_list_df = _resolve_stock_universe(
+        market_filters=market_filters,
+        sqlite_path=sqlite_path,
+        use_uploaded_universe=use_uploaded_universe,
+    )
+    if stock_list_df.empty:
         return []
 
-    if use_uploaded_universe:
-        try:
-            stock_list_df = load_stock_list(market_filters)
-            ts_code_set = set(stock_list_df['ts_code'].tolist())
-            df = df[df['ts_code'].isin(ts_code_set)].copy()
-        except FileNotFoundError:
-            # No stock list uploaded; keep all stocks from Tushare response
-            pass
-
     rows: list[dict[str, Any]] = []
-    for _, row in df.iterrows():
-        ts_code = str(row['ts_code'])
-        try:
-            close = float(row.get('close') or 0)
-            if close <= 0:
-                continue
-            # Tushare trade_date column is 'YYYYMMDD'; convert to 'YYYY-MM-DD'
-            td = str(row['trade_date'])
-            trade_date_str = f'{td[:4]}-{td[4:6]}-{td[6:8]}'
-            rows.append({
-                'ts_code': ts_code,
-                'trade_date': trade_date_str,
-                'open': round(float(row['open']), 4),
-                'high': round(float(row['high']), 4),
-                'low': round(float(row['low']), 4),
-                'close': close,
-                'pre_close': round(float(row.get('pre_close') or 0), 4),
-                'change': round(float(row.get('change') or 0), 4),
-                'pct_chg': round(float(row.get('pct_chg') or 0), 4),
-                'vol': float(row.get('vol') or 0),
-                # Tushare amount is in 千元 (thousand yuan); store in 亿元 (100M yuan)
-                'amount': round(float(row.get('amount') or 0) / 1e6, 4),
-                'is_up_limit': False,   # limit detection requires stock metadata; use initializer path
-                'is_down_limit': False, # for accurate is_up_limit/is_down_limit values
-            })
-        except (ValueError, TypeError):
+    for _, stock in stock_list_df.iterrows():
+        full_code = str(stock['full_code']).strip().upper()
+        if not full_code:
             continue
-
+        try:
+            stock_rows = _mairui_fetch_history_rows(full_code, target_date, target_date)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('Mairui history fetch failed for %s on %s: %s', full_code, target_date, exc)
+            continue
+        for row in stock_rows:
+            if row['trade_date'] != target_date:
+                continue
+            rows.append(row)
     return rows
