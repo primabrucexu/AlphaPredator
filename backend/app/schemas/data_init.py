@@ -141,6 +141,24 @@ class ReimportDayRequest(BaseModel):
     )
 
 
+class RetrySubtaskRequest(BaseModel):
+    item_label: str = Field(..., min_length=1, description='子任务标识：MARKET_DATA=股票代码, JYGS_REVIEW=YYYYMMDD')
+
+
+class TaskItemsResponse(BaseModel):
+    """子任务明细：基于 task_info 合成，无需独立 item 表。"""
+    task_id: str
+    task_type: str
+    label_type: str = Field('', description='处理单元类型：stock | date | sync')
+    label_name: str = Field('', description='处理单元中文名称，如"股票代码"')
+    total_items: int
+    processed_items: int
+    current_label: str = ''
+    status: str
+    error_message: str = ''
+    progress_percent: float = 0.0
+
+
 class DataRangeInfo(BaseModel):
     min_trade_date: str | None = None
     max_trade_date: str | None = None

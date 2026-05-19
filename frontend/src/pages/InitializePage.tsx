@@ -12,7 +12,6 @@ import {
   Select,
   Space,
   Statistic,
-  Table,
   Tag,
   Typography,
 } from 'antd';
@@ -29,17 +28,18 @@ import {
   clearJygsSession,
   createInitTask,
   getInitTask,
-  getInitTaskDays,
   getInitV2Overview,
   getJygsAuthStatus,
   getMairuiLicenceConfig,
+  getTaskItems,
   type InitV2OverviewResponse,
   type JygsAuthStatus,
   loginJygsWithPlaywright,
   type MairuiLicenceConfigResponse,
+  retryInitSubtask,
   retryInitTask,
   saveMairuiLicence,
-  type TaskDayItem,
+  type TaskItemsResponse,
   type TaskResponse,
   type TaskType,
   terminateInitTask,
@@ -97,26 +97,6 @@ function taskStatusLabel(s: string): string {
   }
 }
 
-function dayStatusTag(s: string) {
-  const colors: Record<string, string> = {
-    SUCCESS: 'success',
-    FAILED: 'error',
-    RUNNING: 'processing',
-    FETCHING: 'processing',
-    WRITING: 'processing',
-    PENDING: 'warning',
-  };
-  const labels: Record<string, string> = {
-    SUCCESS: '成功',
-    FAILED: '失败',
-    RUNNING: '执行中',
-    FETCHING: '拉取中',
-    WRITING: '写入中',
-    PENDING: '等待',
-  };
-  return <Tag color={colors[s] ?? 'default'}>{labels[s] ?? s}</Tag>;
-}
-
 function taskTypeLabel(taskType: string | undefined): string {
   switch (taskType) {
     case 'STOCK_LIST_SYNC':
@@ -152,10 +132,9 @@ export function InitializePage() {
 
   // Day details
   const [showDays, setShowDays] = useState(false);
-  const [days, setDays] = useState<TaskDayItem[]>([]);
-  const [daysTotal, setDaysTotal] = useState(0);
-  const [daysPage, setDaysPage] = useState(1);
-  const [daysLoading, setDaysLoading] = useState(false);
+  const [taskItems, setTaskItems] = useState<TaskItemsResponse | null>(null);
+  const [itemsLoading, setItemsLoading] = useState(false);
+  const [retryItemLabel, setRetryItemLabel] = useState('');
 
   // Daily update
   const [updateLoading, setUpdateLoading] = useState(false);
@@ -206,23 +185,23 @@ export function InitializePage() {
   }, [currentTask?.status, currentTask?.task_id]);
 
 
-  // Refresh day details when page changes or task updates
+  // Refresh subtask items when task updates
   useEffect(() => {
     if (showDays && currentTask) {
-      loadDays(currentTask.task_id, daysPage);
+      loadTaskItems(currentTask.task_id);
     }
-  }, [daysPage, currentTask?.processed_days]);
+  }, [currentTask?.processed_items]);
 
-  async function loadDays(taskId: string, page: number) {
-    setDaysLoading(true);
+  async function loadTaskItems(taskId: string) {
+    setItemsLoading(true);
     try {
-      const res = await getInitTaskDays(taskId, page, 50);
-      setDays(res.days);
-      setDaysTotal(res.total);
+      const res = await getTaskItems(taskId);
+      setTaskItems(res);
+      setRetryItemLabel((prev) => prev || res.current_label || '');
     } catch {
       // ignore
     } finally {
-      setDaysLoading(false);
+      setItemsLoading(false);
     }
   }
 
@@ -248,8 +227,7 @@ export function InitializePage() {
   const handleToggleDays = async () => {
     if (!currentTask) return;
     if (!showDays) {
-      await loadDays(currentTask.task_id, 1);
-      setDaysPage(1);
+      await loadTaskItems(currentTask.task_id);
     }
     setShowDays(!showDays);
   };
@@ -300,7 +278,29 @@ export function InitializePage() {
       const task = await retryInitTask(currentTask.task_id);
       setCurrentTask(task);
     } catch (e) {
-      setError(e instanceof Error ? e.message : '重试任务失败');
+      setError(e instanceof Error ? e.message : '断点继续失败');
+    } finally {
+      setTaskActionLoading(false);
+    }
+  };
+
+  const handleRetrySubtask = async () => {
+    if (!currentTask) return;
+    const label = retryItemLabel.trim();
+    if (!label) {
+      setError('请先输入或选择要重试的子任务标识');
+      return;
+    }
+    setError(null);
+    setTaskActionLoading(true);
+    try {
+      const task = await retryInitSubtask(currentTask.task_id, label);
+      setCurrentTask(task);
+      setShowDays(false);
+      setTaskItems(null);
+      setRetryItemLabel('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '子任务重试失败');
     } finally {
       setTaskActionLoading(false);
     }
@@ -352,38 +352,10 @@ export function InitializePage() {
   const isMarketTask = selectedTaskType === 'MARKET_DATA' || selectedTaskType === 'STOCK_LIST_SYNC';
   const canStartTask = isMarketTask ? !!initOverview?.market_data_configured : !!jygsStatus?.valid;
 
-  const progressPercent = currentTask && currentTask.total_days > 0
+  const progressPercent = currentTask && currentTask.total_items > 0
     ? Math.round(currentTask.progress_percent)
     : 0;
 
-  const dayColumns = [
-    {
-      title: '日期',
-      dataIndex: 'trade_date',
-      key: 'trade_date',
-      width: 120,
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      key: 'status',
-      width: 120,
-      render: (s: string) => dayStatusTag(s),
-    },
-    {
-      title: '行数',
-      dataIndex: 'row_count',
-      key: 'row_count',
-      width: 80,
-    },
-    {
-      title: '错误',
-      dataIndex: 'error_message',
-      key: 'error_message',
-      render: (msg: string) =>
-        msg ? <Typography.Text type="danger" style={{ fontSize: 12 }}>{msg}</Typography.Text> : '—',
-    },
-  ];
 
   return (
     <Space direction="vertical" size={24} style={{ display: 'flex' }}>
@@ -666,22 +638,22 @@ export function InitializePage() {
             </Col>
             <Col xs={24} md={6}>
               <Statistic
-                title="总天数"
-                value={currentTask.total_days}
-                suffix="天"
+                  title="总项数"
+                  value={currentTask.total_items}
+                  suffix="项"
               />
             </Col>
             <Col xs={24} md={6}>
               <Statistic
                   title="已处理"
-                  value={`${currentTask.processed_days} / ${currentTask.total_days}`}
-                  suffix="天"
+                  value={`${currentTask.processed_items} / ${currentTask.total_items}`}
+                  suffix="项"
               />
             </Col>
             <Col xs={24} md={6}>
               <Statistic
                 title="当前处理"
-                value={currentTask.current_date || '—'}
+                value={currentTask.current_label || '—'}
               />
             </Col>
           </Row>
@@ -692,7 +664,7 @@ export function InitializePage() {
                 percent={progressPercent}
                 status={isRunning ? 'active' : isDone ? 'success' : 'exception'}
                 format={(pct) =>
-                  `${currentTask.processed_days} / ${currentTask.total_days} (${pct}%)`
+                    `${currentTask.processed_items} / ${currentTask.total_items} (${pct}%)`
                 }
               />
             </div>
@@ -701,13 +673,12 @@ export function InitializePage() {
           <Descriptions style={{ marginTop: 16 }} column={2} size="small">
             <Descriptions.Item label="任务 ID">{currentTask.task_id}</Descriptions.Item>
             <Descriptions.Item label="任务类型">{taskTypeLabel(currentTask.task_type)}</Descriptions.Item>
-            <Descriptions.Item label="模式">{currentTask.mode}</Descriptions.Item>
             <Descriptions.Item label="日期区间">
               {currentTask.start_date} — {currentTask.end_date}
             </Descriptions.Item>
-            <Descriptions.Item label="开始时间">{formatIso(currentTask.started_at)}</Descriptions.Item>
+            <Descriptions.Item label="开始时间">{formatIso(currentTask.task_start_date)}</Descriptions.Item>
             {(isDone || isFailed || isTerminated) && (
-              <Descriptions.Item label="完成时间">{formatIso(currentTask.finished_at)}</Descriptions.Item>
+                <Descriptions.Item label="完成时间">{formatIso(currentTask.task_end_date)}</Descriptions.Item>
             )}
             {(isFailed || isTerminated) && (
               <Descriptions.Item label="错误信息" span={2}>
@@ -717,12 +688,12 @@ export function InitializePage() {
           </Descriptions>
 
           <Space style={{marginTop: 12}}>
-            <Button size="small" onClick={handleToggleDays}>
-              {showDays ? '收起日明细' : '查看日明细'}
+            <Button size="small" loading={itemsLoading} onClick={handleToggleDays}>
+              {showDays ? '收起子任务明细' : '查看子任务明细'}
             </Button>
-            {isFailed && (
+            {(isFailed || isTerminated) && (
                 <Button size="small" type="primary" loading={taskActionLoading} onClick={handleRetryTask}>
-                  重试任务
+                  断点继续
                 </Button>
             )}
             {(isRunning || isFailed) && (
@@ -732,23 +703,74 @@ export function InitializePage() {
             )}
           </Space>
 
-          {showDays && (
-            <Table
-              style={{ marginTop: 12 }}
-              size="small"
-              rowKey="trade_date"
-              loading={daysLoading}
-              dataSource={days}
-              columns={dayColumns}
-              pagination={{
-                current: daysPage,
-                pageSize: 50,
-                total: daysTotal,
-                showSizeChanger: false,
-                onChange: (page) => setDaysPage(page),
-              }}
-              scroll={{ x: 600 }}
-            />
+          {showDays && taskItems && (
+              <div style={{marginTop: 16}}>
+                <Descriptions
+                    title="子任务明细"
+                    bordered
+                    size="small"
+                    column={2}
+                >
+                  <Descriptions.Item label="处理单元类型">
+                    {taskItems.label_name}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="整体进度">
+                    {taskItems.processed_items} / {taskItems.total_items} 项
+                    （{taskItems.progress_percent}%）
+                  </Descriptions.Item>
+                  <Descriptions.Item label="当前处理" span={2}>
+                    {taskItems.current_label
+                        ? <Tag color="processing">{taskItems.current_label}</Tag>
+                        : <Typography.Text type="secondary">—</Typography.Text>
+                    }
+                  </Descriptions.Item>
+                  <Descriptions.Item label="已完成">
+                    <Tag color="success">{taskItems.processed_items} 项</Tag>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="待处理">
+                    <Tag color="default">
+                      {Math.max(0, taskItems.total_items - taskItems.processed_items)} 项
+                    </Tag>
+                  </Descriptions.Item>
+                  {taskItems.error_message && (
+                      <Descriptions.Item label="错误信息" span={2}>
+                        <Typography.Text type="danger" style={{fontSize: 12}}>
+                          {taskItems.error_message}
+                        </Typography.Text>
+                      </Descriptions.Item>
+                  )}
+                </Descriptions>
+
+                <Space style={{marginTop: 12}}>
+                  <Input
+                      placeholder={
+                        taskItems.label_type === 'stock'
+                            ? '输入股票代码，如 000001 或 000001.SZ'
+                            : taskItems.label_type === 'date'
+                                ? '输入交易日，如 20240518'
+                                : '输入子任务标识'
+                      }
+                      value={retryItemLabel}
+                      onChange={(e) => setRetryItemLabel(e.target.value)}
+                      style={{width: 320}}
+                  />
+                  <Button
+                      size="small"
+                      type="primary"
+                      loading={taskActionLoading}
+                      disabled={isRunning}
+                      onClick={handleRetrySubtask}
+                  >
+                    重试子任务
+                  </Button>
+                </Space>
+              </div>
+          )}
+
+          {showDays && !taskItems && !itemsLoading && (
+              <Typography.Text type="secondary" style={{marginTop: 12, display: 'block'}}>
+                暂无子任务数据
+              </Typography.Text>
           )}
         </Card>
       )}

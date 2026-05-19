@@ -1,6 +1,10 @@
 # AlphaPredator Agent Guide
 本文件面向后续在本仓库中工作的编码 agent / AI 助手。
 
+## 交互语言
+
+本项目的交互语言为**中文**。所有与用户的对话、思考输出、设计方案、文档说明均使用中文。
+
 ## ⚠️ 硬性规则（必须每次都遵守）
 
 本项目有两个**最核心的硬性规则**，其他所有规则也同样硬性约束：
@@ -31,7 +35,7 @@
 
 所有 [agent-rules.md](docs/agent-rules.md) 中的规则都是硬性的：
 
-- **rule1**: 无权限编辑的文档（本文件、human/, code-rules.md）
+- **rule1**: 无权限编辑的文档（docs/human/*, agent-rules.md, code-rules.md）
 - **rule2**: 代码和文档优先级（human 最高 > agent > 代码）
 - **rule4**: 不要维护兼容性，直接适配最新设计
 - **rule5**: 会话开始前读当前进度

@@ -15,6 +15,7 @@ from app.modules.market_data.initializer import (
     read_init_status,
     reimport_day,
     retry_task,
+    retry_subtask,
     start_task,
     terminate_task,
 )
@@ -28,7 +29,9 @@ from app.schemas.data_init import (
     InitV2OverviewResponse,
     MairuiLicenceConfigResponse,
     ReimportDayRequest,
+    RetrySubtaskRequest,
     SaveMairuiLicenceRequest,
+    TaskItemsResponse,
     TaskResponse,
     UpdateResult,
 )
@@ -171,21 +174,82 @@ def get_init_task(task_id: str) -> TaskResponse:
     return TaskResponse.from_db_row(task)
 
 
+@router.get('/tasks/{task_id}/items', response_model=TaskItemsResponse)
+def get_task_items(task_id: str) -> TaskItemsResponse:
+    """Return subtask detail for a given task, synthesised from task_info.
+
+    Since individual item records are not persisted, this endpoint returns the
+    current progress snapshot (current_label, processed/total counts) together
+    with task-type–specific metadata so the frontend can render a meaningful
+    subtask panel.
+    """
+    task = get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Task not found')
+
+    task_type = task.get('task_type', 'MARKET_DATA')
+    if task_type == 'MARKET_DATA':
+        label_type = 'stock'
+        label_name = '股票代码'
+    elif task_type == 'JYGS_REVIEW':
+        label_type = 'date'
+        label_name = '交易日期'
+    else:  # STOCK_LIST_SYNC
+        label_type = 'sync'
+        label_name = '同步项'
+
+    total = task.get('total_items', 0)
+    processed = task.get('processed_items', 0)
+    pct = round(processed / total * 100, 1) if total > 0 else 0.0
+
+    return TaskItemsResponse(
+        task_id=task_id,
+        task_type=task_type,
+        label_type=label_type,
+        label_name=label_name,
+        total_items=total,
+        processed_items=processed,
+        current_label=task.get('current_label', ''),
+        status=task.get('status', ''),
+        error_message=task.get('error_message', ''),
+        progress_percent=pct,
+    )
+
+
 
 
 @router.post('/tasks/{task_id}/retry', response_model=TaskResponse, status_code=status.HTTP_202_ACCEPTED)
 def retry_init_task(task_id: str) -> TaskResponse:
-    """Retry a failed task by resetting progress and starting it again."""
+    """Resume a failed/terminated task from checkpoint and start it again."""
     task = retry_task(task_id)
     if task is None:
         existing = get_task(task_id)
         if existing is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Task not found')
-        if existing.get('status') != 'FAILED':
+        if existing.get('status') not in ('FAILED', 'TERMINATED'):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail='Only FAILED tasks can be retried',
+                detail='Only FAILED or TERMINATED tasks can be retried',
             )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail='Another initialization task is already running',
+        )
+    return TaskResponse.from_db_row(task)
+
+
+@router.post('/tasks/{task_id}/retry-item', response_model=TaskResponse, status_code=status.HTTP_202_ACCEPTED)
+def retry_init_subtask(task_id: str, body: RetrySubtaskRequest) -> TaskResponse:
+    """Retry a single subtask item by creating a new scoped task."""
+    try:
+        task = retry_subtask(task_id, body.item_label)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    if task is None:
+        existing = get_task(task_id)
+        if existing is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Task not found')
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail='Another initialization task is already running',

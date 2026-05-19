@@ -154,17 +154,15 @@ export type TaskType = 'STOCK_LIST_SYNC' | 'MARKET_DATA' | 'JYGS_REVIEW';
 export interface TaskResponse {
   task_id: string;
   task_type: TaskType;
-  mode: string;
   start_date: string;
   end_date: string;
   status: TaskStatus;
-  total_days: number;
-  processed_days: number;
-  current_date: string;
+    total_items: number;
+    processed_items: number;
+    current_label: string;
   error_message: string;
-  created_at: string;
-  started_at: string;
-  finished_at: string;
+    task_start_date: string;
+    task_end_date: string;
   progress_percent: number;
 }
 
@@ -175,22 +173,17 @@ export type DayStatus =
   | 'SUCCESS'
   | 'FAILED';
 
-export interface TaskDayItem {
+export interface TaskItemsResponse {
   task_id: string;
-  trade_date: string;
-  status: DayStatus;
-  row_count: number;
-  started_at: string;
-  finished_at: string;
+    task_type: TaskType;
+    label_type: 'stock' | 'date' | 'sync';
+    label_name: string;
+    total_items: number;
+    processed_items: number;
+    current_label: string;
+    status: TaskStatus;
   error_message: string;
-}
-
-export interface TaskDaysResponse {
-  task_id: string;
-  total: number;
-  page: number;
-  per_page: number;
-  days: TaskDayItem[];
+    progress_percent: number;
 }
 
 export interface DataRangeInfo {
@@ -336,14 +329,8 @@ export function getInitTask(taskId: string): Promise<TaskResponse> {
   return fetchJson<TaskResponse>(`/api/data-init/tasks/${taskId}`);
 }
 
-export function getInitTaskDays(
-  taskId: string,
-  page: number = 1,
-  perPage: number = 50,
-): Promise<TaskDaysResponse> {
-  return fetchJson<TaskDaysResponse>(
-    `/api/data-init/tasks/${taskId}/days?page=${page}&per_page=${perPage}`,
-  );
+export function getTaskItems(taskId: string): Promise<TaskItemsResponse> {
+    return fetchJson<TaskItemsResponse>(`/api/data-init/tasks/${taskId}/items`);
 }
 
 export function reimportDay(tradeDate: string): Promise<TaskResponse> {
@@ -352,6 +339,10 @@ export function reimportDay(tradeDate: string): Promise<TaskResponse> {
 
 export function retryInitTask(taskId: string): Promise<TaskResponse> {
   return postJson<TaskResponse>(`/api/data-init/tasks/${taskId}/retry`);
+}
+
+export function retryInitSubtask(taskId: string, itemLabel: string): Promise<TaskResponse> {
+    return postJson<TaskResponse>(`/api/data-init/tasks/${taskId}/retry-item`, {item_label: itemLabel});
 }
 
 export function terminateInitTask(taskId: string): Promise<TaskResponse> {

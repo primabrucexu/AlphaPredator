@@ -6,13 +6,13 @@ from unittest.mock import patch
 from app.modules.market_data import data_source
 
 
-def test_rate_limited_call_caps_at_45_per_minute() -> None:
-    # Pretend we already made 45 calls inside the last minute.
+def test_rate_limited_call_caps_at_300_per_minute() -> None:
+    # Pretend we already made 300 calls inside the last minute.
     data_source._call_timestamps.clear()
-    data_source._call_timestamps.extend(float(x) for x in range(50, 95))
+    data_source._call_timestamps.extend(350.0 + x * 0.1 for x in range(300))
 
     sleeps: list[float] = []
-    monotonic_values = iter([100.0, 110.1])
+    monotonic_values = iter([400.0, 410.1])
 
     def fake_monotonic() -> float:
         return next(monotonic_values)

@@ -115,6 +115,32 @@ class InitTaskRepo:
         finally:
             conn.close()
 
+    def prepare_task_for_resume(self, task_id: str, *, keep_current_label: bool) -> None:
+        conn = self._connect()
+        try:
+            if keep_current_label:
+                conn.execute(
+                    '''UPDATE task_info
+                       SET status        = 'PENDING',
+                           error_message = '',
+                           task_end_date = ''
+                       WHERE task_id = ?''',
+                    (task_id,),
+                )
+            else:
+                conn.execute(
+                    '''UPDATE task_info
+                       SET status        = 'PENDING',
+                           current_label = '',
+                           error_message = '',
+                           task_end_date = ''
+                       WHERE task_id = ?''',
+                    (task_id,),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
     def terminate_task(self, task_id: str, task_end_date: str) -> bool:
         conn = self._connect()
         try:
@@ -173,6 +199,17 @@ class InitTaskRepo:
             conn.execute(
                 'UPDATE task_info SET processed_items = processed_items + 1 WHERE task_id = ?',
                 (task_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def set_processed_items(self, task_id: str, processed: int) -> None:
+        conn = self._connect()
+        try:
+            conn.execute(
+                'UPDATE task_info SET processed_items = ? WHERE task_id = ?',
+                (processed, task_id),
             )
             conn.commit()
         finally:
