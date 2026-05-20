@@ -1,6 +1,6 @@
 """韭研公社登录凭据管理。
 
-存储：SQLite jygs_auth 表（via JygsRepo）
+存储：JSON 文件 (data/config/jygs_auth.json)
 
 探针接口：app.jiuyangongshe.com/jystock-app/api/v1/action/diagram-url
   errCode == "0"  → SESSION 有效
@@ -13,9 +13,8 @@ from uuid import uuid4
 
 import httpx
 
-from app.db.sqlite import ensure_sqlite_schema
+from app.modules.jygs.auth_file import load_credentials_from_file, save_credentials_to_file, clear_credentials_from_file
 from app.modules.jygs.flow_trace import append_trace_event, build_request_structure, sanitize_headers
-from app.repositories.jygs_repo import JygsRepo
 
 logger = logging.getLogger(__name__)
 
@@ -38,51 +37,29 @@ def _preview_secret(value: str) -> str:
     return f'{value[:4]}***{value[-4:]}'
 
 
-def _repo():
-    ensure_sqlite_schema()
-    return JygsRepo()
-
-
 # ---------------------------------------------------------------------------
 # 凭据的读写
 # ---------------------------------------------------------------------------
 
 def load_credentials() -> dict | None:
-    """从 SQLite 读取凭据，若无记录返回 None。"""
-    try:
-        row = _repo().get_auth_row()
-        if not row or not row.get('auth_cookie'):
-            return None
-        cookie = str(row['auth_cookie']).strip()
-        if not cookie:
-            return None
-        # 去掉 "SESSION=" 前缀，只保留原始 session 值
-        session = cookie.removeprefix('SESSION=')
-        return {
-            'session': session,
-            'saved_at': str(row.get('updated_at') or ''),
-            'expires_at': None,
-        }
-    except Exception as exc:
-        logger.warning('JYGS load_credentials failed: %s', exc)
-        return None
+    """从 JSON 文件读取凭据，若无记录返回 None。"""
+    return load_credentials_from_file()
 
 
 def save_credentials(session: str, expires_at: str | None = None) -> None:
-    """将 SESSION 写入 SQLite jygs_auth 表，格式 SESSION=xxx。"""
-    now = datetime.now(timezone.utc).isoformat()
+    """将 SESSION 写入 JSON 文件。"""
     try:
-        _repo().save_auth_cookie(f'SESSION={session}', now)
-        logger.info('JYGS credentials saved to SQLite. session_length=%d', len(session))
+        save_credentials_to_file(session, expires_at)
+        logger.info('JYGS credentials saved to JSON file. session_length=%d', len(session))
     except Exception as exc:
         logger.error('JYGS save_credentials failed: %s', exc)
         raise
 
 
 def clear_credentials() -> None:
-    """清空 SQLite jygs_auth 表中的凭据。"""
+    """清空 JSON 文件中的凭据。"""
     try:
-        _repo().save_auth_cookie('', datetime.now(timezone.utc).isoformat())
+        clear_credentials_from_file()
         logger.info('JYGS credentials cleared.')
     except Exception as exc:
         logger.warning('JYGS clear_credentials failed: %s', exc)
@@ -106,10 +83,10 @@ async def check_credentials_valid() -> tuple[bool, str]:
     session = get_session()
     trace_id = uuid4().hex
     if not session:
-        logger.warning('JYGS probe skipped: no session in DB')
+        logger.warning('JYGS probe skipped: no session in auth file')
         append_trace_event('probe_skipped', {
             'trace_id': trace_id,
-            'reason': 'no_session_in_db',
+            'reason': 'no_session_in_auth_file',
         })
         return False, '未找到已保存的 SESSION'
 
@@ -148,7 +125,7 @@ async def check_credentials_valid() -> tuple[bool, str]:
         'request_headers': sanitize_headers(probe_headers),
         'request_structure': build_request_structure(probe_headers),
         'credential_sources': {
-            'session': 'Loaded from local SQLite jygs_auth table',
+            'session': 'Loaded from data/config/jygs_auth.json',
             'token': 'Configured in backend probe header (current constant)',
         },
         'credential_preview': {

@@ -15,7 +15,7 @@ Table stock_list [headercolor: #175e7a] {
 
 Table pick_models [headercolor: #175e7a] {
 	id integer [ pk, increment ]
-	name varchar [ not null, note: '模式名' ]
+	name varchar(255) [ not null, note: '模式名' ]
 	description text [ note: '模式描述' ]
 
 	Note: '选股模式'
@@ -23,16 +23,16 @@ Table pick_models [headercolor: #175e7a] {
 
 Table user_pick_stock_samples [headercolor: #175e7a] {
 	id integer [ pk, increment ]
-	stock_code varchar [ not null, note: '6位数字股票代码' ]
+	stock_code varchar(255) [ not null, note: '6位数字股票代码' ]
 	pick_date date [ not null, note: '选股日期，YYYYMMDD' ]
 	pick_model_id integer [ not null ]
 }
 
 Table daily_hot_pic [headercolor: #175e7a] {
 	id integer [ pk, increment ]
-	trade_date varchar [ not null, note: '交易日期，也就是图片复盘的是那天的涨停' ]
-	summary_image_url varchar [ not null, note: '简图外部url访问地址' ]
-	source varchar [ not null, note: '数据来源，目前只有韭研公社，填写为jygs' ]
+	trade_date varchar(255) [ not null, note: '交易日期，也就是图片复盘的是那天的涨停' ]
+	summary_image_url varchar(255) [ not null, note: '简图外部url访问地址' ]
+	source varchar(255) [ not null, note: '数据来源，目前只有韭研公社，填写为jygs' ]
 
 	Note: '涨停复盘简图'
 }
@@ -41,12 +41,12 @@ Table daily_hot_info [headercolor: #175e7a] {
 	id integer [ pk, increment ]
 	trade_date date [ not null, note: '交易日期 YYYYMMDD' ]
 	limit_up_time text [ not null, note: '涨停时间' ]
-	stock_code integer [ not null, note: '6位数字的股票代码' ]
-	name varchar [ not null, note: '股票名称' ]
-	streak_text varchar [ not null, note: '连板信息文本，如“两天两板”，无内容则表示首次涨停' ]
-	hot_theme varchar [ not null, note: '涨停题材' ]
+	stock_code varchar(255) [ not null, note: '6位数字的股票代码' ]
+	name varchar(255) [ not null, note: '股票名称' ]
+	streak_text varchar(255) [ not null, note: '连板信息文本，如“两天两板”，无内容则表示首次涨停' ]
+	hot_theme varchar(255) [ not null, note: '涨停题材' ]
 	reason text [ not null, note: '涨停解析内容' ]
-	source varchar [ not null, note: '数据来源，目前只有韭研公社，填写为jygs' ]
+	source varchar(255) [ not null, note: '数据来源，目前只有韭研公社，填写为jygs' ]
 	short_reason text(65535) [ not null, note: '从涨停简图中OCR识别得到的一句话涨停原因' ]
 
 	Note: '涨停解析'
@@ -109,7 +109,7 @@ Table model_info [headercolor: #175e7a] {
 }
 
 Table day_level_trade_data [headercolor: #175e7a] {
-	full_code varchar [ not null, note: '带交易所后缀的6位数字格式股票代码，如 000001.SZ' ]
+	full_code varchar(255) [ not null, note: '带交易所后缀的6位数字格式股票代码，如 000001.SZ' ]
 	trade_date date [ not null, note: '交易日期，YYYYMMDD' ]
 	open numeric [ not null, note: '开盘价' ]
 	high numeric [ not null, note: '最高价' ]

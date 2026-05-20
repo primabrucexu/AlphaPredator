@@ -6,7 +6,10 @@ JSON 格式：
 {
     "session": "xxxx...",
     "saved_at": "2026-05-19T10:30:45.123456",
-    "expires_at": null
+    "expires_at": null,
+    "is_valid": false,
+    "last_checked_at": "2026-05-19T10:35:00",
+    "last_error": ""
 }
 """
 
@@ -33,7 +36,10 @@ def load_credentials_from_file() -> dict | None:
         {
             'session': 'xxxx...',
             'saved_at': '2026-05-19T...',
-            'expires_at': None or str
+            'expires_at': None or str,
+            'is_valid': bool,
+            'last_checked_at': str or None,
+            'last_error': str
         }
         or None if file doesn't exist or is invalid
     """
@@ -55,6 +61,9 @@ def load_credentials_from_file() -> dict | None:
             'session': session,
             'saved_at': str(data.get('saved_at', '')),
             'expires_at': data.get('expires_at'),
+            'is_valid': bool(data.get('is_valid', False)),
+            'last_checked_at': data.get('last_checked_at'),
+            'last_error': str(data.get('last_error', '')),
         }
     except json.JSONDecodeError as e:
         logger.warning('JYGS auth file JSON decode error: %s', e)
@@ -79,10 +88,23 @@ def save_credentials_to_file(session: str, expires_at: str | None = None) -> Non
         return
 
     try:
+        # 读取现有数据，保留验证状态
+        existing_data = {}
+        if _AUTH_FILE.exists():
+            try:
+                with open(_AUTH_FILE, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+            except Exception:
+                existing_data = {}
+
+        # 更新 session，保留验证状态不变
         data = {
             'session': session,
             'saved_at': datetime.now(timezone.utc).isoformat(),
             'expires_at': expires_at,
+            'is_valid': existing_data.get('is_valid', False),
+            'last_checked_at': existing_data.get('last_checked_at'),
+            'last_error': existing_data.get('last_error', ''),
         }
 
         with open(_AUTH_FILE, 'w', encoding='utf-8') as f:
@@ -94,6 +116,38 @@ def save_credentials_to_file(session: str, expires_at: str | None = None) -> Non
         raise
 
 
+def update_auth_check_status(is_valid: bool, last_error: str = '') -> None:
+    """更新认证验证状态。
+
+    Args:
+        is_valid: 认证是否有效
+        last_error: 最后一次检查的错误信息
+    """
+    _ensure_config_dir()
+
+    try:
+        # 读取现有数据
+        data = {}
+        if _AUTH_FILE.exists():
+            try:
+                with open(_AUTH_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except Exception:
+                data = {}
+
+        # 仅更新验证状态，保留 session 等信息不变
+        data['is_valid'] = is_valid
+        data['last_checked_at'] = datetime.now(timezone.utc).isoformat()
+        data['last_error'] = last_error
+
+        with open(_AUTH_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+        logger.info('JYGS auth check status updated: is_valid=%s', is_valid)
+    except Exception as e:
+        logger.error('JYGS update_auth_check_status failed: %s', e)
+
+
 def clear_credentials_from_file() -> None:
     """删除认证文件。"""
     try:
@@ -102,4 +156,5 @@ def clear_credentials_from_file() -> None:
             logger.info('JYGS auth file deleted: %s', _AUTH_FILE)
     except Exception as e:
         logger.warning('JYGS clear_credentials_from_file failed: %s', e)
+
 

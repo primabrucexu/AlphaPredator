@@ -108,7 +108,7 @@ CREATE TABLE IF NOT EXISTS daily_hot_info
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     trade_date    TEXT    NOT NULL,
     limit_up_time TEXT    NOT NULL DEFAULT '',
-    stock_code    INTEGER NOT NULL,
+    stock_code TEXT NOT NULL,
     name          VARCHAR NOT NULL,
     streak_text   VARCHAR NOT NULL,
     hot_theme     VARCHAR NOT NULL,

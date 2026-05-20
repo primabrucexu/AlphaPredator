@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import io
 import json
 import logging
 import re
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -11,13 +13,15 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
+from PIL import Image
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
+from rapidocr import RapidOCR
 
 from app.core.settings import settings
 from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
 from app.modules.jygs.auth import get_session
-from app.repositories.jygs_repo import JygsRepo
+from app.modules.jygs.auth_file import load_credentials_from_file, save_credentials_to_file, update_auth_check_status
 
 logger = logging.getLogger(__name__)
 
@@ -122,35 +126,50 @@ def _post_json(path: str, payload: dict[str, Any], *, cookie: str, timeout: floa
 
 
 def get_jygs_auth_status(sqlite_path: Path | None = None) -> dict[str, Any]:
-    target = sqlite_path or settings.sqlite_path
-    ensure_sqlite_schema(target)
-    row = JygsRepo(target).get_auth_row()
+    """获取韭研公社认证状态。
 
-    if not row:
+    从 JSON 文件 (data/config/jygs_auth.json) 读取凭据和验证状态信息。
+    """
+    creds = load_credentials_from_file()
+
+    if not creds or not creds.get('session'):
         return {
             'is_configured': False,
             'is_valid': False,
-            'updated_at': None,
+            'saved_at': None,
             'last_checked_at': None,
             'last_error': '',
         }
 
-    cookie = str(row['auth_cookie'] or '').strip()
     return {
-        'is_configured': bool(cookie),
-        'is_valid': bool(row['is_valid']) and bool(cookie),
-        'updated_at': str(row['updated_at'] or '') or None,
-        'last_checked_at': str(row['last_checked_at'] or '') or None,
-        'last_error': str(row['last_error'] or ''),
+        'is_configured': True,
+        'is_valid': creds.get('is_valid', False),
+        'saved_at': creds.get('saved_at'),
+        'last_checked_at': creds.get('last_checked_at'),
+        'last_error': str(creds.get('last_error', '')),
     }
 
 
 def save_jygs_auth_cookie(cookie: str, sqlite_path: Path | None = None) -> dict[str, Any]:
-    target = sqlite_path or settings.sqlite_path
-    ensure_sqlite_schema(target)
-    now = _now_iso()
-    JygsRepo(target).save_auth_cookie(cookie, now)
-    return get_jygs_auth_status(target)
+    """保存韭研公社认证 cookie。
+
+    将 SESSION 认证保存到 JSON 文件 (data/config/jygs_auth.json)。
+    """
+    # 移除 "SESSION=" 前缀如果存在
+    session = cookie.removeprefix('SESSION=').strip()
+
+    try:
+        save_credentials_to_file(session)
+        logger.info('JYGS auth cookie saved to JSON file.')
+        return get_jygs_auth_status(sqlite_path)
+    except Exception as exc:
+        logger.error('Failed to save JYGS auth cookie: %s', exc)
+        return {
+            'is_configured': False,
+            'is_valid': False,
+            'saved_at': None,
+            'last_error': str(exc),
+        }
 
 
 def _read_cookie(sqlite_path: Path | None = None) -> str:
@@ -162,10 +181,13 @@ def _read_cookie(sqlite_path: Path | None = None) -> str:
 
 
 def check_jygs_auth_available(sqlite_path: Path | None = None) -> dict[str, Any]:
-    target = sqlite_path or settings.sqlite_path
+    """检查韭研公社认证是否有效。
+
+    调用 API 验证 SESSION，结果保存到 JSON 文件。
+    """
     now = _now_iso()
     try:
-        cookie = _read_cookie(target)
+        cookie = _read_cookie(sqlite_path)
         trade_date = datetime.now(tz=ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d')
         payload = _post_json('/api/v1/action/diagram-url', {'date': trade_date}, cookie=cookie)
         err_code = str(payload.get('errCode', ''))
@@ -175,10 +197,10 @@ def check_jygs_auth_available(sqlite_path: Path | None = None) -> dict[str, Any]
         is_valid = False
         message = str(exc)
 
-    ensure_sqlite_schema(target)
-    JygsRepo(target).update_auth_check_status(now, is_valid, message)
+    # 更新认证状态到 JSON 文件
+    update_auth_check_status(is_valid, message)
 
-    result = get_jygs_auth_status(target)
+    result = get_jygs_auth_status(sqlite_path)
     result['last_error'] = message
     result['is_valid'] = is_valid and result['is_configured']
     return result
@@ -226,7 +248,7 @@ def _extract_hot_info_rows(
             (
                 trade_date,
                 str(action_info.get('time') or ''),
-                int(code),
+                code,  # stock_code as TEXT (6-digit string, e.g. '000711')
                 str(stock.get('name') or ''),
                 str(action_info.get('num') or ''),
                 '、'.join(sorted(theme_map.get(code, set()))),
@@ -238,7 +260,7 @@ def _extract_hot_info_rows(
     for code, themes in theme_map.items():
         if code in seen:
             continue
-        rows.append((trade_date, '', int(code), '', '', '、'.join(sorted(themes)), '', 'jygs'))
+        rows.append((trade_date, '', code, '', '', '、'.join(sorted(themes)), '', 'jygs'))
     return rows
 
 
@@ -311,7 +333,7 @@ def sync_hot_review_by_date(trade_date: str, sqlite_path: Path | None = None) ->
                 [
                     trade_date,
                     limit_up_time,
-                    int(code) if code.isdigit() else 0,
+                    code,  # stock_code as TEXT (6-digit string, e.g. '000711')
                     stock_name,
                     streak_text,
                     hot_theme,
@@ -413,6 +435,10 @@ def auto_login_jygs_with_browser(sqlite_path: Path | None = None, timeout_second
 def fetch_and_parse_jygs_review_for_date(trade_date: str) -> int:
     """Fetch and parse JYGS review data for a single trading date.
 
+    This function:
+    1. Syncs hot review data (stocks, themes, images) from JYGS API
+    2. Runs OCR on downloaded images to extract text for short_reason field
+
     Args:
         trade_date: Date in YYYYMMDD or YYYY-MM-DD format
 
@@ -427,4 +453,138 @@ def fetch_and_parse_jygs_review_for_date(trade_date: str) -> int:
 
     logger.info('Fetching JYGS review data for %s', normalized_date)
     result = sync_hot_review_by_date(normalized_date)
-    return int(result.get('stock_fact_count', 0))
+    stock_fact_count = int(result.get('stock_fact_count', 0))
+
+    # Run OCR processing after sync completes
+    logger.info('Starting OCR processing for JYGS images. trade_date=%s', normalized_date)
+    ocr_result = _process_hot_review_ocr(normalized_date)
+    logger.info('OCR processing completed. result=%s', ocr_result)
+
+    return stock_fact_count
+
+
+def _download_image_data(image_url: str, timeout: float = 10.0) -> bytes | None:
+    """Download image from URL to memory. Returns None if download fails."""
+    try:
+        t0 = time.monotonic()
+        logger.debug('Downloading image from %s', image_url)
+        request = Request(image_url, headers={'User-Agent': _BROWSER_UA})
+        with urlopen(request, timeout=timeout) as response:
+            data = response.read()
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            logger.debug('Downloaded image. size=%d bytes elapsed_ms=%d', len(data), elapsed_ms)
+            return data
+    except Exception as exc:  # noqa: BLE001
+        logger.warning('Failed to download image from %s: %s', image_url, exc)
+        return None
+
+
+def _ocr_image_to_text(image_data: bytes) -> str:
+    """Run OCR on image bytes and extract text. Returns concatenated text or empty string if OCR fails."""
+    try:
+        t0 = time.monotonic()
+        ocr_engine = RapidOCR()
+        image_stream = io.BytesIO(image_data)
+        img = Image.open(image_stream)
+
+        # RapidOCR returns (results, elapsed_time) tuple
+        # results is a list of [bbox, text, confidence] or None if no text detected
+        ocr_result = ocr_engine(img)
+
+        # Handle different return formats from RapidOCR
+        if isinstance(ocr_result, tuple):
+            result, elapsed = ocr_result
+        else:
+            result = ocr_result
+            elapsed = 0
+
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+
+        if not result:
+            logger.debug('OCR returned empty result. elapsed_ms=%d', elapsed_ms)
+            return ''
+
+        # Concatenate all recognized text lines
+        text_lines = []
+        for item in result:
+            if item and len(item) > 1:
+                # item format: [bbox, text, confidence]
+                text = str(item[1] or '')
+                if text:
+                    text_lines.append(text)
+
+        full_text = ''.join(text_lines)
+        logger.debug('OCR extracted %d lines, total %d chars. elapsed_ms=%d', len(text_lines), len(full_text),
+                     elapsed_ms)
+
+        return full_text
+    except Exception as exc:  # noqa: BLE001
+        logger.warning('OCR processing failed: %s', exc)
+        logger.debug('OCR traceback: %s', traceback.format_exc())
+        return ''
+
+
+def _process_hot_review_ocr(trade_date: str, sqlite_path: Path | None = None) -> dict[str, Any]:
+    """Process all images for a trade_date via OCR and update daily_hot_info.short_reason.
+
+    Returns a dict with OCR processing statistics.
+    """
+    target = sqlite_path or settings.sqlite_path
+    logger.info('OCR processing start. trade_date=%s', trade_date)
+
+    connection = _connect(target)
+    try:
+        # Fetch all images for this trade_date
+        cursor = connection.execute(
+            'SELECT summary_image_url FROM daily_hot_pic WHERE trade_date = ? ORDER BY summary_image_url',
+            [trade_date]
+        )
+        image_urls = [row[0] for row in cursor.fetchall()]
+
+        if not image_urls:
+            logger.info('No images to process for %s', trade_date)
+            return {'trade_date': trade_date, 'images_processed': 0, 'ocr_success': 0}
+
+        ocr_success_count = 0
+
+        for idx, image_url in enumerate(image_urls, 1):
+            logger.info('Processing image %d/%d: %s', idx, len(image_urls), image_url[:80])
+
+            # Download image to memory
+            image_data = _download_image_data(image_url)
+            if not image_data:
+                logger.warning('Skipped image %d due to download failure', idx)
+                continue
+
+            # Run OCR
+            ocr_text = _ocr_image_to_text(image_data)
+            if not ocr_text:
+                logger.warning('Skipped image %d due to empty OCR result', idx)
+                continue
+
+            # Truncate to 500 chars (reasonable limit for short_reason field)
+            short_reason = ocr_text[:500]
+
+            # Update all daily_hot_info rows for this date with the OCR result
+            # (all rows share the same set of daily_hot_pic, so they should all get the same short_reason)
+            connection.execute(
+                'UPDATE daily_hot_info SET short_reason = ? WHERE trade_date = ? AND short_reason = ?',
+                [short_reason, trade_date, '']
+            )
+            logger.info('Updated short_reason for trade_date=%s with OCR result (len=%d)', trade_date,
+                        len(short_reason))
+            ocr_success_count += 1
+            break  # Only process the first successful image per day (复盤圖片 usually contains full summary)
+
+        connection.commit()
+    finally:
+        connection.close()
+
+    logger.info('OCR processing done. trade_date=%s images_processed=%d ocr_success=%d',
+                trade_date, len(image_urls), ocr_success_count)
+
+    return {
+        'trade_date': trade_date,
+        'images_processed': len(image_urls),
+        'ocr_success': ocr_success_count,
+    }
