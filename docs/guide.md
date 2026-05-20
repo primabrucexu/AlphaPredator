@@ -27,6 +27,7 @@
   - [当前执行进度](agent/current-progress.md)
 - **要查近期改造方案 / 历史计划**
   - [Phase 2 最新文档设计改造规划](agent/phase-phase2-latest-design-refactor-plan.md)
+  - [Phase 2 短线情绪评分与页面设计](agent/phase-phase2-sentiment-overview-scoring-design.md)
   - [Phase 1 数据源 / 存储 / 任务对齐计划](plans/2026-05-14-phase1-data-source-storage-task-alignment.md)
   - [Phase 1 / Phase 2 数据源对齐计划](plans/2026-05-14-phase1-phase2-data-source-alignment.md)
 
@@ -82,6 +83,7 @@
 - [docs/agent 使用说明](agent/README.md)：agent 工作文档的目录职责、命名规范与推荐模板。
 - [当前执行进度](agent/current-progress.md)：记录当前阶段、上一步完成内容、下一步待做任务与已知阻塞。
 - [Phase 2 最新文档设计改造规划](agent/phase-phase2-latest-design-refactor-plan.md)：对照最新文档梳理代码差距与改造顺序。
+- [Phase 2 短线情绪评分与页面设计](agent/phase-phase2-sentiment-overview-scoring-design.md)：定义短线情绪页面信息架构、情绪温度公式、板块影响公式与所需数据清单。
 
 ## 历史计划与专项方案（docs/plans）
 
