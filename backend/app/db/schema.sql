@@ -67,29 +67,6 @@ CREATE TABLE IF NOT EXISTS data_range_meta
     updated_at        TEXT    NOT NULL DEFAULT ''
 );
 
--- ── 韭研公社 ─────────────────────────────────────────────────────────────────
-
-CREATE TABLE IF NOT EXISTS jygs_auth
-(
-    id              INTEGER PRIMARY KEY,
-    auth_cookie     TEXT    NOT NULL DEFAULT '',
-    updated_at      TEXT    NOT NULL DEFAULT '',
-    last_checked_at TEXT    NOT NULL DEFAULT '',
-    is_valid        INTEGER NOT NULL DEFAULT 0,
-    last_error      TEXT    NOT NULL DEFAULT ''
-);
-
-CREATE TABLE IF NOT EXISTS jygs_sync_log
-(
-    slot_key     TEXT PRIMARY KEY,
-    trade_date   TEXT NOT NULL,
-    mode         TEXT NOT NULL,
-    status       TEXT NOT NULL,
-    message      TEXT NOT NULL DEFAULT '',
-    triggered_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_jygs_sync_log_trade_date ON jygs_sync_log (trade_date);
 
 -- ── 韭研公社每日复盘数据 ──────────────────────────────────────────────────────
 

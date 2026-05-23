@@ -135,6 +135,13 @@ def test_generate_date_list_empty_when_start_after_end() -> None:
     assert dates == []
 
 
+def test_generate_date_list_weekdays_only_skips_weekends() -> None:
+    # 20240101 (Mon) ~ 20240107 (Sun): 5 weekdays + 2 weekend days
+    dates = _generate_date_list('20240101', '20240107', weekdays_only=True)
+    assert dates == ['20240101', '20240102', '20240103', '20240104', '20240105']
+    # Saturday 20240106 and Sunday 20240107 are skipped
+
+
 # ---------------------------------------------------------------------------
 # Unit: create_task
 # ---------------------------------------------------------------------------

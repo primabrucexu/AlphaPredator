@@ -114,8 +114,10 @@ def test_import_market_data_batch_populates_local_store(tmp_path: Path) -> None:
 
     detail = service.get_stock_detail('300308')
     assert detail.trade_date == '2026-04-30'
-    assert detail.stock_name == '中际旭创'
-    assert detail.sectors == ['AI 算力', 'CPO']
+    # stock_name 来自 stock_list 表；importer 不写 stock_list，因此回退到 stock_code
+    assert detail.stock_name == '300308'
+    # sectors 在 stock_profiles 删除后始终为空
+    assert detail.sectors == []
     assert detail.key_indicators.ma5 == 163.51
     assert detail.key_indicators.ma10 is None
     assert detail.key_indicators.ma20 is None

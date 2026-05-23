@@ -244,6 +244,32 @@ export interface HotReviewImagesResponse {
     images: HotReviewImageItem[];
 }
 
+export interface HotReviewTableRow {
+  trade_date: string;
+  stock_code: string;
+  stock_name: string;
+  limit_up_time: string;
+  streak_text: string;
+  hot_theme: string;
+  reason: string;
+  short_reason: string;
+}
+
+export interface HotReviewTableResponse {
+  trade_date: string;
+  rows: HotReviewTableRow[];
+}
+
+export interface HotSectorAggregatedItem {
+  name: string;
+  counts: Record<string, number>;
+}
+
+export interface HotSectorAggregatedResponse {
+  windows: number[];
+  sectors: HotSectorAggregatedItem[];
+}
+
 // ---------------------------------------------------------------------------
 // HTTP helpers
 // ---------------------------------------------------------------------------
@@ -442,18 +468,19 @@ export async function clearJygsSession(): Promise<void> {
 // Sentiment API functions
 // ---------------------------------------------------------------------------
 
-export function getHotSectorHistory(days: number = 7): Promise<HotSectorHistoryResponse> {
-  return fetchJson<HotSectorHistoryResponse>(
-    `/api/market/hot-sector-history?days=${days}`,
-  );
+export function getHotSectorHistory(days: number = 7, excludeSt: boolean = true): Promise<HotSectorHistoryResponse> {
+  const params = new URLSearchParams({ days: String(days), exclude_st: String(excludeSt) });
+  return fetchJson<HotSectorHistoryResponse>(`/api/market/hot-sector-history?${params.toString()}`);
 }
 
 export function getLimitUpStreaks(
   tradeDate?: string,
   minBoards: number = 2,
+  excludeSt: boolean = true,
 ): Promise<LimitUpStreaksResponse> {
   const query = new URLSearchParams({ min_boards: String(minBoards) });
   if (tradeDate) query.set('trade_date', tradeDate);
+  query.set('exclude_st', String(excludeSt));
   return fetchJson<LimitUpStreaksResponse>(
     `/api/market/limit-up-streaks?${query.toString()}`,
   );
@@ -466,5 +493,21 @@ export function getHotReviewImages(tradeDate?: string): Promise<HotReviewImagesR
     return fetchJson<HotReviewImagesResponse>(
         `/api/market/hot-review-images${suffix ? `?${suffix}` : ''}`,
     );
+}
+
+export function getHotReviewTable(
+  tradeDate?: string,
+  excludeSt: boolean = true,
+): Promise<HotReviewTableResponse> {
+  const query = new URLSearchParams({ exclude_st: String(excludeSt) });
+  if (tradeDate) query.set('trade_date', tradeDate);
+  return fetchJson<HotReviewTableResponse>(`/api/market/hot-review-table?${query.toString()}`);
+}
+
+export function getHotSectorAggregated(
+  excludeSt: boolean = true,
+): Promise<HotSectorAggregatedResponse> {
+  const query = new URLSearchParams({ exclude_st: String(excludeSt) });
+  return fetchJson<HotSectorAggregatedResponse>(`/api/market/hot-sector-aggregated?${query.toString()}`);
 }
 

@@ -1,7 +1,7 @@
 """Daily incremental updater (DuckDB-first).
 
 Daily quote facts are persisted into DuckDB ``day_level_trade_data`` only.
-SQLite is used for metadata tables (e.g. stock profiles), not daily quote facts.
+SQLite is used for metadata tables, not daily quote facts.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from typing import Any
 
 from app.core.settings import settings
 from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_parent, ensure_duckdb_schema
-from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
+from app.db.sqlite import ensure_sqlite_schema
 from app.modules.market_data.data_source import (
     fetch_daily_bars_by_date,
     fetch_spot_snapshot,
@@ -50,17 +50,14 @@ def run_daily_update(
     snapshot_rows = fetch_spot_snapshot(trade_date, sqlite_path=target_sqlite)
     stock_pool = fetch_stock_pool(snapshot_rows, sqlite_path=target_sqlite)
 
-    # Upsert stock profile metadata only (no daily quote facts in SQLite)
     ensure_sqlite_schema(target_sqlite)
-    _upsert_sqlite_profiles(target_sqlite, stock_pool)
 
     # Fetch today's bars and append to DuckDB / Parquet
     logger.info('Daily update: fetching today\'s bars for %d stocks …', len(stock_pool))
     today_bars = _fetch_today_bars(stock_pool, trade_date, sqlite_path=target_sqlite)
     _upsert_duckdb(target_duckdb, target_parquet, today_bars)
 
-    # Refresh data-range metadata from DuckDB and rebuild market snapshot JSON
-    _update_data_range_meta(target_sqlite, target_duckdb)
+    # Rebuild market snapshot JSON
     _rebuild_snapshot(target_snapshot, trade_date, snapshot_rows)
 
     logger.info(
@@ -83,37 +80,6 @@ def run_daily_update(
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-
-def _upsert_sqlite_profiles(
-    sqlite_path: Path,
-    stock_pool: list[dict[str, Any]],
-) -> None:
-    conn = connect_sqlite(sqlite_path)
-    try:
-        conn.execute('PRAGMA foreign_keys = ON')
-        conn.executemany(
-            '''
-            INSERT INTO stock_profiles (stock_code, stock_name, sectors_json, ai_quick_summary)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(stock_code) DO UPDATE SET
-                stock_name = excluded.stock_name
-            ''',
-            [
-                (
-                    r['stock_code'],
-                    r['stock_name'],
-                    json.dumps(
-                        [s.strip() for s in r.get('sectors', '').split('|') if s.strip()],
-                        ensure_ascii=False,
-                    ),
-                    r.get('ai_quick_summary', ''),
-                )
-                for r in stock_pool
-            ],
-        )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def _fetch_today_bars(
@@ -233,30 +199,3 @@ def _rebuild_snapshot(
     market_snapshot_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
 
 
-def _update_data_range_meta(sqlite_path: Path, duckdb_path: Path) -> None:
-
-    dconn = connect_duckdb(duckdb_path)
-    try:
-        row = dconn.execute(
-            '''SELECT MIN(trade_date) AS min_td,
-                      MAX(trade_date) AS max_td,
-                      COUNT(DISTINCT trade_date) AS cnt
-               FROM day_level_trade_data'''
-        ).fetchone()
-    finally:
-        dconn.close()
-
-    if not row or not row[0]:
-        return
-
-    conn = connect_sqlite(sqlite_path)
-    try:
-        conn.execute(
-            '''INSERT OR REPLACE INTO data_range_meta
-               (dataset, min_trade_date, max_trade_date, trading_day_count, updated_at)
-               VALUES ('day_level_trade_data', ?, ?, ?, datetime('now'))''',
-            (str(row[0]), str(row[1]), int(row[2])),
-        )
-        conn.commit()
-    finally:
-        conn.close()

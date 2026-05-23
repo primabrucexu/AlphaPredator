@@ -51,14 +51,19 @@ def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
-def _generate_date_list(start_date: str, end_date: str) -> list[str]:
-    """Return all YYYYMMDD dates from *start_date* to *end_date* inclusive (ascending)."""
+def _generate_date_list(start_date: str, end_date: str, *, weekdays_only: bool = False) -> list[str]:
+    """Return all YYYYMMDD dates from *start_date* to *end_date* inclusive (ascending).
+
+    *weekdays_only*: when True, skip weekends (Saturday=5, Sunday=6).
+    Used for JYGS_REVIEW to avoid fetching non-trading days.
+    """
     start = datetime.strptime(start_date, '%Y%m%d').date()
     end = datetime.strptime(end_date, '%Y%m%d').date()
     result: list[str] = []
     current = start
     while current <= end:
-        result.append(current.strftime('%Y%m%d'))
+        if not weekdays_only or current.weekday() < 5:  # 0=Mon … 4=Fri, 5=Sat, 6=Sun
+            result.append(current.strftime('%Y%m%d'))
         current += timedelta(days=1)
     return result
 
@@ -148,8 +153,8 @@ def create_task(
         end_date = today
         total_items = 1
     elif task_type == 'JYGS_REVIEW':
-        # Date-based loop: total_items = number of days
-        dates = _generate_date_list(start_date, end_date)
+        # Date-based loop: total_items = number of weekdays (skip weekends)
+        dates = _generate_date_list(start_date, end_date, weekdays_only=True)
         total_items = len(dates)
     else:  # MARKET_DATA
         # Stock-based loop: total_items will be set after resolving stock universe in _run_task
@@ -319,14 +324,13 @@ def get_overview(sqlite_path: Path | None = None) -> dict[str, Any]:
     repo = _task_repo(sqlite_path)
     running_row = repo.get_running_task()
     latest_row = repo.get_latest_finished_task()
-    meta_row = repo.get_data_range_meta()
+    range_row = repo.get_market_data_range()
     return {
         'running_task': running_row,
         'latest_task': latest_row,
         'data_range': {
-            'min_trade_date': meta_row['min_trade_date'] if meta_row else None,
-            'max_trade_date': meta_row['max_trade_date'] if meta_row else None,
-            'trading_day_count': meta_row['trading_day_count'] if meta_row else 0,
+            'min_trade_date': range_row['min_trade_date'] if range_row else None,
+            'max_trade_date': range_row['max_trade_date'] if range_row else None,
         },
     }
 
@@ -431,7 +435,7 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
 
         else:  # JYGS_REVIEW
             # ── 韭研公社复盘：按日期迭代 ──────────────────────────────────────
-            dates = _generate_date_list(task['start_date'], task['end_date'])
+            dates = _generate_date_list(task['start_date'], task['end_date'], weekdays_only=True)
             total_dates = len(dates)
             if scoped_retry_label:
                 dates = [d for d in dates if d == scoped_retry_label]
@@ -492,9 +496,8 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
             logger.info('Task %s: skipped SUCCESS finalization because task is no longer RUNNING', task_id)
             return
 
-        # Only update data_range_meta and export parquet for MARKET_DATA tasks
+        # Only export parquet for MARKET_DATA tasks
         if task_type == 'MARKET_DATA':
-            _update_data_range_meta(sqlite_path, duckdb_path)
             try:
                 _export_parquet(duckdb_path)
             except Exception as exc:  # noqa: BLE001
@@ -898,34 +901,6 @@ def _export_parquet(duckdb_path: Path | None = None) -> None:
 def _is_task_terminated(task_id: str, sqlite_path: Path | None) -> bool:
     return _task_repo(sqlite_path).is_task_terminated(task_id)
 
-
-def _update_data_range_meta(sqlite_path: Path | None, duckdb_path: Path | None = None) -> None:
-    """Refresh data_range_meta from DuckDB day_level_trade_data contents."""
-    dconn = _connect_duckdb(duckdb_path)
-    try:
-        row = dconn.execute(
-            '''SELECT MIN(trade_date) AS min_td,
-                      MAX(trade_date) AS max_td,
-                      COUNT(DISTINCT trade_date) AS cnt
-               FROM day_level_trade_data'''
-        ).fetchone()
-    finally:
-        dconn.close()
-
-    if not row or not row[0]:
-        return
-
-    conn = _connect(sqlite_path)
-    try:
-        conn.execute(
-                '''INSERT OR REPLACE INTO data_range_meta
-                   (dataset, min_trade_date, max_trade_date, trading_day_count, updated_at)
-                   VALUES ('day_level_trade_data', ?, ?, ?, ?)''',
-                (str(row[0]), str(row[1]), int(row[2]), _now_iso()),
-        )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def _detect_incremental_start(duckdb_path: Path | None = None) -> str | None:

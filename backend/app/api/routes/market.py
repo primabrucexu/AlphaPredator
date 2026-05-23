@@ -2,8 +2,10 @@ from fastapi import APIRouter, Query
 
 from app.modules.market_data.service import market_data_service
 from app.schemas.market import (
+    HotSectorAggregatedResponse,
     HotSectorHistoryResponse,
     HotReviewImagesResponse,
+    HotReviewTableResponse,
     LimitUpStreaksResponse,
     MarketOverviewResponse,
     StockBarsRangeResponse,
@@ -57,16 +59,18 @@ def resolve_stock(q: str = Query(..., min_length=1, description='股票代码或
 @router.get('/hot-sector-history', response_model=HotSectorHistoryResponse)
 def get_hot_sector_history(
     days: int = Query(7, ge=1, le=60, description='回看最近交易日数量'),
+    exclude_st: bool = Query(True, description='是否排除ST股票'),
 ) -> HotSectorHistoryResponse:
-    return market_data_service.get_hot_sector_history(days=days)
+    return market_data_service.get_hot_sector_history(days=days, exclude_st=exclude_st)
 
 
 @router.get('/limit-up-streaks', response_model=LimitUpStreaksResponse)
 def get_limit_up_streaks(
     trade_date: str | None = Query(None, description='交易日（YYYY-MM-DD），默认最新有数据交易日'),
     min_boards: int = Query(2, ge=1, le=20, description='最小连板数阈值'),
+    exclude_st: bool = Query(True, description='是否排除ST股票'),
 ) -> LimitUpStreaksResponse:
-    return market_data_service.get_limit_up_streaks(trade_date=trade_date, min_boards=min_boards)
+    return market_data_service.get_limit_up_streaks(trade_date=trade_date, min_boards=min_boards, exclude_st=exclude_st)
 
 
 @router.get('/hot-review-images', response_model=HotReviewImagesResponse)
@@ -74,3 +78,21 @@ def get_hot_review_images(
         trade_date: str | None = Query(None, description='交易日（YYYY-MM-DD），默认最新有数据交易日'),
 ) -> HotReviewImagesResponse:
     return market_data_service.get_hot_review_images(trade_date=trade_date)
+
+
+@router.get('/hot-review-table', response_model=HotReviewTableResponse)
+def get_hot_review_table(
+        trade_date: str | None = Query(None, description='交易日（YYYY-MM-DD），默认最新有数据交易日'),
+        exclude_st: bool = Query(True, description='是否排除ST股票'),
+) -> HotReviewTableResponse:
+    return market_data_service.get_hot_review_table(trade_date=trade_date, exclude_st=exclude_st)
+
+
+@router.get('/hot-sector-aggregated', response_model=HotSectorAggregatedResponse)
+def get_hot_sector_aggregated(
+    exclude_st: bool = Query(True, description='是否排除ST股票'),
+) -> HotSectorAggregatedResponse:
+    """返回 5/10/20 交易日内各板块去重涨停家数（同一只股票多日只统计一次）。"""
+    return market_data_service.get_hot_sector_aggregated(windows=[5, 10, 20], exclude_st=exclude_st)
+
+

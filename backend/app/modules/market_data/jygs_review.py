@@ -13,6 +13,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
+import numpy as np
 from PIL import Image
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
@@ -206,8 +207,20 @@ def check_jygs_auth_available(sqlite_path: Path | None = None) -> dict[str, Any]
     return result
 
 
-def _extract_theme_stock_map(field_payload: dict[str, Any]) -> dict[str, set[str]]:
-    mapping: dict[str, set[str]] = {}
+def _extract_theme_stock_map(
+    field_payload: dict[str, Any],
+) -> tuple[dict[str, set[str]], dict[str, dict[str, Any]]]:
+    """从 /action/field 响应提取题材映射和完整股票数据。
+
+    /action/field 和 /action/list 共用同一 StockItem 结构，
+    field 里每个 category.list 已包含 article.action_info（time/num/expound）。
+
+    Returns:
+        theme_map:        code → set of theme names
+        stock_data_map:   code → 完整 StockItem dict（含 name, article.action_info）
+    """
+    theme_map: dict[str, set[str]] = {}
+    stock_data_map: dict[str, dict[str, Any]] = {}
     for category in field_payload.get('data') or []:
         theme = str(category.get('name') or '').strip()
         if not theme:
@@ -216,8 +229,11 @@ def _extract_theme_stock_map(field_payload: dict[str, Any]) -> dict[str, set[str
             code = _normalize_stock_code(stock.get('code'))
             if not code:
                 continue
-            mapping.setdefault(code, set()).add(theme)
-    return mapping
+            theme_map.setdefault(code, set()).add(theme)
+            # 保留第一次遇到的完整 StockItem（含 article.action_info）
+            if code not in stock_data_map:
+                stock_data_map[code] = stock
+    return theme_map, stock_data_map
 
 
 def _extract_diagram_urls(diagram_payload: dict[str, Any]) -> list[str]:
@@ -273,32 +289,9 @@ def sync_hot_review_by_date(trade_date: str, sqlite_path: Path | None = None) ->
 
     diagram_payload = _post_json('/api/v1/action/diagram-url', {'date': trade_date}, cookie=cookie)
     field_payload = _post_json('/api/v1/action/field', {'date': trade_date, 'pc': 1}, cookie=cookie)
-    list_payload = _post_json(
-        '/api/v1/action/list',
-        {
-            'action_field_id': f'recommend,{trade_date}',
-            'pc': 1,
-            'start': 1,
-            'limit': 200,
-            'sort_price': 0,
-            'sort_range': 0,
-            'sort_time': 0,
-        },
-        cookie=cookie,
-    )
 
     summary_image_urls = _extract_diagram_urls(diagram_payload)
-    theme_map = _extract_theme_stock_map(field_payload)
-
-    # Merge stock rows from list API and theme mapping
-    stock_rows_by_code: dict[str, dict[str, Any]] = {}
-    for stock in list_payload.get('data') or []:
-        code = _normalize_stock_code(stock.get('code'))
-        if not code:
-            continue
-        stock_rows_by_code[code] = stock
-    for code in theme_map:
-        stock_rows_by_code.setdefault(code, {})
+    theme_map, stock_rows_by_code = _extract_theme_stock_map(field_payload)
 
     # Write to daily_hot_pic table (復盤圖片)
     connection = _connect(target)
@@ -318,6 +311,7 @@ def sync_hot_review_by_date(trade_date: str, sqlite_path: Path | None = None) ->
         for code, stock in stock_rows_by_code.items():
             article = stock.get('article') or {}
             action_info = article.get('action_info') or {}
+            # field API 和 list API 共用 StockItem 结构，name/action_info 均来自同一路径
             stock_name = str(stock.get('name') or '').strip()
             streak_text = str(action_info.get('num') or '').strip()
             reason_raw = str(action_info.get('expound') or '').strip()
@@ -333,15 +327,30 @@ def sync_hot_review_by_date(trade_date: str, sqlite_path: Path | None = None) ->
                 [
                     trade_date,
                     limit_up_time,
-                    code,  # stock_code as TEXT (6-digit string, e.g. '000711')
+                    code,
                     stock_name,
                     streak_text,
                     hot_theme,
                     reason_raw,
                     'jygs',
-                    '',  # short_reason: placeholder, populated by OCR in a future phase
+                    '',
                 ],
             )
+
+        # name 仍为空时从 stock_list 保底（field 某些 category 不返回 list，导致 stock_data_map 无此股）
+        connection.execute(
+            '''
+            UPDATE daily_hot_info
+            SET name = (
+                SELECT sl.name FROM stock_list sl
+                WHERE sl.code = daily_hot_info.stock_code
+                LIMIT 1
+            )
+            WHERE trade_date = ? AND name = ''
+              AND stock_code IN (SELECT code FROM stock_list)
+            ''',
+            [trade_date],
+        )
 
         connection.commit()
     finally:
@@ -479,53 +488,111 @@ def _download_image_data(image_url: str, timeout: float = 10.0) -> bytes | None:
         return None
 
 
-def _ocr_image_to_text(image_data: bytes) -> str:
-    """Run OCR on image bytes and extract text. Returns concatenated text or empty string if OCR fails."""
+def _parse_ocr_stock_summaries(image_data: bytes) -> dict[str, str]:
+    """从复盘简图中按行解析每只股票的涨停关键词（short_reason）。
+
+    图片为表格格式，每行包含：股票代码、涨停时间、涨停关键词，如：
+      "002552.SZ  09:25:00  HVLP铜箔+业绩预增+河西金矿+互联网金融"
+
+    使用 bounding box 的 Y 坐标将文本块聚类成行，
+    在包含股票代码（6位数字）的行中，取最右侧有意义的非时间/非代码文本作为关键词。
+
+    注意：涨停时间（limit_up_time）从 /action/field API 的 time 字段获取，不在此处解析。
+
+    Returns:
+        {6位股票代码: 涨停关键词}，无法解析时返回空 dict。
+    """
+    _STOCK_CODE_PAT = re.compile(r'(\d{6})[.\s]?[A-Za-z0-9]{2}')
+    _SKIP_PAT = re.compile(r'^[\d:\.\-/;]+$')  # 纯数字/时间/分隔符
+    Y_THRESHOLD = 20  # 同行 Y 偏差像素阈值
+
     try:
         t0 = time.monotonic()
         ocr_engine = RapidOCR()
-        image_stream = io.BytesIO(image_data)
-        img = Image.open(image_stream)
-
-        # RapidOCR returns (results, elapsed_time) tuple
-        # results is a list of [bbox, text, confidence] or None if no text detected
-        ocr_result = ocr_engine(img)
-
-        # Handle different return formats from RapidOCR
-        if isinstance(ocr_result, tuple):
-            result, elapsed = ocr_result
-        else:
-            result = ocr_result
-            elapsed = 0
+        img = Image.open(io.BytesIO(image_data))
+        result = ocr_engine(img)
 
         elapsed_ms = int((time.monotonic() - t0) * 1000)
 
-        if not result:
-            logger.debug('OCR returned empty result. elapsed_ms=%d', elapsed_ms)
-            return ''
+        if not hasattr(result, 'txts') or not result.txts or not hasattr(result, 'boxes'):
+            logger.debug('OCR returned no structured result. elapsed_ms=%d', elapsed_ms)
+            return {}
 
-        # Concatenate all recognized text lines
-        text_lines = []
-        for item in result:
-            if item and len(item) > 1:
-                # item format: [bbox, text, confidence]
-                text = str(item[1] or '')
-                if text:
-                    text_lines.append(text)
+        txts = result.txts
+        boxes = result.boxes
 
-        full_text = ''.join(text_lines)
-        logger.debug('OCR extracted %d lines, total %d chars. elapsed_ms=%d', len(text_lines), len(full_text),
-                     elapsed_ms)
+        # 构建 (text, center_y, center_x) 列表
+        items = [
+            {
+                'txt': str(txt),
+                'y': float(np.mean(boxes[i][:, 1])),
+                'x': float(np.mean(boxes[i][:, 0])),
+            }
+            for i, txt in enumerate(txts)
+        ]
+        items.sort(key=lambda x: x['y'])
 
-        return full_text
+        # 按行聚类
+        rows: list[list[dict]] = []
+        cur: list[dict] = [items[0]] if items else []
+        for item in items[1:]:
+            if abs(item['y'] - cur[-1]['y']) <= Y_THRESHOLD:
+                cur.append(item)
+            else:
+                if cur:
+                    rows.append(sorted(cur, key=lambda x: x['x']))
+                cur = [item]
+        if cur:
+            rows.append(sorted(cur, key=lambda x: x['x']))
+
+        # 从每行提取股票代码和最右侧关键词
+        stock_summaries: dict[str, str] = {}
+        for row in rows:
+            row_texts = [item['txt'] for item in row]
+
+            # 找股票代码（取第一个匹配）
+            stock_code = None
+            for txt in row_texts:
+                m = _STOCK_CODE_PAT.search(txt)
+                if m:
+                    stock_code = m.group(1)
+                    break
+            if not stock_code:
+                continue
+
+            # 从右往左找第一个有意义的文本作为关键词
+            row_summary = ''
+            for item in reversed(row):
+                t = item['txt'].strip()
+                if not t or len(t) <= 2:
+                    continue
+                if _SKIP_PAT.match(t):  # 纯数字/时间
+                    continue
+                if _STOCK_CODE_PAT.search(t):  # 股票代码本身
+                    continue
+                row_summary = t
+                break
+
+            if row_summary:
+                stock_summaries[stock_code] = row_summary
+
+        logger.debug(
+            'OCR parsed %d stock summaries from image. elapsed_ms=%d',
+            len(stock_summaries), elapsed_ms,
+        )
+        return stock_summaries
+
     except Exception as exc:  # noqa: BLE001
-        logger.warning('OCR processing failed: %s', exc)
+        logger.warning('OCR stock summary parsing failed: %s', exc)
         logger.debug('OCR traceback: %s', traceback.format_exc())
-        return ''
+        return {}
 
 
 def _process_hot_review_ocr(trade_date: str, sqlite_path: Path | None = None) -> dict[str, Any]:
     """Process all images for a trade_date via OCR and update daily_hot_info.short_reason.
+
+    每只股票的 short_reason 存储其在图片对应行的涨停关键词（最右列），
+    而非整张图片的 OCR 文本。
 
     Returns a dict with OCR processing statistics.
     """
@@ -545,43 +612,39 @@ def _process_hot_review_ocr(trade_date: str, sqlite_path: Path | None = None) ->
             logger.info('No images to process for %s', trade_date)
             return {'trade_date': trade_date, 'images_processed': 0, 'ocr_success': 0}
 
+        # 合并所有图片的解析结果（通常只有一张图）
+        merged: dict[str, str] = {}
         ocr_success_count = 0
-
         for idx, image_url in enumerate(image_urls, 1):
             logger.info('Processing image %d/%d: %s', idx, len(image_urls), image_url[:80])
-
-            # Download image to memory
             image_data = _download_image_data(image_url)
             if not image_data:
                 logger.warning('Skipped image %d due to download failure', idx)
                 continue
+            summaries = _parse_ocr_stock_summaries(image_data)
+            if summaries:
+                merged.update(summaries)
+                ocr_success_count += 1
+            else:
+                logger.warning('Skipped image %d: no stock summaries parsed', idx)
 
-            # Run OCR
-            ocr_text = _ocr_image_to_text(image_data)
-            if not ocr_text:
-                logger.warning('Skipped image %d due to empty OCR result', idx)
-                continue
-
-            # Truncate to 500 chars (reasonable limit for short_reason field)
-            short_reason = ocr_text[:500]
-
-            # Update all daily_hot_info rows for this date with the OCR result
-            # (all rows share the same set of daily_hot_pic, so they should all get the same short_reason)
-            connection.execute(
-                'UPDATE daily_hot_info SET short_reason = ? WHERE trade_date = ? AND short_reason = ?',
-                [short_reason, trade_date, '']
-            )
-            logger.info('Updated short_reason for trade_date=%s with OCR result (len=%d)', trade_date,
-                        len(short_reason))
-            ocr_success_count += 1
-            break  # Only process the first successful image per day (复盤圖片 usually contains full summary)
+        # 按股票代码逐行更新 short_reason（涨停时间由 /action/field API 提供，不在此处更新）
+        updated = 0
+        for stock_code, summary in merged.items():
+            rows_updated = connection.execute(
+                'UPDATE daily_hot_info SET short_reason = ? WHERE trade_date = ? AND stock_code = ?',
+                [summary, trade_date, stock_code],
+            ).rowcount
+            updated += rows_updated
 
         connection.commit()
+        logger.info(
+            'OCR done. trade_date=%s images=%d ocr_success=%d stocks_updated=%d',
+            trade_date, len(image_urls), ocr_success_count, updated,
+        )
     finally:
         connection.close()
 
-    logger.info('OCR processing done. trade_date=%s images_processed=%d ocr_success=%d',
-                trade_date, len(image_urls), ocr_success_count)
 
     return {
         'trade_date': trade_date,

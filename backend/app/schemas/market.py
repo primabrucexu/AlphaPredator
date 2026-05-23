@@ -179,3 +179,33 @@ class HotReviewImageItem(BaseModel):
 class HotReviewImagesResponse(BaseModel):
     trade_date: str
     images: list[HotReviewImageItem] = Field(default_factory=list)
+
+
+class HotReviewTableRow(BaseModel):
+    trade_date: str
+    stock_code: str
+    stock_name: str
+    limit_up_time: str
+    streak_text: str
+    hot_theme: str
+    reason: str
+    short_reason: str
+
+
+class HotReviewTableResponse(BaseModel):
+    trade_date: str
+    rows: list[HotReviewTableRow] = Field(default_factory=list)
+
+
+class HotSectorAggregatedItem(BaseModel):
+    """单个板块在多个时间窗口内的去重涨停家数。"""
+    name: str = Field(..., description='板块名称')
+    counts: dict[str, int] = Field(default_factory=dict, description='各窗口去重涨停家数，key 为天数字符串')
+
+
+class HotSectorAggregatedResponse(BaseModel):
+    """多日汇聚统计结果：各时间窗口内，同一只股票只统计一次。"""
+    windows: list[int] = Field(default_factory=list, description='统计窗口（交易日数）')
+    sectors: list[HotSectorAggregatedItem] = Field(default_factory=list, description='按最大窗口去重数降序')
+
+

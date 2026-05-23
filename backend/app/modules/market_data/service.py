@@ -10,6 +10,7 @@ from app.db.sqlite import connect_sqlite
 from app.modules.market_data.data_source import _to_full_code
 from app.queries.market_queries import (
     get_hot_info_rows_by_date,
+    get_hot_info_table_rows_by_date,
     get_hot_info_trade_dates,
     get_latest_hot_info_trade_date,
     get_hot_pic_rows_by_date,
@@ -18,14 +19,17 @@ from app.queries.market_queries import (
 )
 from app.repositories.market_metadata_repo import MarketMetadataRepo
 from app.repositories.stock_list_repo import StockListRepo
-from app.repositories.stock_profile_repo import StockProfileRepo
 from app.schemas.market import (
     DailyBar,
+    HotSectorAggregatedItem,
+    HotSectorAggregatedResponse,
     HotSectorHistoryDay,
     HotSectorHistoryResponse,
     HotSectorHistorySector,
     HotReviewImageItem,
     HotReviewImagesResponse,
+    HotReviewTableResponse,
+    HotReviewTableRow,
     HotSectorItem,
     LimitUpStreakItem,
     LimitUpStreaksResponse,
@@ -55,7 +59,6 @@ class MarketDataService:
         self._sqlite_path = sqlite_path or settings.sqlite_path
         self._duckdb_path = duckdb_path or settings.duckdb_path
         self._stock_list_repo = StockListRepo(self._sqlite_path)
-        self._stock_profile_repo = StockProfileRepo(self._sqlite_path)
         self._metadata_repo = MarketMetadataRepo(self._sqlite_path)
 
     def get_market_overview(self) -> MarketOverviewResponse:
@@ -122,7 +125,23 @@ class MarketDataService:
             indicators=StockIndicatorSeries(**indicators),
         )
 
-    def get_hot_sector_history(self, days: int = 7) -> HotSectorHistoryResponse:
+    @staticmethod
+    def _is_st_stock(name: str) -> bool:
+        """Return True if the stock name indicates an ST stock (contains 'ST')."""
+        return 'ST' in name.upper()
+
+    @staticmethod
+    def _is_st_row(row: Any) -> bool:
+        """Return True if a daily_hot_info row is ST-related.
+
+        Checks both ``name`` (stock name) and ``hot_theme`` because many rows
+        have an empty ``name`` but still belong to the 'ST板块' theme.
+        """
+        name = str(row['name'] or '').strip()
+        hot_theme = str(row['hot_theme'] or '').strip()
+        return 'ST' in name.upper() or 'ST' in hot_theme.upper()
+
+    def get_hot_sector_history(self, days: int = 7, exclude_st: bool = True) -> HotSectorHistoryResponse:
         if not self._sqlite_path.exists():
             return HotSectorHistoryResponse()
 
@@ -136,7 +155,7 @@ class MarketDataService:
             days_payload: list[HotSectorHistoryDay] = []
             for trade_date in trade_dates:
                 rows = get_hot_info_rows_by_date(connection, trade_date)
-                sectors = self._build_hot_sector_history_sectors(rows)
+                sectors = self._build_hot_sector_history_sectors(rows, exclude_st=exclude_st)
                 days_payload.append(HotSectorHistoryDay(trade_date=trade_date, sectors=sectors))
         finally:
             connection.close()
@@ -147,6 +166,7 @@ class MarketDataService:
         self,
         trade_date: str | None = None,
         min_boards: int = 2,
+        exclude_st: bool = True,
     ) -> LimitUpStreaksResponse:
         if not self._sqlite_path.exists():
             return LimitUpStreaksResponse(trade_date=trade_date or '', streaks=[])
@@ -164,6 +184,9 @@ class MarketDataService:
             rows = get_hot_info_rows_by_date(connection, target_trade_date)
             streak_rows: list[dict[str, Any]] = []
             for row in rows:
+                stock_name = str(row['name'] or '')
+                if exclude_st and self._is_st_row(row):
+                    continue
                 board_count = parse_board_count(str(row['streak_text'] or ''))
                 if board_count < target_min_boards:
                     continue
@@ -174,7 +197,7 @@ class MarketDataService:
                     {
                         'trade_date': str(row['trade_date']),
                         'stock_code': stock_code,
-                        'stock_name': str(row['name'] or ''),
+                        'stock_name': stock_name,
                         'board_count': board_count,
                         'limit_up_time': str(row['limit_up_time'] or ''),
                         'hot_theme': str(row['hot_theme'] or ''),
@@ -215,9 +238,124 @@ class MarketDataService:
 
         return HotReviewImagesResponse(trade_date=target_trade_date, images=images)
 
-    def _build_hot_sector_history_sectors(self, rows: list[Any]) -> list[HotSectorHistorySector]:
+    def get_hot_review_table(self, trade_date: str | None = None, exclude_st: bool = True) -> HotReviewTableResponse:
+        if not self._sqlite_path.exists():
+            return HotReviewTableResponse(trade_date=trade_date or '', rows=[])
+
+        connection = connect_sqlite(self._sqlite_path)
+        try:
+            target_trade_date = trade_date or get_latest_hot_info_trade_date(connection)
+            if not target_trade_date:
+                return HotReviewTableResponse(trade_date='', rows=[])
+
+            db_rows = get_hot_info_table_rows_by_date(connection, target_trade_date)
+            table_rows: list[HotReviewTableRow] = []
+            for row in db_rows:
+                stock_name = str(row['name'] or '').strip()
+                if exclude_st and self._is_st_row(row):
+                    continue
+                stock_code = str(row['stock_code'] or '').strip()
+                if stock_code.isdigit():
+                    stock_code = stock_code.zfill(6)
+                table_rows.append(
+                    HotReviewTableRow(
+                        trade_date=str(row['trade_date'] or ''),
+                        stock_code=stock_code,
+                        stock_name=stock_name,
+                        limit_up_time=str(row['limit_up_time'] or ''),
+                        streak_text=str(row['streak_text'] or ''),
+                        hot_theme=str(row['hot_theme'] or ''),
+                        reason=str(row['reason'] or ''),
+                        short_reason=str(row['short_reason'] or ''),
+                    )
+                )
+        finally:
+            connection.close()
+
+        return HotReviewTableResponse(trade_date=target_trade_date, rows=table_rows)
+
+    def get_hot_sector_aggregated(
+        self,
+        windows: list[int] | None = None,
+        exclude_st: bool = True,
+    ) -> HotSectorAggregatedResponse:
+        """返回多个时间窗口内各板块去重涨停家数。
+
+        同一只股票在同一个窗口内只统计一次。
+        ``windows`` 默认 [5, 10, 20]，单位为交易日。
+        """
+        if windows is None:
+            windows = [5, 10, 20]
+
+        if not self._sqlite_path.exists():
+            return HotSectorAggregatedResponse(windows=windows, sectors=[])
+
+        max_days = max(windows)
+        connection = connect_sqlite(self._sqlite_path)
+        try:
+            # 获取最近 max_days 个交易日（有数据的）
+            trade_dates = get_hot_info_trade_dates(connection, max_days)
+            if not trade_dates:
+                return HotSectorAggregatedResponse(windows=windows, sectors=[])
+
+            # 按日期顺序（升序）收集每天数据
+            # sector_stocks_by_date[trade_date][sector] = {stock_code, ...}
+            dated_rows: list[tuple[str, str, str]] = []  # (trade_date, sector, stock_code)
+            for trade_date in trade_dates:
+                rows = get_hot_info_rows_by_date(connection, trade_date)
+                for row in rows:
+                    if exclude_st and self._is_st_row(row):
+                        continue
+                    stock_code = str(row['stock_code'] or '').strip()
+                    if not stock_code:
+                        continue
+                    hot_theme = str(row['hot_theme'] or '').strip()
+                    if not hot_theme:
+                        continue
+                    # 拆分多板块（如 "AI芯片、创新药"）
+                    for sector in hot_theme.split('、'):
+                        sector = sector.strip()
+                        if sector:
+                            dated_rows.append((trade_date, sector, stock_code))
+        finally:
+            connection.close()
+
+        # 按各窗口聚合去重
+        # trade_dates 已是升序，取最后 W 个日期作为窗口
+        result_map: dict[str, dict[str, set[str]]] = {}  # sector → {window_str → set<stock_code>}
+        for w in windows:
+            window_dates = set(trade_dates[-w:]) if len(trade_dates) >= w else set(trade_dates)
+            w_str = str(w)
+            for trade_date, sector, stock_code in dated_rows:
+                if trade_date not in window_dates:
+                    continue
+                if sector not in result_map:
+                    result_map[sector] = {}
+                if w_str not in result_map[sector]:
+                    result_map[sector][w_str] = set()
+                result_map[sector][w_str].add(stock_code)
+
+        # 按最大窗口去重数降序排列
+        max_w_str = str(max(windows))
+        sectors_sorted = sorted(
+            result_map.items(),
+            key=lambda kv: -len(kv[1].get(max_w_str, set())),
+        )
+
+        sectors = [
+            HotSectorAggregatedItem(
+                name=sector,
+                counts={w_str: len(stocks) for w_str, stocks in counts.items()},
+            )
+            for sector, counts in sectors_sorted
+        ]
+        return HotSectorAggregatedResponse(windows=windows, sectors=sectors)
+
+    def _build_hot_sector_history_sectors(self, rows: list[Any], exclude_st: bool = True) -> list[HotSectorHistorySector]:
         stats: dict[str, dict[str, int]] = {}
         for row in rows:
+            if exclude_st and self._is_st_row(row):
+                continue
             sector_name = str(row['hot_theme'] or '').strip()
             if not sector_name:
                 continue
@@ -567,7 +705,6 @@ class MarketDataService:
             return None
 
         stock_name = self._load_stock_name_map().get(stock_code, stock_code)
-        stock_profile = self._load_stock_profile_from_sqlite(stock_code)
         current_price = float(row[4])
         prev_close = float(row[6]) if row[6] is not None else current_price
         change_amount = round(current_price - prev_close, 4)
@@ -576,7 +713,7 @@ class MarketDataService:
         return {
             'trade_date': str(row[0]),
             'stock_code': stock_code,
-            'stock_name': stock_profile.get('stock_name') or stock_name,
+            'stock_name': stock_name,
             'current_price': current_price,
             'change_amount': change_amount,
             'change_pct': change_pct,
@@ -585,8 +722,8 @@ class MarketDataService:
             'low_price': float(row[3]),
             'turnover_amount_billion': float(row[5] or 0.0),
             'turnover_rate': 0.0,
-            'sectors': stock_profile.get('sectors', []),
-            'ai_quick_summary': stock_profile.get('ai_quick_summary', ''),
+            'sectors': [],
+            'ai_quick_summary': '',
         }
 
     def _load_market_overview_payload_from_snapshot(self) -> dict[str, Any] | None:
@@ -815,18 +952,6 @@ class MarketDataService:
             return {}
         return self._metadata_repo.build_stock_name_map()
 
-    def _load_stock_profile_from_sqlite(self, stock_code: str) -> dict[str, Any]:
-        """Load stock profile (name, sectors, ai_summary) from SQLite stock_profiles table."""
-        if not self._sqlite_path.exists():
-            return {}
-        row = self._metadata_repo.get_stock_profile_payload(stock_code)
-        if row is None:
-            return {}
-        return {
-            'stock_name': str(row['stock_name'] or ''),
-            'sectors': self._parse_sectors_json(str(row['sectors_json'] or '')),
-            'ai_quick_summary': str(row['ai_quick_summary'] or ''),
-        }
 
     def _serialize_daily_bar_rows(self, rows: list[tuple[Any, ...]]) -> list[dict[str, Any]]:
         return [
@@ -849,14 +974,6 @@ class MarketDataService:
                 turnover_amount_billion, is_up_limit, is_down_limit in rows
         ]
 
-    def _parse_sectors_json(self, sectors_json: str | None) -> list[str]:
-        if not sectors_json:
-            return []
-        try:
-            payload = json.loads(sectors_json)
-        except JSONDecodeError:
-            return []
-        return [str(item) for item in payload] if isinstance(payload, list) else []
 
     def _build_key_indicators(self, daily_bars: list[dict[str, Any]]) -> dict[str, Any]:
         closes = [float(bar['close_price']) for bar in daily_bars]

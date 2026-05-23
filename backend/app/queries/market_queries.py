@@ -70,6 +70,19 @@ def get_hot_info_rows_by_date(connection: Any, trade_date: str) -> list[Any]:
     ).fetchall()
 
 
+def get_hot_info_table_rows_by_date(connection: Any, trade_date: str) -> list[Any]:
+    """Return table-friendly daily_hot_info rows for *trade_date*."""
+    return connection.execute(
+        '''
+        SELECT trade_date, stock_code, name, limit_up_time, streak_text, hot_theme, reason, short_reason
+        FROM daily_hot_info
+        WHERE trade_date = ?
+        ORDER BY limit_up_time ASC, stock_code ASC
+        ''',
+        [trade_date],
+    ).fetchall()
+
+
 def get_latest_hot_info_trade_date(connection: Any) -> str:
     """Return the latest trade_date with any daily_hot_info records."""
     row = connection.execute(

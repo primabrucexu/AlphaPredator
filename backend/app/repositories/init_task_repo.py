@@ -269,16 +269,16 @@ class InitTaskRepo:
         finally:
             conn.close()
 
-    def get_data_range_meta(self) -> dict[str, Any] | None:
+    def get_market_data_range(self) -> dict[str, Any] | None:
+        """Return min/max trade date from successful MARKET_DATA tasks in task_info."""
         conn = self._connect()
         try:
             row = conn.execute(
-                "SELECT * FROM data_range_meta WHERE dataset = 'day_level_trade_data'"
+                "SELECT MIN(start_date) AS min_trade_date, MAX(end_date) AS max_trade_date "
+                "FROM task_info WHERE task_type = 'MARKET_DATA' AND status = 'SUCCESS'"
             ).fetchone()
-            if row is None:
-                row = conn.execute(
-                    "SELECT * FROM data_range_meta WHERE dataset = 'daily_price'"
-                ).fetchone()
-            return dict(row) if row else None
+            if row is None or row['min_trade_date'] is None:
+                return None
+            return dict(row)
         finally:
             conn.close()

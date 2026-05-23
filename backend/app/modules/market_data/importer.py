@@ -7,7 +7,7 @@ from typing import Any
 
 from app.core.settings import settings
 from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_parent, ensure_duckdb_schema
-from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
+from app.db.sqlite import ensure_sqlite_schema
 
 
 @dataclass(frozen=True)
@@ -69,10 +69,6 @@ def import_market_data_batch(
     ensure_duckdb_parent(target_duckdb_path, target_daily_bars_parquet_path.parent)
     ensure_duckdb_schema(target_duckdb_path)
 
-    _write_sqlite_data(
-        sqlite_path=target_sqlite_path,
-        stock_profiles=stock_profiles,
-    )
     _write_duckdb_data(
         duckdb_path=target_duckdb_path,
         daily_bars=daily_bars,
@@ -175,36 +171,6 @@ def _read_csv_rows(file_path: Path, required_fields: set[str]) -> list[dict[str,
         return [dict(row) for row in reader]
 
 
-def _write_sqlite_data(
-    *,
-    sqlite_path: Path,
-    stock_profiles: list[dict[str, Any]],
-) -> None:
-    connection = connect_sqlite(sqlite_path)
-    try:
-        connection.execute('PRAGMA foreign_keys = ON')
-        connection.executemany(
-            '''
-            INSERT INTO stock_profiles (stock_code, stock_name, sectors_json, ai_quick_summary)
-            VALUES (?, ?, ?, ?) ON CONFLICT(stock_code) DO
-            UPDATE SET
-                stock_name = excluded.stock_name,
-                sectors_json = excluded.sectors_json,
-                ai_quick_summary = excluded.ai_quick_summary
-            ''',
-            [
-                (
-                    row['stock_code'],
-                    row['stock_name'],
-                    json.dumps(row['sectors'], ensure_ascii=False),
-                    row['ai_quick_summary'],
-                )
-                for row in stock_profiles
-            ],
-        )
-        connection.commit()
-    finally:
-        connection.close()
 
 
 def _write_duckdb_data(*, duckdb_path: Path, daily_bars: list[dict[str, Any]], daily_bars_parquet_path: Path) -> None:
