@@ -11,6 +11,7 @@ from app.schemas.market import (
     StockBarsRangeResponse,
     StockCandidate,
     StockDetailResponse,
+    StockLimitUpHistoryResponse,
     StockResolveResponse,
 )
 
@@ -34,6 +35,14 @@ def get_stock_bars_range(
         end_date: str | None = Query(None, description='窗口结束日期，格式 YYYY-MM-DD，默认最新交易日'),
 ) -> StockBarsRangeResponse:
     return market_data_service.get_stock_bars_range(stock_code, months=months, end_date=end_date)
+
+
+@router.get('/stocks/{stock_code}/limit-up-history', response_model=StockLimitUpHistoryResponse)
+def get_stock_limit_up_history(
+    stock_code: str,
+    limit: int = Query(20, ge=1, le=100, description='最多返回条数'),
+) -> StockLimitUpHistoryResponse:
+    return market_data_service.get_stock_limit_up_history(stock_code, limit=limit)
 
 
 @router.get('/search', response_model=list[StockCandidate])

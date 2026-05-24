@@ -63,7 +63,17 @@
 
 ## 本次会话
 
-**修复 OCR 解析：同时提取涨停时间和每行简要概括**：
+**个股详情页新增「涨停历史」模块，与热点情绪联动**：
+
+改动概要：
+1. **后端 query**（`market_queries.py`）：新增 `get_limit_up_history_by_stock`，按 `stock_code` 从 `daily_hot_info` 查询最近 N 条涨停记录（降序）。
+2. **后端 schema**（`market.py`）：新增 `StockLimitUpHistoryRow`、`StockLimitUpHistoryResponse`。
+3. **后端 service**（`service.py`）：新增 `get_stock_limit_up_history` 方法，规范化 stock_code 后调用 query 并返回响应。
+4. **后端路由**（`market.py`）：新增 `GET /api/market/stocks/{stock_code}/limit-up-history?limit=20`。
+5. **前端 api.ts**：新增 `StockLimitUpHistoryRow`、`StockLimitUpHistoryResponse` 类型及 `getStockLimitUpHistory` 函数。
+6. **前端 StockDetailPage.tsx**：新增 `LimitUpHistoryCard` 组件 + `useQuery`；K 线图卡片下方展示「涨停历史」表格，包含涨停日期、涨停时间、连板情况（Badge 带颜色）、题材（Tag）、涨停解析（支持展开收起）、OCR 摘要（Tooltip 截断）。
+
+**验证**：后端 89 passed（无回归），前端 `npm run build` 通过。
 
 1. **`limit_up_time` 未填充问题**：大多数股票来自 `field` API，该 API 不返回 `action_info.time`；只有少数来自 `list` API 的推荐股有时间。复盘图片每行包含涨停时间（`HH:MM:SS`），但旧代码把时间格式视为"纯数字/时间"直接跳过，没有提取。
 2. **`short_reason` 语义修正**：`short_reason` 应存储图片中每行对应股票的涨停简要概括（最右列关键词标签），而非整张图片 OCR 后的缩写。旧代码已有按行解析的逻辑，但需要与时间提取协同工作。

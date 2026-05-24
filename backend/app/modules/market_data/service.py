@@ -15,6 +15,7 @@ from app.queries.market_queries import (
     get_latest_hot_info_trade_date,
     get_hot_pic_rows_by_date,
     get_latest_hot_pic_trade_date,
+    get_limit_up_history_by_stock,
     parse_board_count,
 )
 from app.repositories.market_metadata_repo import MarketMetadataRepo
@@ -41,6 +42,8 @@ from app.schemas.market import (
     StockBarsRangeResponse,
     StockIndicatorSeries,
     StockKeyIndicators,
+    StockLimitUpHistoryRow,
+    StockLimitUpHistoryResponse,
     StockResolveResponse,
     StockTags,
 )
@@ -274,9 +277,41 @@ class MarketDataService:
 
         return HotReviewTableResponse(trade_date=target_trade_date, rows=table_rows)
 
-    def get_hot_sector_aggregated(
+    def get_stock_limit_up_history(
         self,
-        windows: list[int] | None = None,
+        stock_code: str,
+        limit: int = 20,
+    ) -> StockLimitUpHistoryResponse:
+        """Return recent limit-up records for a specific stock from daily_hot_info."""
+        if not self._sqlite_path.exists():
+            return StockLimitUpHistoryResponse(stock_code=stock_code, rows=[])
+
+        # Normalize stock_code to 6-digit string
+        normalized_code = str(stock_code or '').strip()
+        if normalized_code.isdigit():
+            normalized_code = normalized_code.zfill(6)
+
+        connection = connect_sqlite(self._sqlite_path)
+        try:
+            db_rows = get_limit_up_history_by_stock(connection, normalized_code, limit=limit)
+            rows: list[StockLimitUpHistoryRow] = []
+            for row in db_rows:
+                rows.append(
+                    StockLimitUpHistoryRow(
+                        trade_date=str(row['trade_date'] or ''),
+                        limit_up_time=str(row['limit_up_time'] or ''),
+                        streak_text=str(row['streak_text'] or ''),
+                        hot_theme=str(row['hot_theme'] or ''),
+                        reason=str(row['reason'] or ''),
+                        short_reason=str(row['short_reason'] or ''),
+                    )
+                )
+        finally:
+            connection.close()
+
+        return StockLimitUpHistoryResponse(stock_code=normalized_code, rows=rows)
+
+    def get_hot_sector_aggregated(
         exclude_st: bool = True,
     ) -> HotSectorAggregatedResponse:
         """返回多个时间窗口内各板块去重涨停家数。

@@ -270,6 +270,20 @@ export interface HotSectorAggregatedResponse {
   sectors: HotSectorAggregatedItem[];
 }
 
+export interface StockLimitUpHistoryRow {
+  trade_date: string;
+  limit_up_time: string;
+  streak_text: string;
+  hot_theme: string;
+  reason: string;
+  short_reason: string;
+}
+
+export interface StockLimitUpHistoryResponse {
+  stock_code: string;
+  rows: StockLimitUpHistoryRow[];
+}
+
 // ---------------------------------------------------------------------------
 // HTTP helpers
 // ---------------------------------------------------------------------------
@@ -509,5 +523,15 @@ export function getHotSectorAggregated(
 ): Promise<HotSectorAggregatedResponse> {
   const query = new URLSearchParams({ exclude_st: String(excludeSt) });
   return fetchJson<HotSectorAggregatedResponse>(`/api/market/hot-sector-aggregated?${query.toString()}`);
+}
+
+export function getStockLimitUpHistory(
+  stockCode: string,
+  limit: number = 20,
+): Promise<StockLimitUpHistoryResponse> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  return fetchJson<StockLimitUpHistoryResponse>(
+    `/api/market/stocks/${encodeURIComponent(stockCode)}/limit-up-history?${query.toString()}`,
+  );
 }
 

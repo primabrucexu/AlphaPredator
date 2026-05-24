@@ -197,6 +197,20 @@ class HotReviewTableResponse(BaseModel):
     rows: list[HotReviewTableRow] = Field(default_factory=list)
 
 
+class StockLimitUpHistoryRow(BaseModel):
+    trade_date: str
+    limit_up_time: str
+    streak_text: str
+    hot_theme: str
+    reason: str
+    short_reason: str
+
+
+class StockLimitUpHistoryResponse(BaseModel):
+    stock_code: str
+    rows: list[StockLimitUpHistoryRow] = Field(default_factory=list)
+
+
 class HotSectorAggregatedItem(BaseModel):
     """单个板块在多个时间窗口内的去重涨停家数。"""
     name: str = Field(..., description='板块名称')

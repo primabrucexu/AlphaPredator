@@ -104,6 +104,20 @@ def get_hot_pic_rows_by_date(connection: Any, trade_date: str) -> list[Any]:
     ).fetchall()
 
 
+def get_limit_up_history_by_stock(connection: Any, stock_code: str, limit: int = 20) -> list[Any]:
+    """Return recent limit-up records for a specific stock (desc by trade_date)."""
+    return connection.execute(
+        '''
+        SELECT trade_date, stock_code, name, limit_up_time, streak_text, hot_theme, reason, short_reason
+        FROM daily_hot_info
+        WHERE stock_code = ?
+        ORDER BY trade_date DESC
+        LIMIT ?
+        ''',
+        [stock_code, limit],
+    ).fetchall()
+
+
 def get_latest_hot_pic_trade_date(connection: Any) -> str:
     """Return the latest trade_date that has daily_hot_pic records."""
     row = connection.execute(

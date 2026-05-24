@@ -452,7 +452,7 @@ export function SentimentOverviewPage() {
         const series = allThemes.map(theme => ({
             name: theme,
             type: 'line',
-            smooth: true,
+            smooth: false,
             symbol: 'circle',
             symbolSize: 5,
             data: dates.map(date => {
@@ -463,8 +463,8 @@ export function SentimentOverviewPage() {
             connectNulls: false,
         }));
 
-        // 默认展示近 20 日
-        const defaultStart = dates.length > 0 ? Math.max(0, Math.round((1 - 20 / dates.length) * 100)) : 67;
+        // 默认展示近 10 日
+        const defaultStart = dates.length > 0 ? Math.max(0, Math.round((1 - 10 / dates.length) * 100)) : 80;
 
         return {
             tooltip: {
