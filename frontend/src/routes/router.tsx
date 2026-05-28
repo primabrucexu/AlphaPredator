@@ -8,6 +8,7 @@ import {InitializePage} from '../pages/InitializePage';
 import {MarketOverviewPage} from '../pages/MarketOverviewPage';
 import {SentimentOverviewPage} from '../pages/SentimentOverviewPage';
 import {StockDetailPage} from '../pages/StockDetailPage';
+import {TradeReviewPage} from '../pages/TradeReviewPage';
 
 export const router = createBrowserRouter([
   {
@@ -22,6 +23,7 @@ export const router = createBrowserRouter([
       { path: 'focus', element: <FocusPage /> },
       { path: 'history', element: <HistoryPage /> },
       { path: 'initialize', element: <InitializePage /> },
+      { path: 'trade-review', element: <TradeReviewPage /> },
     ],
   },
 ]);

@@ -535,3 +535,160 @@ export function getStockLimitUpHistory(
   );
 }
 
+// ---------------------------------------------------------------------------
+// 交易复盘系统 Trade Review
+// ---------------------------------------------------------------------------
+
+export interface OperationItem {
+  id?: string;
+  review_id?: string;
+  trade_time: string;
+  operation_type: string; // buy/sell/add/reduce/t_buy/t_sell
+  price: number;
+  quantity: number;
+  amount: number;
+  source: string; // ocr/manual/import
+  note: string;
+  sort_index?: number;
+}
+
+export interface DecisionNoteItem {
+  id?: string;
+  review_id?: string;
+  related_operation_id?: string;
+  decision_type: string; // add/reduce/sell/t/other
+  decision_time: string;
+  reason: string;
+}
+
+export interface TradeReviewSessionItem {
+  id: string;
+  stock_code: string;
+  stock_name: string;
+  start_date: string;
+  end_date?: string;
+  status: string; // open / closed
+  total_buy_amount?: number;
+  total_sell_amount?: number;
+  realized_pnl?: number;
+  return_rate?: number;
+  entry_reason: string;
+  entry_expectation: string;
+  reflection_did_well: string;
+  reflection_did_poorly: string;
+  reflection_redo_plan: string;
+  ai_status: string; // pending/done/failed
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TradeReviewDetail extends TradeReviewSessionItem {
+  operations: OperationItem[];
+  decision_notes: DecisionNoteItem[];
+  ai_result?: Record<string, unknown>;
+}
+
+export interface TradeReviewListResponse {
+  total: number;
+  items: TradeReviewSessionItem[];
+}
+
+export interface MonthlyStatsResponse {
+  month_key: string;
+  trade_count: number;
+  win_count: number;
+  loss_count: number;
+  realized_pnl: number;
+  average_return_rate?: number;
+  max_gain?: number;
+  max_loss?: number;
+  reviews: Record<string, unknown>[];
+}
+
+export interface OcrParseRequest {
+  image_base64: string;
+  mime_type?: string;
+}
+
+export interface OcrOperationItem {
+  trade_time: string;
+  operation_type: string;
+  price: number;
+  quantity: number;
+  amount: number;
+}
+
+export interface OcrParseResponse {
+  stock_name?: string;
+  stock_code?: string;
+  start_date?: string;
+  end_date?: string;
+  status?: string;
+  total_buy_amount?: number;
+  total_sell_amount?: number;
+  realized_pnl?: number;
+  return_rate?: number;
+  operations: OcrOperationItem[];
+  raw_lines: string[];
+}
+
+export type CreateTradeReviewRequest = Omit<TradeReviewSessionItem,
+  'id' | 'ai_status' | 'created_at' | 'updated_at'> & {
+  operations: OperationItem[];
+  decision_notes: DecisionNoteItem[];
+};
+
+export type UpdateTradeReviewRequest = CreateTradeReviewRequest;
+
+// API 函数
+
+export function listTradeReviews(params?: {
+  month?: string;
+  stock_code?: string;
+  status?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<TradeReviewListResponse> {
+  const q = new URLSearchParams();
+  if (params?.month) q.set('month', params.month);
+  if (params?.stock_code) q.set('stock_code', params.stock_code);
+  if (params?.status) q.set('status', params.status);
+  if (params?.limit != null) q.set('limit', String(params.limit));
+  if (params?.offset != null) q.set('offset', String(params.offset));
+  const suffix = q.toString() ? `?${q.toString()}` : '';
+  return fetchJson<TradeReviewListResponse>(`/api/trade-reviews${suffix}`);
+}
+
+export function getTradeReview(reviewId: string): Promise<TradeReviewDetail> {
+  return fetchJson<TradeReviewDetail>(`/api/trade-reviews/${reviewId}`);
+}
+
+export function createTradeReview(req: CreateTradeReviewRequest): Promise<TradeReviewDetail> {
+  return postJson<TradeReviewDetail>('/api/trade-reviews', req);
+}
+
+export async function updateTradeReview(
+  reviewId: string,
+  req: UpdateTradeReviewRequest,
+): Promise<TradeReviewDetail> {
+  const resp = await fetch(`${API_BASE_URL}/api/trade-reviews/${reviewId}`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(req),
+  });
+  if (!resp.ok) throw new Error(await resp.text());
+  return resp.json();
+}
+
+export async function deleteTradeReview(reviewId: string): Promise<void> {
+  const resp = await fetch(`${API_BASE_URL}/api/trade-reviews/${reviewId}`, {method: 'DELETE'});
+  if (!resp.ok) throw new Error(await resp.text());
+}
+
+export function getMonthlyStats(monthKey: string): Promise<MonthlyStatsResponse> {
+  return fetchJson<MonthlyStatsResponse>(`/api/trade-reviews/monthly/${monthKey}`);
+}
+
+export function ocrParseImage(req: OcrParseRequest): Promise<OcrParseResponse> {
+  return postJson<OcrParseResponse>('/api/trade-reviews/ocr-parse', req);
+}

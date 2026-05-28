@@ -1,5 +1,6 @@
 import {
     AreaChartOutlined,
+    CalendarOutlined,
     DatabaseOutlined,
     FireOutlined,
     HistoryOutlined,
@@ -22,6 +23,7 @@ const menuItems = [
   { key: '/results', icon: <RadarChartOutlined />, label: 'AI 选股结果' },
   { key: '/focus', icon: <StarOutlined />, label: '重点关注' },
   { key: '/history', icon: <HistoryOutlined />, label: '历史记录' },
+  { key: '/trade-review', icon: <CalendarOutlined />, label: '交易复盘' },
   { key: '/initialize', icon: <SettingOutlined />, label: '数据初始化' },
 ];
 

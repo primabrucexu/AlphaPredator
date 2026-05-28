@@ -1,6 +1,6 @@
 Table stock_list [headercolor: #175e7a] {
 	full_code varchar(255) [ pk, unique, note: '带交易所的完整股票代码。如000001.SZ' ]
-	code varchar(255) [ note: '6位数字股票代码（6位，如 `000001`）' ]
+	code varchar(255) [ unique, note: '6位数字股票代码（6位，如 `000001`）' ]
 	name varchar(255) [ note: '股票名称' ]
 	is_st boolean [ note: '是否ST，获取方式：通过name字段中包含`ST``。' ]
 	cnspell varchar(255) [ note: '股票名称拼音简称' ]
@@ -11,21 +11,6 @@ Table stock_list [headercolor: #175e7a] {
 	}
 
 	Note: '股票列表'
-}
-
-Table pick_models [headercolor: #175e7a] {
-	id integer [ pk, increment ]
-	name varchar(255) [ not null, note: '模式名' ]
-	description text [ note: '模式描述' ]
-
-	Note: '选股模式'
-}
-
-Table user_pick_stock_samples [headercolor: #175e7a] {
-	id integer [ pk, increment ]
-	stock_code varchar(255) [ not null, note: '6位数字股票代码' ]
-	pick_date date [ not null, note: '选股日期，YYYYMMDD' ]
-	pick_model_id integer [ not null ]
 }
 
 Table daily_hot_pic [headercolor: #175e7a] {
@@ -54,27 +39,31 @@ Table daily_hot_info [headercolor: #175e7a] {
 
 Table task_info [headercolor: #175e7a] {
 	id integer [ pk, increment, unique ]
-	task_id varchar(255) [ unique ]
+	task_id varchar(255)
 	start_date date [ not null, note: '数据起始日期 YYYYMMDD' ]
 	end_date date [ not null, note: '数据截至日期 YYYYMMDD' ]
-	status varchar(255) [ not null, default: 'PENDING', note: '任务状态。PENDING、RUNNING、FAILED、SUCCESS、TERMINATED' ]
-	total_items integer [ not null, default: 0, note: '所有子任务数量' ]
-	processed_items integer [ not null, default: 0, note: '已完成子任务数量' ]
-	current_label varchar(255) [ not null, default: '', note: '当前正在处理的项标签：MARKET_DATA 时为股票代码如 000001.SZ，JYGS_REVIEW 时为日期如 20241101，STOCK_LIST_SYNC 时为空' ]
+	status varchar(255) [ not null, default: PENDING, note: '任务状态。PENDING、RUNNING、FAILED、SUCCESS、TERMINATED' ]
+	total_items integer [ not null, note: '所有子任务数量' ]
+	processed_items integer [ not null, note: '已完成子任务数量' ]
+	current_label varchar(255) [ not null, note: '当前正在处理的项标签：MARKET_DATA 时为股票代码如 000001.SZ，JYGS_REVIEW 时为日期如 20241101，STOCK_LIST_SYNC 时为空' ]
 	error_message text [ not null ]
-	task_type varchar(255) [ not null, default: 'MARKET_DATA', note: '任务类型。当前仅有JYGS_REVIEW（韭研公社涨停信信息复盘）MARKET_DATA_LOAD（市场天级交易数据拉取）' ]
+	task_type varchar(255) [ not null, default: MARKET_DATA, note: '任务类型。当前仅有JYGS_REVIEW（韭研公社涨停信信息复盘）MARKET_DATA_LOAD（市场天级交易数据拉取）' ]
 	task_start_date datetime [ note: '任务开始时间 YYYYMMDD HH:mm:ss' ]
 	task_end_date datetime [ note: '任务结束时间 YYYYMMDD HH:mm:ss' ]
 }
 
 Table task_item_info [headercolor: #175e7a] {
 	id integer [ pk, increment ]
-	task_id varchar(255) [ not null, unique ]
+	task_id varchar(255) [ not null ]
 	item varchar(255) [ note: '子任务内容描述' ]
-	status varchar(255) [ not null, default: 'PENDING', note: 'PENDING, RUNNING, SKIP（非交易日标记为跳过）, SUCCESS, FAILED' ]
+	status varchar(255) [ not null, default: PENDING, note: 'PENDING, RUNNING, SKIP（非交易日标记为跳过）, SUCCESS, FAILED' ]
 	error_message text [ not null, note: '错误信息' ]
 	started_at datetime [ not null, note: '开始时间 YYYYMMDD HH:mm:ss' ]
 	finished_at datetime [ not null, note: '结束时间 YYYYMMDD HH:mm:ss' ]
+
+	indexes {
+		(task_id) [ name: 'task_item_info_index_0' ]
+	}
 
 	Note: '子任务信息'
 }
@@ -124,6 +113,10 @@ Table day_level_trade_data [headercolor: #175e7a] {
 	is_down_limit boolean [ not null, note: '该日是否跌停' ]
 	is_stop boolean [ not null, note: '是否停牌' ]
 
+	indexes {
+		(full_code, trade_date) [ name: 'day_level_trade_data_index_0', unique ]
+	}
+
 	Note: '股票日级别交易数据'
 }
 
@@ -133,19 +126,332 @@ Table review_note [headercolor: #175e7a] {
 	analyse text(65535) [ not null, note: '用户分析' ]
 	score integer [ not null, note: '操作评价，1-10' ]
 	is_model_analyse boolean [ note: '是否为模型生成的复盘内容' ]
-	model_id integer [ not null, note: '模型id，空表示用户输入的复盘内容' ]
+	model_id integer [ note: '模型id，空表示用户输入的复盘内容' ]
 
 	Note: '复盘笔记'
 }
 
-Ref fk_user_stock_samples_pick_model_id_pick_models {
-	user_pick_stock_samples.pick_model_id > pick_models.id [ delete: no action, update: no action ]
+Table user_stock_pick_sample [headercolor: #175e7a] {
+	id varchar(255) [ pk, unique, note: '样本ID，建议使用UUID' ]
+	user_id varchar(255) [ not null, note: '用户ID，当前可单用户，保留多用户扩展' ]
+	stock_code varchar(255) [ not null, note: '6位股票代码，如000001' ]
+	pick_date date [ not null, note: '选股日期，YYYYMMDD' ]
+	horizon_days integer [ not null, default: 5, note: '评估窗口天数，如3/5/10' ]
+	entry_price numeric [ note: '参考买入价，可为空' ]
+	exit_price numeric [ note: '参考卖出价，可为空' ]
+	manual_label varchar(255) [ note: '人工标签，如龙头接力/趋势低吸' ]
+	pick_reason text [ note: '用户记录的选股理由' ]
+	result_return_pct numeric [ note: '该样本最终收益率(%)，可后补' ]
+	result_max_drawdown_pct numeric [ note: '该样本最大回撤(%)，可后补' ]
+	source_type varchar(255) [ not null, default: manual, note: '样本来源：manual/import/api' ]
+	created_at datetime [ not null, note: '创建时间 YYYYMMDD HH:mm:ss' ]
+	updated_at datetime [ not null, note: '更新时间 YYYYMMDD HH:mm:ss' ]
+
+	indexes {
+		(user_id, pick_date) [ name: 'idx_user_pick_sample_user_date' ]
+		(stock_code, pick_date) [ name: 'idx_user_pick_sample_stock_date' ]
+	}
+
+	Note: '用户历史选股样本主表'
 }
 
-Ref fk_task_info_task_id_daily_task_info {
-	task_info.task_id - task_item_info.task_id [ delete: no action, update: no action ]
+Table user_stock_pick_feature [headercolor: #175e7a] {
+	id varchar(255) [ pk, unique, note: '特征记录ID，建议使用UUID' ]
+	sample_id varchar(255) [ not null, note: '关联样本ID，指向user_stock_pick_sample.id' ]
+	trade_date date [ not null, note: '特征对应交易日，通常与pick_date一致' ]
+	feature_key varchar(255) [ not null, note: '特征键，如ma5_above_ma20/turnover_rate' ]
+	feature_value_num numeric [ note: '数值型特征值，可为空' ]
+	feature_value_text text [ note: '文本型特征值，可为空' ]
+	feature_group varchar(255) [ note: '特征分组，如price/volume/sentiment' ]
+	created_at datetime [ not null, note: '创建时间 YYYYMMDD HH:mm:ss' ]
+
+	indexes {
+		(sample_id, feature_key) [ name: 'uq_user_pick_feature_sample_key', unique ]
+		(feature_key, trade_date) [ name: 'idx_user_pick_feature_key_date' ]
+	}
+
+	Note: '样本特征快照（Key-Value）'
+}
+
+Table user_pattern_model [headercolor: #175e7a] {
+	id varchar(255) [ pk, unique, note: '模式ID，建议使用UUID' ]
+	user_id varchar(255) [ not null, note: '用户ID' ]
+	name varchar(255) [ not null, note: '模式名称' ]
+	description text [ note: '模式描述与解释' ]
+	status varchar(255) [ not null, default: active, note: '模式状态：active/draft/archived' ]
+	source_scope varchar(255) [ not null, default: personal, note: '模式作用域：personal/global' ]
+	version integer [ not null, default: 1, note: '模式版本号，便于迭代' ]
+	quality_score numeric [ note: '模式质量分（可基于回测结果计算）' ]
+	created_at datetime [ not null, note: '创建时间 YYYYMMDD HH:mm:ss' ]
+	updated_at datetime [ not null, note: '更新时间 YYYYMMDD HH:mm:ss' ]
+
+	indexes {
+		(user_id, status) [ name: 'idx_user_pattern_model_user_status' ]
+		(user_id, name, version) [ name: 'uq_user_pattern_model_user_name_version', unique ]
+	}
+
+	Note: '用户选股模式主表'
+}
+
+Table user_pattern_rule [headercolor: #175e7a] {
+	id varchar(255) [ pk, unique, note: '规则ID，建议使用UUID' ]
+	pattern_id varchar(255) [ not null, note: '所属模式ID，指向user_pattern_model.id' ]
+	rule_order integer [ not null, note: '规则顺序，从1递增' ]
+	feature_key varchar(255) [ not null, note: '规则作用的特征键' ]
+	operator varchar(255) [ not null, note: '比较符，如>/>=/</<=/=/in/between' ]
+	threshold_num_min numeric [ note: '数值阈值下界，单阈值或区间下界' ]
+	threshold_num_max numeric [ note: '数值阈值上界，between场景使用' ]
+	threshold_text text [ note: '文本阈值，in/枚举类判断使用' ]
+	weight numeric [ not null, default: 1, note: '规则权重，软评分时使用' ]
+	is_required boolean [ not null, default: true, note: '是否硬条件，true表示必须满足' ]
+	created_at datetime [ not null, note: '创建时间 YYYYMMDD HH:mm:ss' ]
+
+	indexes {
+		(pattern_id, rule_order) [ name: 'uq_user_pattern_rule_pattern_order', unique ]
+	}
+
+	Note: '模式规则明细表（可解释、可回测）'
+}
+
+Table user_pattern_backtest_job [headercolor: #175e7a] {
+	id varchar(255) [ pk, unique, note: '回测任务ID，建议使用UUID' ]
+	pattern_id varchar(255) [ not null, note: '回测的模式ID，指向user_pattern_model.id' ]
+	user_id varchar(255) [ not null, note: '任务归属用户ID' ]
+	start_date date [ not null, note: '回测起始日期 YYYYMMDD' ]
+	end_date date [ not null, note: '回测结束日期 YYYYMMDD' ]
+	universe_scope varchar(255) [ not null, default: all_a, note: '回测股票池范围，如all_a/主板/自选' ]
+	status varchar(255) [ not null, default: pending, note: '任务状态：pending/running/success/failed' ]
+	error_message text [ note: '失败原因，成功时可为空' ]
+	created_at datetime [ not null, note: '创建时间 YYYYMMDD HH:mm:ss' ]
+	updated_at datetime [ not null, note: '更新时间 YYYYMMDD HH:mm:ss' ]
+	finished_at datetime [ note: '完成时间 YYYYMMDD HH:mm:ss' ]
+
+	indexes {
+		(pattern_id, status) [ name: 'idx_user_pattern_backtest_job_pattern_status' ]
+		(user_id, created_at) [ name: 'idx_user_pattern_backtest_job_user_created' ]
+	}
+
+	Note: '模式回测任务表'
+}
+
+Table user_pattern_backtest_metric [headercolor: #175e7a] {
+	id varchar(255) [ pk, unique, note: '回测指标记录ID，建议使用UUID' ]
+	job_id varchar(255) [ not null, note: '关联回测任务ID，指向user_pattern_backtest_job.id' ]
+	metric_key varchar(255) [ not null, note: '指标键，如annual_return/win_rate/sharpe/max_dd' ]
+	metric_value numeric [ not null, note: '指标数值' ]
+	metric_text text [ note: '指标附加文本说明，可为空' ]
+	created_at datetime [ not null, note: '创建时间 YYYYMMDD HH:mm:ss' ]
+
+	indexes {
+		(job_id, metric_key) [ name: 'uq_user_pattern_backtest_metric_job_key', unique ]
+	}
+
+	Note: '回测指标结果表'
+}
+
+Table user_pattern_suggestion [headercolor: #175e7a] {
+	id varchar(255) [ pk, unique, note: '建议ID，建议使用UUID' ]
+	user_id varchar(255) [ not null, note: '建议归属用户ID' ]
+	pattern_id varchar(255) [ note: '来源模式ID，可为空（多模式融合时）' ]
+	trade_date date [ not null, note: '建议交易日 YYYYMMDD' ]
+	stock_code varchar(255) [ not null, note: '建议股票代码（6位）' ]
+	score numeric [ not null, note: '建议评分，用于排序' ]
+	reason_summary text [ note: '建议理由摘要' ]
+	risk_note text [ note: '风险提示' ]
+	action_hint varchar(255) [ note: '动作建议，如观察/低吸/回避' ]
+	status varchar(255) [ not null, default: active, note: '建议状态：active/expired/archived' ]
+	created_at datetime [ not null, note: '创建时间 YYYYMMDD HH:mm:ss' ]
+
+	indexes {
+		(user_id, trade_date) [ name: 'idx_user_pattern_suggestion_user_date' ]
+		(stock_code, trade_date) [ name: 'idx_user_pattern_suggestion_stock_date' ]
+	}
+
+	Note: 'AI个性化选股建议表'
+}
+
+Table user_pattern_feedback [headercolor: #175e7a] {
+	id varchar(255) [ pk, unique, note: '反馈ID，建议使用UUID' ]
+	suggestion_id varchar(255) [ not null, note: '关联建议ID，指向user_pattern_suggestion.id' ]
+	user_id varchar(255) [ not null, note: '反馈用户ID' ]
+	feedback_type varchar(255) [ not null, note: '反馈类型：like/dislike/ignore/manual_note' ]
+	feedback_score integer [ note: '反馈分值，可选1~5' ]
+	feedback_note text [ note: '反馈文本备注' ]
+	created_at datetime [ not null, note: '创建时间 YYYYMMDD HH:mm:ss' ]
+
+	indexes {
+		(suggestion_id) [ name: 'idx_user_pattern_feedback_suggestion' ]
+		(user_id, created_at) [ name: 'idx_user_pattern_feedback_user_time' ]
+	}
+
+	Note: '用户对AI建议的反馈闭环表'
+}
+
+Ref fk_task_info_task_id_task_item_info {
+	task_info.task_id < task_item_info.task_id [ delete: no action, update: no action ]
 }
 
 Ref fk_user_trade_history_id_review_note {
 	user_trade_history.id < review_note.trade_id [ delete: no action, update: no action ]
+}
+
+Ref fk_user_stock_pick_feature_sample_id_user_stock_pick_sample {
+	user_stock_pick_feature.sample_id > user_stock_pick_sample.id [ delete: no action, update: cascade ]
+}
+
+Ref fk_user_pattern_rule_pattern_id_user_pattern_model {
+	user_pattern_rule.pattern_id > user_pattern_model.id [ delete: no action, update: cascade ]
+}
+
+Ref fk_user_pattern_backtest_job_pattern_id_user_pattern_model {
+	user_pattern_backtest_job.pattern_id > user_pattern_model.id [ delete: no action, update: cascade ]
+}
+
+Ref fk_user_pattern_backtest_metric_job_id_user_pattern_backtest_job {
+	user_pattern_backtest_metric.job_id > user_pattern_backtest_job.id [ delete: no action, update: cascade ]
+}
+
+Ref fk_user_pattern_suggestion_pattern_id_user_pattern_model {
+	user_pattern_suggestion.pattern_id > user_pattern_model.id  [ delete: set null, update: cascade ]
+}
+
+Ref fk_user_pattern_feedback_suggestion_id_user_pattern_suggestion {
+	user_pattern_feedback.suggestion_id > user_pattern_suggestion.id [ delete: no action, update: cascade ]
+}
+
+Ref fk_user_stock_pick_sample_stock_code_stock_list {
+	user_stock_pick_sample.stock_code > stock_list.code [ delete: no action, update: no action ]
+}
+
+Ref fk_user_pattern_suggestion_stock_code_stock_list {
+	user_pattern_suggestion.stock_code > stock_list.code [ delete: no action, update: no action ]
+}
+
+
+// ================================
+// 交易复盘系统（Trade Review System）
+// 设计文档：docs/agent/trading-review-system-design.md
+// 用户决策日期：2026-05-28
+// ================================
+
+Table trade_review_session [headercolor: #2c7a4b] {
+	id varchar(255) [ pk, unique, note: '复盘主记录ID，建议使用UUID' ]
+	stock_code varchar(255) [ not null, note: '6位股票代码，如000001' ]
+	stock_name varchar(255) [ not null, note: '股票名称，冗余存储便于展示' ]
+	start_date varchar(255) [ not null, note: '建仓日期，YYYY-MM-DD' ]
+	end_date varchar(255) [ note: '清仓日期，YYYY-MM-DD；持仓中时可为空' ]
+	status varchar(255) [ not null, default: 'open', note: '复盘状态：open（持仓中）/ closed（已清仓）' ]
+	total_buy_amount real [ note: '总买入金额（元），聚合字段，可随操作明细变化更新' ]
+	total_sell_amount real [ note: '总卖出金额（元），聚合字段' ]
+	realized_pnl real [ note: '已实现盈亏（元），聚合字段；持仓中时为已卖出部分盈亏' ]
+	return_rate real [ note: '收益率（小数，如 -0.07 表示 -7%），聚合字段' ]
+	entry_reason text [ note: '建仓理由，用户主观复盘填写' ]
+	entry_expectation text [ note: '建仓时的预期，用户主观复盘填写' ]
+	reflection_did_well text [ note: '自我总结：做对了什么' ]
+	reflection_did_poorly text [ note: '自我总结：做错了什么' ]
+	reflection_redo_plan text [ note: '自我总结：如果重来怎么做' ]
+	ai_status varchar(255) [ not null, default: 'pending', note: 'AI分析状态：pending（未生成）/ done（已完成）/ failed（生成失败）' ]
+	created_at varchar(255) [ not null, note: '创建时间，ISO 8601格式' ]
+	updated_at varchar(255) [ not null, note: '更新时间，ISO 8601格式' ]
+
+	indexes {
+		(stock_code, start_date) [ name: 'idx_trade_review_session_stock_date' ]
+		(status) [ name: 'idx_trade_review_session_status' ]
+	}
+
+	Note: '交易复盘主记录表。一条记录对应一只股票从建仓到清仓的一整轮操作，持仓中（status=open）也可创建记录。'
+}
+
+Table trade_review_operation [headercolor: #2c7a4b] {
+	id varchar(255) [ pk, unique, note: '操作记录ID，建议使用UUID' ]
+	review_id varchar(255) [ not null, note: '关联复盘主表ID，指向 trade_review_session.id' ]
+	trade_time varchar(255) [ not null, note: '操作时间，精确到秒，ISO 8601格式' ]
+	operation_type varchar(255) [ not null, note: '操作类型：buy（买入）/ sell（卖出）/ add（加仓）/ reduce（减仓）/ t_buy（T+买）/ t_sell（T+卖）' ]
+	price real [ not null, note: '成交价格（元）' ]
+	quantity integer [ not null, note: '成交数量（股）' ]
+	amount real [ not null, note: '成交金额（元）' ]
+	source varchar(255) [ not null, default: 'manual', note: '数据来源：ocr（OCR识别后人工确认）/ manual（手工录入）/ import（导入）' ]
+	note text [ note: '备注，可选' ]
+	sort_index integer [ note: '排序序号，保证同时间多笔操作展示顺序稳定' ]
+	created_at varchar(255) [ not null, note: '创建时间，ISO 8601格式' ]
+	updated_at varchar(255) [ not null, note: '更新时间，ISO 8601格式' ]
+
+	indexes {
+		(review_id, trade_time) [ name: 'idx_trade_review_operation_review_time' ]
+	}
+
+	Note: '复盘成交操作明细表。支撑成交时间线展示、盈亏计算与AI客观数据输入。source=ocr 表示来自图片OCR识别并经人工确认。'
+}
+
+Table trade_review_decision_note [headercolor: #2c7a4b] {
+	id varchar(255) [ pk, unique, note: '决策备注ID，建议使用UUID' ]
+	review_id varchar(255) [ not null, note: '关联复盘主表ID，指向 trade_review_session.id' ]
+	related_operation_id varchar(255) [ note: '关联的操作记录ID，指向 trade_review_operation.id；可为空，允许只记录决策而不强绑具体操作' ]
+	decision_type varchar(255) [ not null, note: '决策类型：add（加仓）/ reduce（减仓）/ sell（卖出）/ t（T+操作）/ other（其他）' ]
+	decision_time varchar(255) [ not null, note: '决策时间，ISO 8601格式' ]
+	reason text [ not null, note: '决策原因，用户主观填写' ]
+	created_at varchar(255) [ not null, note: '创建时间，ISO 8601格式' ]
+	updated_at varchar(255) [ not null, note: '更新时间，ISO 8601格式' ]
+
+	indexes {
+		(review_id) [ name: 'idx_trade_review_decision_note_review' ]
+	}
+
+	Note: '关键操作节点的主观决策原因表。建仓理由是整轮交易级别的（存于主表entry_reason），关键节点在操作中的原因按节点独立记录于此表，支持多条。'
+}
+
+Table trade_review_ai_result [headercolor: #2c7a4b] {
+	id varchar(255) [ pk, unique, note: 'AI结果ID，建议使用UUID' ]
+	result_type varchar(255) [ not null, note: '结果类型：single_review（单标的分析）/ monthly_review（月度总结）' ]
+	review_id varchar(255) [ note: '关联单标的复盘主表ID，指向 trade_review_session.id；月度结果时为空' ]
+	month_key varchar(255) [ note: '月份键，格式 YYYY-MM，如 2026-05；单标的结果时为空' ]
+	model_name varchar(255) [ note: '使用的AI模型名称，便于追溯和对比不同模型效果' ]
+	input_payload_json text [ note: 'AI输入内容快照（JSON字符串），用于复现、调试和版本对比' ]
+	output_payload_json text [ note: 'AI输出结果（JSON字符串），字段结构见设计文档第5节' ]
+	status varchar(255) [ not null, default: 'done', note: '生成状态：done（成功）/ failed（失败）' ]
+	error_message text [ note: '失败时的错误信息，成功时为空' ]
+	created_at varchar(255) [ not null, note: '创建时间，ISO 8601格式' ]
+
+	indexes {
+		(review_id, result_type) [ name: 'idx_trade_review_ai_result_review_type' ]
+		(month_key, result_type) [ name: 'idx_trade_review_ai_result_month_type' ]
+	}
+
+	Note: 'AI复盘结果表。统一保存单标的AI分析与月度AI总结，支持重新生成与历史版本追溯。'
+}
+
+Table trade_review_monthly_summary [headercolor: #2c7a4b] {
+	month_key varchar(255) [ pk, unique, note: '月份主键，格式 YYYY-MM，如 2026-05' ]
+	trade_count integer [ not null, note: '本月交易次数（复盘记录数，含 open 和 closed）' ]
+	win_count integer [ not null, note: '盈利次数（realized_pnl > 0）' ]
+	loss_count integer [ not null, note: '亏损次数（realized_pnl <= 0）' ]
+	realized_pnl real [ not null, note: '月度总已实现盈亏（元）' ]
+	average_return_rate real [ note: '本月平均收益率（小数）' ]
+	max_gain real [ note: '最大单笔盈利（元）' ]
+	max_loss real [ note: '最大单笔亏损（元）' ]
+	generated_at varchar(255) [ not null, note: '汇总数据生成时间，ISO 8601格式；数据变化后需重新生成' ]
+
+	Note: '月度复盘聚合缓存表。避免页面每次打开全量重算。数据有变化时需刷新 generated_at 并重算。'
+}
+
+// ---- 复盘系统外键关系 ----
+
+Ref fk_trade_review_operation_review_id {
+	trade_review_operation.review_id > trade_review_session.id [ delete: no action, update: cascade ]
+}
+
+Ref fk_trade_review_decision_note_review_id {
+	trade_review_decision_note.review_id > trade_review_session.id [ delete: no action, update: cascade ]
+}
+
+Ref fk_trade_review_decision_note_operation_id {
+	trade_review_decision_note.related_operation_id > trade_review_operation.id [ delete: set null, update: cascade ]
+}
+
+Ref fk_trade_review_ai_result_review_id {
+	trade_review_ai_result.review_id > trade_review_session.id [ delete: no action, update: cascade ]
+}
+
+Ref fk_trade_review_session_stock_code {
+	trade_review_session.stock_code > stock_list.code [ delete: no action, update: no action ]
 }
