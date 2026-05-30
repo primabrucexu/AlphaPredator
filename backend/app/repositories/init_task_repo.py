@@ -79,6 +79,18 @@ class InitTaskRepo:
         finally:
             conn.close()
 
+    def find_running_task_id_by_type(self, task_type: str) -> str | None:
+        """Return the task_id of a RUNNING task with the given task_type, or None."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT task_id FROM task_info WHERE status = 'RUNNING' AND task_type = ? LIMIT 1",
+                (task_type,),
+            ).fetchone()
+            return str(row['task_id']) if row else None
+        finally:
+            conn.close()
+
     def try_mark_task_running(self, task_id: str, task_start_date: str) -> bool:
         conn = self._connect()
         try:

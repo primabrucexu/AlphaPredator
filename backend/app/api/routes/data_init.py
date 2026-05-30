@@ -1,13 +1,13 @@
 import os
 from datetime import datetime
-from zoneinfo import ZoneInfo
-
 from fastapi import APIRouter, HTTPException, Query, status
+from zoneinfo import ZoneInfo
 
 from app.core.settings import settings
 from app.db.sqlite import ensure_sqlite_schema
 from app.modules.market_data.data_source import _get_mairui_licence
 from app.modules.market_data.initializer import (
+    create_batch_tasks,
     create_task,
     get_overview,
     get_task,
@@ -22,6 +22,8 @@ from app.modules.market_data.initializer import (
 from app.modules.market_data.updater import run_daily_update
 from app.repositories.stock_list_repo import StockListRepo
 from app.schemas.data_init import (
+    BatchTaskRequest,
+    BatchTaskResponse,
     CreateTaskRequest,
     DataRangeInfo,
     InitOverviewResponse,
@@ -156,6 +158,33 @@ def create_init_task(body: CreateTaskRequest) -> TaskResponse:
 
     task = get_task(task['task_id']) or task
     return TaskResponse.from_db_row(task)
+
+
+@router.post('/tasks/batch', response_model=BatchTaskResponse, status_code=status.HTTP_202_ACCEPTED)
+def create_batch_init_tasks(body: BatchTaskRequest) -> BatchTaskResponse:
+    """一次性创建并启动三个任务：STOCK_LIST_SYNC + MARKET_DATA + JYGS_REVIEW。
+
+    执行顺序（在后台协调线程中）：
+    1. STOCK_LIST_SYNC 先同步运行完成
+    2. STOCK_LIST_SYNC 成功后，MARKET_DATA + JYGS_REVIEW 并行启动
+
+    要求 Mairui licence 和韭研公社凭据均已配置。
+    """
+    if body.start_date > body.end_date:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail='start_date must be <= end_date',
+        )
+    try:
+        result = create_batch_tasks(body.start_date, body.end_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    return BatchTaskResponse(
+        stock_list_task=TaskResponse.from_db_row(result['stock_list_task']),
+        market_data_task=TaskResponse.from_db_row(result['market_data_task']),
+        jygs_review_task=TaskResponse.from_db_row(result['jygs_review_task']),
+    )
 
 
 @router.get('/tasks', response_model=list[TaskResponse])

@@ -1,50 +1,52 @@
 import {useEffect, useRef, useState} from 'react';
 import {
-  Alert,
-  Button,
-  Card,
-  Col,
-  DatePicker,
-  Descriptions,
-  Input,
-  Progress,
-  Row,
-  Select,
-  Space,
-  Statistic,
-  Tag,
-  Typography,
+    Alert,
+    Button,
+    Card,
+    Col,
+    DatePicker,
+    Descriptions,
+    Input,
+    Progress,
+    Row,
+    Select,
+    Space,
+    Statistic,
+    Tag,
+    Typography,
 } from 'antd';
 import dayjs from 'dayjs';
 import {
-  CheckCircleOutlined,
-  CloseCircleOutlined,
-  DatabaseOutlined,
-  DisconnectOutlined,
-  LinkOutlined,
-  SyncOutlined,
+    CheckCircleOutlined,
+    CloseCircleOutlined,
+    DatabaseOutlined,
+    DisconnectOutlined,
+    LinkOutlined,
+    SyncOutlined,
 } from '@ant-design/icons';
 import {
-  clearJygsSession,
-  createInitTask,
-  getInitTask,
-  getInitV2Overview,
-  getJygsAuthStatus,
-  getMairuiLicenceConfig,
-  getTaskItems,
-  type InitV2OverviewResponse,
-  type JygsAuthStatus,
-  loginJygsWithPlaywright,
-  type MairuiLicenceConfigResponse,
-  retryInitSubtask,
-  retryInitTask,
-  saveMairuiLicence,
-  type TaskItemsResponse,
-  type TaskResponse,
-  type TaskType,
-  terminateInitTask,
-  triggerDailyUpdate,
-  type UpdateResult,
+    type BatchTaskResponse,
+    clearJygsSession,
+    createBatchInitTasks,
+    createInitTask,
+    getInitTask,
+    getInitV2Overview,
+    getJygsAuthStatus,
+    getMairuiLicenceConfig,
+    getTaskItems,
+    type InitV2OverviewResponse,
+    type JygsAuthStatus,
+    loginJygsWithPlaywright,
+    type MairuiLicenceConfigResponse,
+    retryInitSubtask,
+    retryInitTask,
+    saveMairuiLicence,
+    type TaskItemsResponse,
+    type TaskResponse,
+    type TaskType,
+    terminateInitTask,
+    triggerDailyUpdate,
+    type UpdateResult,
 } from '../lib/api';
 
 const POLL_INTERVAL_MS = 2000;
@@ -141,6 +143,12 @@ export function InitializePage() {
   const [updateResult, setUpdateResult] = useState<UpdateResult | null>(null);
   const [taskActionLoading, setTaskActionLoading] = useState(false);
 
+    // Batch tasks
+    const [batchStartLoading, setBatchStartLoading] = useState(false);
+    const [batchTasks, setBatchTasks] = useState<BatchTaskResponse | null>(null);
+    const batchTaskIdsRef = useRef<{ stock: string; market: string; jygs: string } | null>(null);
+    const batchPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   // Error
   const [error, setError] = useState<string | null>(null);
 
@@ -191,6 +199,37 @@ export function InitializePage() {
       loadTaskItems(currentTask.task_id);
     }
   }, [currentTask?.processed_items]);
+
+    // Batch tasks polling
+    useEffect(() => {
+        const ids = batchTaskIdsRef.current;
+        if (!ids) return;
+
+        const poll = setInterval(async () => {
+            try {
+                const [st, md, jy] = await Promise.all([
+                    getInitTask(ids.stock),
+                    getInitTask(ids.market),
+                    getInitTask(ids.jygs),
+                ]);
+                setBatchTasks({stock_list_task: st, market_data_task: md, jygs_review_task: jy});
+
+                const done = (s: string) => ['SUCCESS', 'FAILED', 'TERMINATED'].includes(s);
+                if (done(st.status) && done(md.status) && done(jy.status)) {
+                    clearInterval(poll);
+                    batchPollRef.current = null;
+                }
+            } catch {
+                // ignore
+            }
+        }, POLL_INTERVAL_MS);
+
+        batchPollRef.current = poll;
+        return () => {
+            clearInterval(poll);
+            batchPollRef.current = null;
+        };
+    }, [batchTasks?.stock_list_task?.task_id]);
 
   async function loadTaskItems(taskId: string) {
     setItemsLoading(true);
@@ -319,6 +358,30 @@ export function InitializePage() {
       setTaskActionLoading(false);
     }
   };
+
+    const handleStartBatch = async () => {
+        setError(null);
+        setBatchStartLoading(true);
+        setBatchTasks(null);
+        batchTaskIdsRef.current = null;
+        if (batchPollRef.current) {
+            clearInterval(batchPollRef.current);
+            batchPollRef.current = null;
+        }
+        try {
+            const result = await createBatchInitTasks(startDate, endDate);
+            setBatchTasks(result);
+            batchTaskIdsRef.current = {
+                stock: result.stock_list_task.task_id,
+                market: result.market_data_task.task_id,
+                jygs: result.jygs_review_task.task_id,
+            };
+        } catch (e) {
+            setError(e instanceof Error ? e.message : '批量任务启动失败');
+        } finally {
+            setBatchStartLoading(false);
+        }
+    };
 
   // ── 韭研公社连接 handlers ───────────────────────────────────────────────
 
@@ -618,6 +681,109 @@ export function InitializePage() {
           )}
         </Space>
       </Card>
+
+        {/* 一键全量初始化 */}
+        <Card
+            className="page-card"
+            title={
+                <Space>
+                    <SyncOutlined/>
+                    一键全量初始化
+                </Space>
+            }
+        >
+            <Space direction="vertical" size={12} style={{width: '100%'}}>
+                <Typography.Text type="secondary">
+                    同时创建三个任务：股票列表同步 → 行情数据同步 + 韭研复盘抓取（并行）。
+                    需要 Mairui licence 和韭研公社凭据均已配置。
+                </Typography.Text>
+                <Space wrap>
+                    <Space direction="vertical" size={4}>
+                        <Typography.Text>导入区间：</Typography.Text>
+                        <DatePicker.RangePicker
+                            format="YYYYMMDD"
+                            value={[
+                                startDate ? dayjs(startDate, 'YYYYMMDD') : null,
+                                endDate ? dayjs(endDate, 'YYYYMMDD') : null,
+                            ]}
+                            onChange={(dates) => {
+                                if (dates?.[0]) setStartDate(dates[0].format('YYYYMMDD'));
+                                if (dates?.[1]) setEndDate(dates[1].format('YYYYMMDD'));
+                            }}
+                            allowClear={false}
+                        />
+                    </Space>
+                    <Button
+                        type="primary"
+                        icon={<SyncOutlined/>}
+                        loading={batchStartLoading}
+                        disabled={!initOverview?.market_data_configured || !jygsStatus?.valid}
+                        onClick={handleStartBatch}
+                        style={{marginTop: 20}}
+                    >
+                        一键全量初始化
+                    </Button>
+                </Space>
+                {(!initOverview?.market_data_configured || !jygsStatus?.valid) && (
+                    <Alert
+                        type="warning"
+                        showIcon
+                        message="一键初始化需要 Mairui licence 和韭研公社凭据均已配置。"
+                    />
+                )}
+            </Space>
+        </Card>
+
+        {/* 批量任务进度 */}
+        {batchTasks && (
+            <Card className="page-card" title="批量任务进度">
+                <Space direction="vertical" size={16} style={{width: '100%'}}>
+                    {([
+                        {label: '① 股票列表同步', task: batchTasks.stock_list_task},
+                        {label: '② 行情数据同步', task: batchTasks.market_data_task},
+                        {label: '③ 韭研复盘抓取', task: batchTasks.jygs_review_task},
+                    ] as { label: string; task: TaskResponse }[]).map(({label, task}) => {
+                        const pct = task.total_items > 0 ? Math.round(task.progress_percent) : 0;
+                        const running = task.status === 'RUNNING';
+                        const done = task.status === 'SUCCESS';
+                        const failed = task.status === 'FAILED' || task.status === 'TERMINATED';
+                        return (
+                            <div key={task.task_id}>
+                                <Space style={{marginBottom: 6}}>
+                                    <Typography.Text strong>{label}</Typography.Text>
+                                    <Tag color={taskStatusColor(task.status)}>{taskStatusLabel(task.status)}</Tag>
+                                    {task.current_label && (
+                                        <Typography.Text type="secondary" style={{fontSize: 12}}>
+                                            当前：{task.current_label}
+                                        </Typography.Text>
+                                    )}
+                                </Space>
+                                {(running || done) && (
+                                    <Progress
+                                        percent={pct}
+                                        size="small"
+                                        status={running ? 'active' : done ? 'success' : 'exception'}
+                                        format={(p) =>
+                                            task.total_items > 0
+                                                ? `${task.processed_items}/${task.total_items} (${p}%)`
+                                                : taskStatusLabel(task.status)
+                                        }
+                                    />
+                                )}
+                                {failed && task.error_message && (
+                                    <Typography.Text type="danger" style={{fontSize: 12}}>
+                                        {task.error_message}
+                                    </Typography.Text>
+                                )}
+                                {task.status === 'PENDING' && (
+                                    <Progress percent={0} size="small" status="normal" format={() => '等待启动…'}/>
+                                )}
+                            </div>
+                        );
+                    })}
+                </Space>
+            </Card>
+        )}
 
       {/* Task progress */}
       {currentTask && (

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Literal
-
 from pydantic import BaseModel, Field
+from typing import Any, Literal
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +162,25 @@ class DataRangeInfo(BaseModel):
     min_trade_date: str | None = None
     max_trade_date: str | None = None
     trading_day_count: int = 0
+
+
+class BatchTaskRequest(BaseModel):
+    start_date: str = Field(
+        ...,
+        pattern=r'^\d{8}$',
+        description='MARKET_DATA / JYGS_REVIEW 共用的起始日期（YYYYMMDD）',
+    )
+    end_date: str = Field(
+        ...,
+        pattern=r'^\d{8}$',
+        description='MARKET_DATA / JYGS_REVIEW 共用的截止日期（YYYYMMDD）',
+    )
+
+
+class BatchTaskResponse(BaseModel):
+    stock_list_task: TaskResponse
+    market_data_task: TaskResponse
+    jygs_review_task: TaskResponse
 
 
 class InitV2OverviewResponse(BaseModel):

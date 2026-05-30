@@ -179,11 +179,16 @@ def create_task(
 def start_task(task_id: str, sqlite_path: Path | None = None, duckdb_path: Path | None = None) -> bool:
     """Start processing a task in a background thread.
 
-    Returns False (without starting) if another task is already RUNNING.
+    Returns False (without starting) if another task of the same type is already RUNNING.
+    Different task types (STOCK_LIST_SYNC / MARKET_DATA / JYGS_REVIEW) may run in parallel.
     """
     repo = _task_repo(sqlite_path)
     with _task_lock:
-        if repo.find_running_task_id():
+        task = repo.get_task(task_id)
+        if task is None:
+            return False
+        task_type = task.get('task_type', 'MARKET_DATA')
+        if repo.find_running_task_id_by_type(task_type):
             return False
         updated = repo.try_mark_task_running(task_id, _now_iso())
 
@@ -230,10 +235,14 @@ def retry_task(task_id: str, sqlite_path: Path | None = None, duckdb_path: Path 
     """
     repo = _task_repo(sqlite_path)
     with _task_lock:
-        status = repo.get_task_status(task_id)
+        task = repo.get_task(task_id)
+        if task is None:
+            return None
+        status = task.get('status')
         if status not in ('FAILED', 'TERMINATED'):
             return None
-        if repo.find_running_task_id():
+        task_type = task.get('task_type', 'MARKET_DATA')
+        if repo.find_running_task_id_by_type(task_type):
             return None
         repo.prepare_task_for_resume(task_id, keep_current_label=(status == 'FAILED'))
 
@@ -286,7 +295,7 @@ def retry_subtask(
 
     repo = _task_repo(sqlite_path)
     with _task_lock:
-        if repo.find_running_task_id():
+        if repo.find_running_task_id_by_type(task_type):
             return None
 
     new_task = create_task(
@@ -928,6 +937,114 @@ def _detect_incremental_start(duckdb_path: Path | None = None) -> str | None:
         return next_day.strftime('%Y%m%d')
     except ValueError:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Batch task support
+# ---------------------------------------------------------------------------
+
+
+def create_batch_tasks(
+        start_date: str,
+        end_date: str,
+        sqlite_path: Path | None = None,
+        duckdb_path: Path | None = None,
+) -> dict[str, Any]:
+    """Create three tasks (STOCK_LIST_SYNC + MARKET_DATA + JYGS_REVIEW) and launch the
+    batch coordinator thread.
+
+    Execution order inside the coordinator:
+    1. STOCK_LIST_SYNC runs first (synchronously in the coordinator thread).
+    2. After STOCK_LIST_SYNC succeeds, MARKET_DATA + JYGS_REVIEW start in parallel.
+       If STOCK_LIST_SYNC fails, MARKET_DATA is terminated; JYGS_REVIEW still starts.
+
+    Returns a dict with keys ``stock_list_task``, ``market_data_task``, ``jygs_review_task``.
+    Raises ValueError if required credentials are missing.
+    """
+    _ensure_schema(sqlite_path)
+    today = datetime.now().strftime('%Y%m%d')
+
+    stock_task = create_task(today, today, task_type='STOCK_LIST_SYNC', sqlite_path=sqlite_path)
+    market_task = create_task(start_date, end_date, task_type='MARKET_DATA', sqlite_path=sqlite_path)
+    jygs_task = create_task(start_date, end_date, task_type='JYGS_REVIEW', sqlite_path=sqlite_path)
+
+    coordinator = threading.Thread(
+        target=_run_batch_coordinator,
+        args=(
+            stock_task['task_id'],
+            market_task['task_id'],
+            jygs_task['task_id'],
+            sqlite_path,
+            duckdb_path,
+        ),
+        daemon=True,
+    )
+    coordinator.start()
+
+    return {
+        'stock_list_task': get_task(stock_task['task_id'], sqlite_path) or stock_task,
+        'market_data_task': get_task(market_task['task_id'], sqlite_path) or market_task,
+        'jygs_review_task': get_task(jygs_task['task_id'], sqlite_path) or jygs_task,
+    }
+
+
+def _run_batch_coordinator(
+        stock_task_id: str,
+        market_task_id: str,
+        jygs_task_id: str,
+        sqlite_path: Path | None,
+        duckdb_path: Path | None,
+) -> None:
+    """Batch coordinator: run STOCK_LIST_SYNC first, then start MARKET_DATA + JYGS_REVIEW in parallel."""
+    repo = _task_repo(sqlite_path)
+
+    # ── Step 1: run STOCK_LIST_SYNC synchronously in this thread ──────────
+    with _task_lock:
+        marked = repo.try_mark_task_running(stock_task_id, _now_iso())
+    if not marked:
+        logger.warning('Batch coordinator: failed to mark STOCK_LIST_SYNC %s as RUNNING', stock_task_id)
+        repo.terminate_task(market_task_id, _now_iso())
+        repo.terminate_task(jygs_task_id, _now_iso())
+        return
+
+    logger.info('Batch coordinator: running STOCK_LIST_SYNC %s', stock_task_id)
+    _run_task(stock_task_id, sqlite_path, duckdb_path)
+
+    stock_status = repo.get_task_status(stock_task_id)
+    logger.info('Batch coordinator: STOCK_LIST_SYNC %s finished with status %s', stock_task_id, stock_status)
+
+    # ── Step 2: start JYGS_REVIEW (does not depend on stock_list) ─────────
+    with _task_lock:
+        jygs_marked = repo.try_mark_task_running(jygs_task_id, _now_iso())
+    if jygs_marked:
+        threading.Thread(
+            target=_run_task,
+            args=(jygs_task_id, sqlite_path, None),
+            daemon=True,
+        ).start()
+        logger.info('Batch coordinator: started JYGS_REVIEW %s', jygs_task_id)
+    else:
+        logger.warning('Batch coordinator: could not start JYGS_REVIEW %s', jygs_task_id)
+
+    # ── Step 3: start MARKET_DATA only if STOCK_LIST_SYNC succeeded ───────
+    if stock_status == 'SUCCESS':
+        with _task_lock:
+            market_marked = repo.try_mark_task_running(market_task_id, _now_iso())
+        if market_marked:
+            threading.Thread(
+                target=_run_task,
+                args=(market_task_id, sqlite_path, duckdb_path),
+                daemon=True,
+            ).start()
+            logger.info('Batch coordinator: started MARKET_DATA %s', market_task_id)
+        else:
+            logger.warning('Batch coordinator: could not start MARKET_DATA %s', market_task_id)
+    else:
+        repo.terminate_task(market_task_id, _now_iso())
+        logger.warning(
+            'Batch coordinator: STOCK_LIST_SYNC failed (%s), MARKET_DATA %s terminated',
+            stock_status, market_task_id,
+        )
 
 
 # ---------------------------------------------------------------------------

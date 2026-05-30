@@ -201,6 +201,12 @@ export interface InitV2OverviewResponse {
   board_counts: Record<string, number>;
 }
 
+export interface BatchTaskResponse {
+  stock_list_task: TaskResponse;
+  market_data_task: TaskResponse;
+  jygs_review_task: TaskResponse;
+}
+
 export interface HotSectorHistorySector {
   name: string;
   heat_score: number;
@@ -391,6 +397,13 @@ export function terminateInitTask(taskId: string): Promise<TaskResponse> {
 
 export function getInitV2Overview(): Promise<InitV2OverviewResponse> {
   return fetchJson<InitV2OverviewResponse>('/api/data-init/init/overview');
+}
+
+export function createBatchInitTasks(startDate: string, endDate: string): Promise<BatchTaskResponse> {
+  return postJson<BatchTaskResponse>('/api/data-init/tasks/batch', {
+    start_date: startDate,
+    end_date: endDate,
+  });
 }
 
 // ---------------------------------------------------------------------------
