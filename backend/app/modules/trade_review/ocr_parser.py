@@ -146,6 +146,10 @@ def _parse_lines(lines: list[str]) -> OcrParseResponse:
     op_indices: list[tuple[int, str]] = []  # (行索引, 操作类型)
 
     for i, line in enumerate(lines):
+        # 只把同时包含操作关键字和完整时间戳的行当作交易明细起点，
+        # 避免把“累计买入/累计卖出”之类的统计行误识别成操作。
+        if _TIME_RE.search(line) is None:
+            continue
         for zh, en in _OP_TYPE_MAP.items():
             if zh in line:
                 op_indices.append((i, en))
