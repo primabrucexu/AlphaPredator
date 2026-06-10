@@ -11,7 +11,7 @@
 ## Guide
 - [技术栈](#技术栈)
 - [项目结构](#项目结构)
-- [数据存储说明](docs/human/data-model/data-storage.md)
+- [数据模型设计](docs/human/data-model/AlphaPredator.dbml)
 - [文档索引](docs/guide.md)
 
 ---
@@ -31,7 +31,7 @@ python + react + sqlite + duckdb
 
 ```
 AlphaPredator/
-├── agent.md                        # AI/编码 agent 协作约束与工作指南
+├── AGENTS.md                       # AI/编码 agent 协作约束与工作指南
 ├── README.md
 │
 ├── bin/                            # 常用脚本
@@ -49,13 +49,20 @@ AlphaPredator/
 ├── data/                           # 运行时数据（不入库）
 │
 ├── docs/
-│   ├── docs.md                     # 文档导航索引
-│   ├── phase.md                    # 阶段目标清单（Phase 1~4）
-│   ├── human/                      # 人工维护的规则文档（agent 禁止修改）
-│   │   ├── data-storage.md         # 数据存储设计规范
-│   │   └── price-limit-rule.md     # A 股涨跌停计算规则
-│   └── agent/                      # agent 产出的工作文档
-│       └── README.md               # agent 文档目录使用说明
+│   ├── guide.md                    # 文档导航索引
+│   ├── agent-rules.md              # agent 运行规则
+│   ├── code-rules.md               # 编码规则
+│   ├── human/                      # 人类维护硬规范
+│   │   ├── api-docs/               # 外部 API 文档
+│   │   ├── data-model/             # 数据模型
+│   │   └── mysj.md                 # 麦蕊数据接入说明
+│   └── agent/                      # agent 维护的需求与工作文档
+│       ├── README.md               # agent 文档目录使用说明
+│       ├── current-progress.md     # 当前需求指针
+│       ├── F01-hot-review.md       # 热点复盘需求
+│       ├── F02-market-data.md      # 市场数据需求
+│       ├── F03-trading-review.md   # 交易复盘需求
+│       └── F04-pattern-pick.md     # AI 选股需求
 │
 ├── backend/                        # Python 后端（FastAPI）
 │   ├── pyproject.toml

@@ -35,7 +35,7 @@
 
 所有 [agent-rules.md](docs/agent-rules.md) 中的规则都是硬性的：
 
-- **rule1**: 无权限编辑的文档（docs/human/*, agent-rules.md, code-rules.md）
+- **rule1**: 无权限编辑的文档（docs/human 中的人类维护硬规范、agent-rules.md、code-rules.md；用户明确授权时例外）
 - **rule2**: 代码和文档优先级（human 最高 > agent > 代码）
 - **rule4**: 不要维护兼容性，直接适配最新设计
 - **rule5**: 会话开始前读当前进度
@@ -55,7 +55,7 @@
 
 ## 工作流程规范
 
-**会话开始前**：读 [`docs/agent/current-progress.md`](docs/agent/current-progress.md) 了解当前阶段与待办任务。
+**会话开始前**：先读 [`docs/agent/current-progress.md`](docs/agent/current-progress.md) 了解当前活跃需求文件；如果其中记录了当前需求，再继续读取对应的 `docs/agent/Fxx-*.md` 需求文件。
 
 ### 1️⃣ 需求分析阶段
 
@@ -64,7 +64,7 @@
     - 新建数据库表 → 硬性规则 2
     - 修改现有表结构 → agent-rules.md rule4
     - 新建模块/关键文件夹 → agent-rules.md rule6（需更新索引）
-    - 与 human 目录冲突 → agent-rules.md rule2（human 优先级最高）
+    - 与 `docs/human` 中的 API 文档或数据模型冲突 → agent-rules.md rule2（human 硬规范优先级最高）
 - **如果触发任何规则** → 【停止编码】→ 【输出设计方案文档】→ 【等待用户审批】
 
 ### 2️⃣ 代码改动阶段（仅在所有规则都通过后）
@@ -77,7 +77,8 @@
 
 - 检查是否遵守了 [agent-rules.md](docs/agent-rules.md) 的所有规则
 - 检查是否违反了 [human](docs/human) 目录下的规则
-- 如有新文档，更新 [guide.md](docs/agent/guide.md) 索引
+- 如有新增或迁移需求文档，更新 [guide.md](docs/guide.md) 索引
+- 更新 [`docs/agent/current-progress.md`](docs/agent/current-progress.md) 中的当前需求指针和事实状态
 - 提问用户是否需要 commit
 
 ---

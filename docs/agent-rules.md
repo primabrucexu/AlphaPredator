@@ -5,40 +5,46 @@
 ## rule1: 你没有权限编辑的文档
 
 - 本文档
-- [human](human)：该目录下的所有文档
+- [human](human)：该目录下的人类维护硬规范，包括 API 文档、数据模型和外部事实来源
 - [code-rules.md](code-rules.md)：该文档定义了代码编写规则
+
+> 例外：当用户明确要求修改本文件或重构文档规则时，可以按用户授权修改。
 
 ## rule2: 你必须遵守如下的代码和文档优先级
 
 - [human](human) 目录下的文档优先级最高。任何冲突都要以它为准
-- [agent](agent) 目录下的文档优先级次之。它是你输出方案设计文档和计划文档的地方
+- [agent](agent) 目录下的需求文件优先级次之。它是你输出和维护单需求设计文档、计划文档和当前工作状态的地方
 - 代码的优先级最低。当出现冲突时，永远按照这个优先级解决冲突
+
+普通功能设计不放在 [human](human) 目录。功能需求应按 `Fxx-<feature>.md` 命名并维护在 [agent](agent) 目录。
 
 ## rule3：禁止随意新建或修改数据库表
 
-- 你禁止创建任何不在[data-storage.md](human/data-model/data-storage.md)描述中的数据库表
-- 你禁止修改任何在[data-storage.md](human/data-model/data-storage.md)描述中的数据库表结构
+- 你禁止创建任何不在 [AlphaPredator.dbml](human/data-model/AlphaPredator.dbml) 描述中的数据库表
+- 你禁止修改任何在 [AlphaPredator.dbml](human/data-model/AlphaPredator.dbml) 描述中的数据库表结构
 - 如果需要新增数据库表，
     1. 输出完整的设计方案，包含表名、字段、字段类型、字段含义、以及为什么需要这个表
     2. 要求用户审阅并批准设计方案
-    3. 要求用户更新 [data-storage.md](human/data-model/data-storage.md) 来包含这个新表的设计
+    3. 要求用户更新 [AlphaPredator.dbml](human/data-model/AlphaPredator.dbml) 来包含这个新表的设计
     4. 创建这个表，并在代码中使用它
 
 ## rule4: 不要维护兼容性
 
 1. 当用户更改了某些设计后，你不要维护任何代码的兼容性。直接修改代码来适配最新的设计，并且移除过时设计。
-2. 为了避免本项目存在大量冗余文档，你需要及时更新 [agent](agent) 下面相关的设计文档来反映最新的设计。对于过时的设计文档，你需要在更新后删除它们
+2. 为了避免本项目存在大量冗余文档，你需要及时更新 [agent](agent) 下面相关的 `Fxx-*.md` 需求文件来反映最新的设计。对于过时的设计文档，你需要在更新后删除它们
 3. 特别是当数据表设计变更后，不需要处理任何旧数据的兼容性问题，直接按照最新设计来处理数据即可
 
 ## rule5: 在对话开始前需要执行的动作
 
-- 阅读[当前执行进度](agent/current-progress.md)：了解当前阶段、上一步完成内容、下一步待做任务与已知阻塞。
+- 阅读[当前执行进度](agent/current-progress.md)：了解当前活跃需求文件、最近动作、下一步待做任务与已知阻塞。
+- 如果 [当前执行进度](agent/current-progress.md) 指向某个 `Fxx-*.md` 需求文件，继续读取该需求文件后再开始需求分析。
 
 ## rule6: 在你完成每次编码或设计任务后，你需要进行自检的项目
 
 - 是否遵守本文件"约束"部分，且未触碰受限文档。
 - 是否违反 [human](human) 目录下定义的规则
-- 如果有新增设计文档，更新[guide.md](guide.md)中的索引
+- 如果有新增或迁移需求文档，更新[guide.md](guide.md)中的索引
+- 更新[当前执行进度](agent/current-progress.md)，只记录当前需求、最近动作、下一步和阻塞，不写全局阶段规划
 - 提问用户是否需要进行commit，如果需要，是否需要打标签（feature/fix）
 
 ## rule7: python代码执行规则

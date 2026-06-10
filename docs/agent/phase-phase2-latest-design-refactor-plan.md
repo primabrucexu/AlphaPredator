@@ -13,7 +13,7 @@
 
 ### 1. 文档基线
 
-- `docs/human/hot-review.md`
+- `docs/agent/F01-hot-review.md`
     - 热点数据来源为韭研公社复盘图片与对应 API。
     - 需要支持：热点板块、题材、连板、复盘图片展示。
     - 默认展示 5 个交易日，提供近 3 / 10 / 20 个交易日快捷范围。
@@ -22,8 +22,8 @@
 - `docs/human/data-model/AlphaPredator.dbml`
     - Phase 2 相关表为 `daily_hot_pic`、`daily_hot_info`、`task_info`、`daily_task_info`。
     - `daily_hot_info` 包含 `short_reason` 字段。
-- `docs/phase.md`
-    - Phase 2 目标强调“抓取 → 解析 → 存储 → 展示”完整链路，且复盘任务模式与市场数据拉取一致。
+- 历史 Phase 目标
+    - Phase 2 曾强调“抓取 → 解析 → 存储 → 展示”完整链路，且复盘任务模式与市场数据拉取一致。
     - 数据初始化页面需要支持复盘抓取任务的创建、启动、进度跟踪与重试。
 
 ### 2. 本次核查的关键实现范围
@@ -402,7 +402,7 @@
 
 **验收标准：**
 
-- 页面核心交互与 `docs/human/hot-review.md` 一致；
+- 页面核心交互与 `docs/agent/F01-hot-review.md` 一致；
 - 用户可从题材趋势查看到具体个股，再跳到个股页。
 
 ### Task 6：在首页补上“热点复盘模块”
