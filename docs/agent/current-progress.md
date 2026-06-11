@@ -21,11 +21,13 @@
   - `docs/agent/F03-trading-review.md`
   - `docs/agent/F04-pattern-pick.md`
 - 已保留 `docs/human/api-docs/*`、`docs/human/data-model/AlphaPredator.dbml` 和 `docs/human/mysj.md` 作为人类维护硬规范。
+- 已将前端 Playwright 冒烟脚本调整为优先调用本机 `msedge` / `chrome`，并支持通过 `PLAYWRIGHT_BROWSER_CHANNEL` 指定浏览器 channel。
 
 ## 下一步
 
 - 继续补齐首页热点复盘模块：`HomeSearchPage.tsx` 增加轻量版热点复盘入口，包含最新交易日板块列表、复盘图片入口和跳转 `/sentiment`。
 - 验证 JYGS 鉴权前置校验是否完善。
+- 如前端冒烟检查需要固定浏览器，设置 `PLAYWRIGHT_BROWSER_CHANNEL=msedge` 或 `PLAYWRIGHT_BROWSER_CHANNEL=chrome` 后运行 `npm run check:playwright`。
 
 ## 已知问题 / 阻塞 / 待人工决策
 

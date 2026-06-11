@@ -1,6 +1,36 @@
 import {chromium} from 'playwright';
+import {pathToFileURL} from 'node:url';
 
 const frontendBaseUrl = process.env.FRONTEND_BASE_URL ?? 'http://127.0.0.1:5173';
+
+export function getBrowserChannelCandidates(env = process.env) {
+    const explicitChannel = env.PLAYWRIGHT_BROWSER_CHANNEL?.trim();
+    if (explicitChannel) {
+        return [explicitChannel];
+    }
+
+    return ['msedge', 'chrome'];
+}
+
+async function launchInstalledBrowser() {
+    const errors = [];
+
+    for (const channel of getBrowserChannelCandidates()) {
+        try {
+            return await chromium.launch({channel, headless: true});
+        } catch (error) {
+            errors.push(`${channel}: ${error.message}`);
+        }
+    }
+
+    throw new Error(
+        [
+            '未找到可用的本机 Chromium 浏览器。请安装 Microsoft Edge 或 Google Chrome，',
+            '或设置 PLAYWRIGHT_BROWSER_CHANNEL 指定浏览器 channel。',
+            `尝试结果：${errors.join(' | ')}`,
+        ].join('')
+    );
+}
 
 function summarizeJson(url, body) {
     if (!body || typeof body !== 'object') {
@@ -56,7 +86,7 @@ function summarizeJson(url, body) {
 }
 
 async function run() {
-    const browser = await chromium.launch({headless: true});
+    const browser = await launchInstalledBrowser();
     const context = await browser.newContext();
     const page = await context.newPage();
 
@@ -102,8 +132,10 @@ async function run() {
     console.log('PLAYWRIGHT_CHECK_RESULT_END');
 }
 
-run().catch((error) => {
-    console.error('PLAYWRIGHT_CHECK_FAILED', error);
-    process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+    run().catch((error) => {
+        console.error('PLAYWRIGHT_CHECK_FAILED', error);
+        process.exitCode = 1;
+    });
+}
 
