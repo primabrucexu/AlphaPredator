@@ -135,7 +135,7 @@ async def save_session(body: SaveSessionRequest) -> JSONResponse:
         clear_credentials()
         logger.warning('JYGS save_session: credentials cleared due to invalid probe. detail=%s', detail)
         return JSONResponse(
-            {'ok': False, 'error': f'SESSION 无效：{detail}'},
+            {'ok': False, 'error': f'韭研认证校验失败：{detail}'},
             status_code=400,
         )
 

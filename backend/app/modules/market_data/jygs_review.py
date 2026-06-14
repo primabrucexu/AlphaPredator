@@ -23,6 +23,8 @@ from app.core.settings import settings
 from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
 from app.modules.jygs.auth import get_session
 from app.modules.jygs.auth_file import load_credentials_from_file, save_credentials_to_file, update_auth_check_status
+from app.modules.jygs.playwright_browser import launch_installed_browser
+from app.modules.jygs.request_headers import build_jygs_headers
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +32,8 @@ _JYGS_BASE_URL = 'https://app.jiuyangongshe.com/jystock-app'
 _BROWSER_UA = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
     'AppleWebKit/537.36 (KHTML, like Gecko) '
-    'Chrome/148.0.0.0 Safari/537.36 Edg/148.0.0.0'
+    'Chrome/149.0.0.0 Safari/537.36 Edg/149.0.0.0'
 )
-_SEC_CH_UA = '"Chromium";v="148", "Microsoft Edge";v="148", "Not/A)Brand";v="99"'
-_PLATFORM = '3'
-_TOKEN = 'e9efd6ecfaa33e89fd1ff9b2aeef23fa'
 
 
 class JygsCredentialError(RuntimeError):
@@ -57,37 +56,16 @@ def _connect(sqlite_path: Path | None = None) -> Any:
     return connect_sqlite(target)
 
 
-def _post_json(path: str, payload: dict[str, Any], *, cookie: str, timeout: float = 20.0) -> dict[str, Any]:
+def _post_json(path: str, payload: dict[str, Any], *, cookie: str = '', timeout: float = 20.0) -> dict[str, Any]:
     t0 = time.monotonic()
     payload_keys = sorted(payload.keys())
     logger.info('JYGS request start. path=%s timeout=%.1fs payload_keys=%s', path, timeout, payload_keys)
-    timestamp_ms = str(int(time.time() * 1000))
+    session = cookie.removeprefix('SESSION=').strip() if cookie else None
     body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
     request = Request(
         url=f'{_JYGS_BASE_URL}{path}',
         data=body,
-        headers={
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-            'Content-Type': 'application/json',
-            'Cookie': cookie,
-            'DNT': '1',
-            'Origin': 'https://www.jiuyangongshe.com',
-            'Pragma': 'no-cache',
-            'Referer': 'https://www.jiuyangongshe.com/',
-            'Sec-Fetch-Dest': 'empty',
-            'Sec-Fetch-Mode': 'cors',
-            'Sec-Fetch-Site': 'same-site',
-            'User-Agent': _BROWSER_UA,
-            'platform': _PLATFORM,
-            'sec-ch-ua': _SEC_CH_UA,
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"Windows"',
-            'timestamp': timestamp_ms,
-            'token': _TOKEN,
-        },
+        headers=build_jygs_headers(session=session),
         method='POST',
     )
     try:
@@ -193,7 +171,8 @@ def check_jygs_auth_available(sqlite_path: Path | None = None) -> dict[str, Any]
         payload = _post_json('/api/v1/action/diagram-url', {'date': trade_date}, cookie=cookie)
         err_code = str(payload.get('errCode', ''))
         is_valid = err_code == '0'
-        message = '' if is_valid else f'errCode={err_code}'
+        msg = str(payload.get('msg', '')).strip()
+        message = '' if is_valid else f'errCode={err_code} {msg}'.strip()
     except Exception as exc:  # noqa: BLE001
         is_valid = False
         message = str(exc)
@@ -395,7 +374,7 @@ def auto_login_jygs_with_browser(sqlite_path: Path | None = None, timeout_second
     logger.info('Starting auto login for JYGS at %s', login_url)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        browser = launch_installed_browser(p.chromium, headless=False)
         context = browser.new_context()
         page = context.new_page()
 

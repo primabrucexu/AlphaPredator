@@ -8,13 +8,14 @@ from typing import Any
 from playwright.sync_api import sync_playwright
 
 from app.core.settings import settings
+from app.modules.jygs.playwright_browser import launch_installed_browser
 
 
 def login_and_capture_session(timeout_seconds: int = 300) -> dict[str, Any]:
     """Open JYGS web login page and wait for SESSION cookie from a real browser login."""
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        browser = launch_installed_browser(p.chromium, headless=False)
         context = browser.new_context()
         page = context.new_page()
         try:

@@ -38,7 +38,7 @@ class Settings:
     jygs_api_url: str = 'https://app.jiuyangongshe.com/jystock-app'
     jygs_credentials_path: Path = DATA_DIR / 'config' / 'jygs.credentials'
     jygs_flow_trace_path: Path = DATA_DIR / 'status' / 'jygs-flow-trace.jsonl'
-    jygs_flow_trace_enabled: bool = True
+    jygs_flow_trace_enabled: bool = False
 
 
 settings = Settings()
