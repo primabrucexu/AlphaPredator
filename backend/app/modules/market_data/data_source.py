@@ -136,6 +136,22 @@ def _normalize_trade_date(value: str) -> str:
     return text[:10]
 
 
+def _normalize_trade_datetime(value: str) -> str:
+    text = str(value).strip().replace('/', '-').replace('.', '-')
+    digits = ''.join(ch for ch in text if ch.isdigit())
+    if len(digits) >= 14:
+        return (
+            f'{digits[:4]}-{digits[4:6]}-{digits[6:8]} '
+            f'{digits[8:10]}:{digits[10:12]}:{digits[12:14]}'
+        )
+    if len(digits) == 12:
+        return f'{digits[:4]}-{digits[4:6]}-{digits[6:8]} {digits[8:10]}:{digits[10:12]}:00'
+    if len(text) >= 19 and text[4] == '-' and text[7] == '-':
+        return text[:19]
+    date_part = _normalize_trade_date(text)
+    return f'{date_part} 00:00:00' if date_part else ''
+
+
 def _market_board_from_code(stock_code: str) -> str:
     digits = str(stock_code).split('.')[0].zfill(6)
     if digits.startswith('920') or digits.startswith(('8', '4')):
@@ -323,6 +339,55 @@ def _mairui_fetch_history_rows(stock_code: str, start_date: str, end_date: str) 
                 'amount': round(float(item.get('a') or 0.0) / 1e8, 4),
                 'is_up_limit': False,
                 'is_down_limit': False,
+            }
+        )
+    return rows
+
+
+def fetch_5m_history_rows(stock_code: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
+    """Fetch 5-minute K-line data for one stock across a date range."""
+    licence = _get_mairui_licence()
+    if not licence:
+        raise ValueError('Mairui licence not configured. Please set MAIRUI_LICENCE or save it to the licence file.')
+    market_code = _normalize_market_code(stock_code)
+    if _is_unlisted_new_stock(market_code):
+        raise UnlistedStockSkipError(f'{market_code} is not listed yet (ldate=--)')
+
+    payload = _mairui_get_json(
+        f'hsstock/history/{market_code}/5/n/{licence}',
+        params={'st': start_date.replace('-', ''), 'et': end_date.replace('-', '')},
+    )
+    if not isinstance(payload, list):
+        payload_preview = repr(payload)
+        raise RuntimeError(
+            f'Unexpected Mairui 5m kline payload for {market_code}: '
+            f'expected list, got {type(payload).__name__} → {payload_preview}'
+        )
+
+    rows: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        close = float(item.get('c') or 0.0)
+        pre_close = float(item.get('pc') or item.get('yc') or 0.0)
+        change = close - pre_close if pre_close else close
+        pct_chg = round(change / pre_close * 100, 4) if pre_close else 0.0
+        rows.append(
+            {
+                'full_code': market_code,
+                'trade_date': _normalize_trade_datetime(str(item.get('t', '')).strip()),
+                'open': float(item.get('o') or 0.0),
+                'high': float(item.get('h') or 0.0),
+                'low': float(item.get('l') or 0.0),
+                'close': close,
+                'pre_close': pre_close,
+                'change': round(change, 4),
+                'pct_chg': pct_chg,
+                'vol': float(item.get('v') or 0.0),
+                'amount': float(item.get('a') or 0.0),
+                'is_up_limit': False,
+                'is_down_limit': False,
+                'is_stop': False,
             }
         )
     return rows

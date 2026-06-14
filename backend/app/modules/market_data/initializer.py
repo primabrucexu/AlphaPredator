@@ -819,6 +819,62 @@ def _write_duckdb_stock_bulk(
         conn.close()
 
 
+def write_duckdb_5m_stock_bulk(
+    stock_code: str,
+    rows: list[dict[str, Any]],
+    start_date: str,
+    end_date: str,
+    duckdb_path: Path | None = None,
+) -> None:
+    """Write all 5-minute rows for one stock and date range into DuckDB."""
+    if not rows:
+        return
+
+    start_date_str = f'{start_date[:4]}-{start_date[4:6]}-{start_date[6:8]}'
+    end_date_str = f'{end_date[:4]}-{end_date[4:6]}-{end_date[6:8]}'
+    duckdb_rows = [
+        (
+            str(r.get('full_code') or stock_code),
+            str(r['trade_date']),
+            _to_decimal(r.get('open')),
+            _to_decimal(r.get('high')),
+            _to_decimal(r.get('low')),
+            _to_decimal(r.get('close')),
+            _to_decimal(r.get('pre_close')),
+            _to_decimal(r.get('change')),
+            _to_decimal(r.get('pct_chg')),
+            _to_decimal(r.get('vol')),
+            _to_decimal(r.get('amount')),
+            bool(r.get('is_up_limit', False)),
+            bool(r.get('is_down_limit', False)),
+            bool(r.get('is_stop', False)),
+        )
+        for r in rows
+    ]
+
+    conn = _connect_duckdb(duckdb_path)
+    try:
+        conn.execute('BEGIN TRANSACTION')
+        conn.execute(
+            'DELETE FROM "5m_level_trade_data" '
+            'WHERE full_code = ? AND CAST(trade_date AS DATE) BETWEEN ? AND ?',
+            [stock_code, start_date_str, end_date_str],
+        )
+        conn.executemany(
+            'INSERT INTO "5m_level_trade_data" ('
+            'full_code, trade_date, open, high, low, close, pre_close, change, pct_chg, vol, amount, '
+            'is_up_limit, is_down_limit, is_stop'
+            ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            duckdb_rows,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def _write_duckdb_day(
     date_str: str,
     rows: list[dict[str, Any]],

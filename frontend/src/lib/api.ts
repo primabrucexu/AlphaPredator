@@ -290,6 +290,61 @@ export interface StockLimitUpHistoryResponse {
   rows: StockLimitUpHistoryRow[];
 }
 
+export type StockLinkageASelectMode = 'manual_single' | 'hot_limit_top';
+
+export interface StockLinkageBacktestCreateRequest {
+  a_select_mode: StockLinkageASelectMode;
+  manual_a_full_code?: string | null;
+  hot_top_n?: number | null;
+  start_date: string;
+  end_date: string;
+  min_sample_count: number;
+  job_name?: string | null;
+}
+
+export interface StockLinkageBacktestSummaryResponse {
+  job_id: string;
+  status: string;
+  trigger_event_count: number;
+  baseline_count: number;
+  result_count: number;
+}
+
+export interface StockLinkageBacktestJobResponse {
+  job_id: string;
+  job_name: string | null;
+  a_select_mode: StockLinkageASelectMode;
+  manual_a_full_code: string | null;
+  hot_top_n: number | null;
+  start_date: string;
+  end_date: string;
+  min_sample_count: number;
+  status: 'pending' | 'running' | 'success' | 'failed';
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
+}
+
+export interface StockLinkageBacktestResultRow {
+  job_id: string;
+  a_full_code: string;
+  b_full_code: string;
+  trigger_type: string;
+  trigger_threshold: number;
+  observation_type: string;
+  target_threshold: number;
+  sample_count: number;
+  hit_count: number;
+  condition_probability: number;
+  baseline_probability: number;
+  probability_lift: number;
+  lift_multiple: number | null;
+  trigger_coverage_rate: number;
+  confidence_level: string;
+  score: number;
+}
+
 // ---------------------------------------------------------------------------
 // HTTP helpers
 // ---------------------------------------------------------------------------
@@ -545,6 +600,31 @@ export function getStockLimitUpHistory(
   const query = new URLSearchParams({ limit: String(limit) });
   return fetchJson<StockLimitUpHistoryResponse>(
     `/api/market/stocks/${encodeURIComponent(stockCode)}/limit-up-history?${query.toString()}`,
+  );
+}
+
+export function createStockLinkageBacktest(
+  request: StockLinkageBacktestCreateRequest,
+): Promise<StockLinkageBacktestJobResponse> {
+  return postJson<StockLinkageBacktestJobResponse>('/api/stock-linkage/backtests', request);
+}
+
+export function getStockLinkageBacktest(jobId: string): Promise<StockLinkageBacktestJobResponse> {
+  return fetchJson<StockLinkageBacktestJobResponse>(
+    `/api/stock-linkage/backtests/${encodeURIComponent(jobId)}`,
+  );
+}
+
+export function listStockLinkageBacktests(limit: number = 20): Promise<StockLinkageBacktestJobResponse[]> {
+  return fetchJson<StockLinkageBacktestJobResponse[]>(`/api/stock-linkage/backtests?limit=${limit}`);
+}
+
+export function getStockLinkageBacktestResults(
+  jobId: string,
+  limit: number = 100,
+): Promise<StockLinkageBacktestResultRow[]> {
+  return fetchJson<StockLinkageBacktestResultRow[]>(
+    `/api/stock-linkage/backtests/${encodeURIComponent(jobId)}/results?limit=${limit}`,
   );
 }
 

@@ -5,6 +5,7 @@ import {
     FireOutlined,
     HomeOutlined,
     RadarChartOutlined,
+    StockOutlined,
     SettingOutlined,
 } from '@ant-design/icons';
 import {Breadcrumb, Layout, Menu, Typography} from 'antd';
@@ -19,6 +20,7 @@ const menuItems = [
   { key: '/market', icon: <AreaChartOutlined />, label: '市场总览' },
     {key: '/sentiment', icon: <FireOutlined/>, label: '短线情绪'},
   { key: '/results', icon: <RadarChartOutlined />, label: 'AI 选股结果' },
+  { key: '/stock-linkage', icon: <StockOutlined />, label: '联动套利' },
   { key: '/trade-review', icon: <CalendarOutlined />, label: '交易复盘' },
   { key: '/initialize', icon: <SettingOutlined />, label: '数据初始化' },
 ];

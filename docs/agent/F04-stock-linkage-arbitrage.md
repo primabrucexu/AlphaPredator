@@ -314,15 +314,152 @@ A 股票单根 5 分钟 K 涨幅超过 4% 触发了 40 次
 ## 回测记录保存
 
 - 相关回测记录需要保存到数据库中。
-- 当前仅记录保存需求，不展开具体数据库表设计。
-- 后续实现前，必须先提交完整数据库表设计，包含表名、字段、字段类型、字段含义和设计理由。
-- 数据库表设计需经用户审批，并由用户更新 `docs/human/data-model/AlphaPredator.dbml` 后，才能进入编码实现。
+- 数据库表设计已由用户审批通过。
+- 用户需要将已审批 DBML 同步更新到 `docs/human/data-model/AlphaPredator.dbml` 后，才能进入编码实现。
+
+## 已审批数据库设计 DBML
+
+以下设计用于保存回测任务、触发事件、B 股票基准概率和 A-B 统计结果。
+
+设计假设：
+
+```text
+1. 5 分钟 K 原始行情使用独立行情表 5m_level_trade_data，本节不展开该表设计。
+2. 联动回测结果需要可复查，所以保存任务配置、A 触发事件、B 基准概率、A->B 统计结果。
+3. 这些表建议放 DuckDB，因为回测结果是分析型数据。
+```
+
+行情依赖说明：
+
+```text
+F04 计算依赖 5m_level_trade_data 提供：
+- full_code
+- trade_date
+- bar_time
+- bar_index
+- open / high / low / close
+- pre_close
+- is_stop 或等价停牌 / 无交易标记
+```
+
+如果后续 SQL 中直接引用 `5m_level_trade_data`，需注意该表名以数字开头，可能需要按数据库方言使用引号引用。
+
+已审批 DBML：
+
+```dbml
+Table stock_linkage_backtest_job [headercolor: #8a5a00] {
+  id varchar(255) [pk, unique, note: '回测任务ID，建议使用UUID。用于关联本次回测产生的触发事件、基准概率和统计结果。']
+  job_name varchar(255) [note: '用户自定义任务名称，可为空；用于页面展示和人工识别。']
+  a_select_mode varchar(255) [not null, note: 'A股票选择模式。manual_single表示用户指定单只A股票；hot_limit_top表示基于热点复盘选取近一年涨停次数Top N股票。']
+  manual_a_full_code varchar(255) [note: '手动指定A股票时的完整股票代码，如000001.SZ；仅a_select_mode=manual_single时使用。']
+  hot_top_n integer [note: '热点复盘高频涨停股数量，如20；仅a_select_mode=hot_limit_top时使用。']
+  start_date date [not null, note: '回测开始日期，默认2025-01-01。']
+  end_date date [not null, note: '回测结束日期；未手动选择时使用当前可用行情数据的最新交易日。']
+  min_sample_count integer [not null, default: 30, note: '用户选择的最低样本数门槛，用于过滤或标记样本不足的统计结果。默认30。']
+  status varchar(255) [not null, default: 'pending', note: '回测任务状态：pending/running/success/failed。']
+  error_message text [note: '任务失败原因；成功时为空。']
+  created_at datetime [not null, note: '任务创建时间。']
+  updated_at datetime [not null, note: '任务最近更新时间。']
+  finished_at datetime [note: '任务完成时间；未完成或失败前可为空。']
+
+  indexes {
+    (status, created_at) [name: 'idx_stock_linkage_job_status_created']
+    (created_at) [name: 'idx_stock_linkage_job_created']
+  }
+
+  Note: '股票联动套利回测任务表。保存一次回测的参数、状态和生命周期信息。'
+}
+
+Table stock_linkage_trigger_event [headercolor: #8a5a00] {
+  id varchar(255) [pk, unique, note: '触发事件ID，建议使用UUID。每条记录表示一次A股票触发事件。']
+  job_id varchar(255) [not null, note: '所属回测任务ID，关联stock_linkage_backtest_job.id。']
+  a_full_code varchar(255) [not null, note: '触发异动的A股票完整代码，如000001.SZ。']
+  trade_date date [not null, note: '触发事件发生的交易日T。']
+  bar_time datetime [not null, note: '触发事件所在5分钟K的时间。具体表示K线开始时间还是结束时间，需与5m_level_trade_data保持一致。']
+  bar_index integer [not null, note: '触发事件所在交易日内的5分钟K序号，从1递增。用于定位t以及B股票t+1开盘价。']
+  trigger_type varchar(255) [not null, note: '触发类型。single_bar_return表示单根5分钟K涨幅触发；intraday_return_from_pre_close表示盘中相对昨收累计涨幅触发。']
+  trigger_threshold numeric [not null, note: '触发阈值，小数形式保存，如0.04表示4%。']
+  trigger_return numeric [not null, note: '触发时实际涨幅，小数形式保存。single_bar_return时为当前K收盘相对当前K开盘涨幅；intraday_return_from_pre_close时为当前K收盘相对上一交易日收盘涨幅。']
+
+  indexes {
+    (job_id, a_full_code, trigger_type, trigger_threshold) [name: 'idx_stock_linkage_trigger_a_condition']
+    (job_id, trade_date, bar_index) [name: 'idx_stock_linkage_trigger_time']
+  }
+
+  Note: '股票联动套利A股票触发事件表。用于复查A为何触发，并支撑样本数和触发覆盖率计算。'
+}
+
+Table stock_linkage_baseline_metric [headercolor: #8a5a00] {
+  id varchar(255) [pk, unique, note: '基准指标ID，建议使用UUID。每条记录表示一个B股票在某观察口径和目标阈值下的自然上涨概率。']
+  job_id varchar(255) [not null, note: '所属回测任务ID，关联stock_linkage_backtest_job.id。']
+  b_full_code varchar(255) [not null, note: 'B股票完整代码，如000001.SZ。']
+  observation_type varchar(255) [not null, note: 'B观察结果类型：t_day_high为T日触发后至收盘前最高价；t_day_close为T日收盘价；next_day_high为T+1交易日最高价；next_day_close为T+1交易日收盘价。']
+  target_threshold numeric [not null, note: 'B目标涨幅阈值，小数形式保存，如0.03表示3%。']
+  baseline_sample_count integer [not null, note: 'B自身有效模拟买入样本数。按同一回测区间内B所有有效5分钟K的下一根开盘价作为模拟买入点统计。']
+  baseline_hit_count integer [not null, note: 'B自身达到目标阈值的次数。']
+  baseline_probability numeric [not null, note: 'B自身基准概率，计算方式为baseline_hit_count / baseline_sample_count。']
+
+  indexes {
+    (job_id, b_full_code, observation_type, target_threshold) [name: 'uq_stock_linkage_baseline_b_metric', unique]
+  }
+
+  Note: 'B股票自身基准概率表。用于衡量B在没有指定A触发条件时达到同等涨幅目标的自然概率。'
+}
+
+Table stock_linkage_backtest_result [headercolor: #8a5a00] {
+  id varchar(255) [pk, unique, note: '结果ID，建议使用UUID。每条记录表示一个A-B股票对在某触发条件、观察口径和目标阈值下的统计结果。']
+  job_id varchar(255) [not null, note: '所属回测任务ID，关联stock_linkage_backtest_job.id。']
+  a_full_code varchar(255) [not null, note: 'A股票完整代码，如000001.SZ。']
+  b_full_code varchar(255) [not null, note: 'B股票完整代码，如000001.SZ。']
+  trigger_type varchar(255) [not null, note: 'A触发类型。single_bar_return表示单根5分钟K涨幅触发；intraday_return_from_pre_close表示盘中相对昨收累计涨幅触发。']
+  trigger_threshold numeric [not null, note: 'A触发阈值，小数形式保存，如0.04表示4%。']
+  observation_type varchar(255) [not null, note: 'B观察结果类型：t_day_high为T日触发后至收盘前最高价；t_day_close为T日收盘价；next_day_high为T+1交易日最高价；next_day_close为T+1交易日收盘价。']
+  target_threshold numeric [not null, note: 'B目标涨幅阈值，小数形式保存，如0.03表示3%。']
+  sample_count integer [not null, note: 'A触发后，B有完整行情可观察的有效样本数。']
+  hit_count integer [not null, note: '在有效样本中，B观察结果达到target_threshold的次数。']
+  condition_probability numeric [not null, note: 'A触发条件下B达到目标阈值的条件概率，计算方式为hit_count / sample_count。']
+  baseline_probability numeric [not null, note: 'B自身基准概率，来自stock_linkage_baseline_metric。']
+  probability_lift numeric [not null, note: '概率提升，计算方式为condition_probability - baseline_probability。']
+  lift_multiple numeric [note: '提升倍数，计算方式为condition_probability / baseline_probability；baseline_probability为0时可为空。']
+  trigger_coverage_rate numeric [not null, note: '触发覆盖率，计算方式为触发交易日数 / 有效交易日数。']
+  confidence_level varchar(255) [not null, note: '可信度等级：high/medium/low/insufficient。由样本数和触发覆盖率计算。']
+  score numeric [not null, note: '默认排序综合分，计算方式为probability_lift * log(sample_count + 1)。']
+  created_at datetime [not null, note: '结果记录创建时间。']
+
+  indexes {
+    (job_id, score) [name: 'idx_stock_linkage_result_job_score']
+    (job_id, a_full_code, b_full_code) [name: 'idx_stock_linkage_result_pair']
+    (job_id, trigger_type, trigger_threshold) [name: 'idx_stock_linkage_result_trigger']
+    (job_id, observation_type, target_threshold) [name: 'idx_stock_linkage_result_observation']
+  }
+
+  Note: '股票联动套利回测结果表。用于页面查询、排序和展示A->B条件概率、基准概率、概率提升及可信度。'
+}
+
+Ref fk_stock_linkage_trigger_event_job {
+  stock_linkage_trigger_event.job_id > stock_linkage_backtest_job.id [delete: no action, update: cascade]
+}
+
+Ref fk_stock_linkage_baseline_metric_job {
+  stock_linkage_baseline_metric.job_id > stock_linkage_backtest_job.id [delete: no action, update: cascade]
+}
+
+Ref fk_stock_linkage_backtest_result_job {
+  stock_linkage_backtest_result.job_id > stock_linkage_backtest_job.id [delete: no action, update: cascade]
+}
+```
 
 ## 待确认问题
 
-- 回测记录保存的数据库表设计；该项需要单独审批后再实现。
+- 已审批 DBML 需要由用户同步更新到 `docs/human/data-model/AlphaPredator.dbml`。
 
 ## 当前状态
 
-- 本文档记录第一版股票联动套利分析的已确认设计口径。
+- 已实现第一版股票联动套利分析后端核心：
+  - DuckDB 初始化创建 `5m_level_trade_data` 和 4 张联动回测表。
+  - 5 分钟 K 数据拉取复用麦蕊历史行情接口，使用 `interval=5`。
+  - 后端支持 `manual_single` 和 `hot_limit_top` 两种 A 股票选择模式。
+  - 后端支持后台创建并执行回测任务，保存触发事件、保存 B 基准概率、保存 A-B 统计结果。
+  - API 已提供创建回测任务、查询任务详情、查询任务列表和查询结果列表。
+- 已新增前端“联动套利”页面，支持输入 A 股票模式、日期范围、样本门槛、提交后台任务、轮询任务状态并展示结果表。
 - 后续需求变更应直接更新本文档。
