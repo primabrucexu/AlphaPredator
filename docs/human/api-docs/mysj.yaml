@@ -952,7 +952,7 @@ components:
       description: "Mairui licence，如 LICENCE-xxxx-xxxx"
       schema:
         type: "string"
-        example: "LICENCE-66D8-9F96-0C7F0FBCD073"
+        example: "F7589DFF-7DCF-4CAB-9D12-980600B44B90"
     StockCode:
       in: "path"
       name: "stock_code"

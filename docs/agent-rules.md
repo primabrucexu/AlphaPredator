@@ -23,7 +23,7 @@
 - 你禁止创建任何不在 [AlphaPredator.dbml](human/data-model/AlphaPredator.dbml) 描述中的数据库表
 - 你禁止修改任何在 [AlphaPredator.dbml](human/data-model/AlphaPredator.dbml) 描述中的数据库表结构
 - 如果需要新增数据库表，
-    1. 输出完整的设计方案，包含表名、字段、字段类型、字段含义、以及为什么需要这个表
+    1. 用dbml格式输出完整的设计方案，包含表名、字段、字段类型、字段含义、以及为什么需要这个表
     2. 要求用户审阅并批准设计方案
     3. 要求用户更新 [AlphaPredator.dbml](human/data-model/AlphaPredator.dbml) 来包含这个新表的设计
     4. 创建这个表，并在代码中使用它

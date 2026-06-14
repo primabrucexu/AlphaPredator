@@ -120,6 +120,29 @@ Table day_level_trade_data [headercolor: #175e7a] {
 	Note: '股票日级别交易数据'
 }
 
+Table 5m_level_trade_data [headercolor: #175e7a] {
+	full_code varchar(255) [ not null, note: '带交易所后缀的6位数字格式股票代码，如 000001.SZ' ]
+	trade_date date [ not null, note: '交易日期，YYYY-MM-DD HH:mm:ss' ]
+	open numeric [ not null, note: '开盘价' ]
+	high numeric [ not null, note: '最高价' ]
+	low numeric [ not null, note: '最低价' ]
+	close numeric [ not null, note: '收盘价' ]
+	pre_close numeric [ not null, note: '上根k线的收盘价' ]
+	change numeric [ not null, note: '涨跌额' ]
+	pct_chg numeric [ not null, note: '涨跌幅（%）' ]
+	vol numeric [ not null, note: '成交量，单位是手，也就是100股' ]
+	amount numeric [ not null, note: '成交额，单位是元' ]
+	is_up_limit boolean [ not null, note: '该日是否涨停' ]
+	is_down_limit boolean [ not null, note: '该日是否跌停' ]
+	is_stop boolean [ not null, note: '是否停牌' ]
+
+	indexes {
+		(full_code, trade_date) [ name: 'day_level_trade_data_index_0', unique ]
+	}
+
+	Note: '股票日级别交易数据'
+}
+
 Table review_note [headercolor: #175e7a] {
 	id integer [ pk, increment, not null ]
 	trade_id integer
@@ -454,4 +477,107 @@ Ref fk_trade_review_ai_result_review_id {
 
 Ref fk_trade_review_session_stock_code {
 	trade_review_session.stock_code > stock_list.code [ delete: no action, update: no action ]
+}
+
+// 股票关联关系数据结构设计
+
+Table stock_linkage_backtest_job [headercolor: #8a5a00] {
+  id varchar(255) [pk, unique, note: '回测任务ID，建议使用UUID。用于关联本次回测产生的触发事件、基准概率和统计结果。']
+  job_name varchar(255) [note: '用户自定义任务名称，可为空；用于页面展示和人工识别。']
+  a_select_mode varchar(255) [not null, note: 'A股票选择模式。manual_single表示用户指定单只A股票；hot_limit_top表示基于热点复盘选取近一年涨停次数Top N股票。']
+  manual_a_full_code varchar(255) [note: '手动指定A股票时的完整股票代码，如000001.SZ；仅a_select_mode=manual_single时使用。']
+  hot_top_n integer [note: '热点复盘高频涨停股数量，如20；仅a_select_mode=hot_limit_top时使用。']
+  start_date date [not null, note: '回测开始日期，默认2025-01-01。']
+  end_date date [not null, note: '回测结束日期；未手动选择时使用当前可用行情数据的最新交易日。']
+  min_sample_count integer [not null, default: 30, note: '用户选择的最低样本数门槛，用于过滤或标记样本不足的统计结果。默认30。']
+  status varchar(255) [not null, default: 'pending', note: '回测任务状态：pending/running/success/failed。']
+  error_message text [note: '任务失败原因；成功时为空。']
+  created_at datetime [not null, note: '任务创建时间。']
+  updated_at datetime [not null, note: '任务最近更新时间。']
+  finished_at datetime [note: '任务完成时间；未完成或失败前可为空。']
+
+  indexes {
+    (status, created_at) [name: 'idx_stock_linkage_job_status_created']
+    (created_at) [name: 'idx_stock_linkage_job_created']
+  }
+
+  Note: '股票联动套利回测任务表。保存一次回测的参数、状态和生命周期信息。'
+}
+
+Table stock_linkage_trigger_event [headercolor: #8a5a00] {
+  id varchar(255) [pk, unique, note: '触发事件ID，建议使用UUID。每条记录表示一次A股票触发事件。']
+  job_id varchar(255) [not null, note: '所属回测任务ID，关联stock_linkage_backtest_job.id。']
+  a_full_code varchar(255) [not null, note: '触发异动的A股票完整代码，如000001.SZ。']
+  trade_date date [not null, note: '触发事件发生的交易日T。']
+  bar_time datetime [not null, note: '触发事件所在5分钟K的时间。具体表示K线开始时间还是结束时间，需与5m_level_trade_data保持一致。']
+  bar_index integer [not null, note: '触发事件所在交易日内的5分钟K序号，从1递增。用于定位t以及B股票t+1开盘价。']
+  trigger_type varchar(255) [not null, note: '触发类型。single_bar_return表示单根5分钟K涨幅触发；intraday_return_from_pre_close表示盘中相对昨收累计涨幅触发。']
+  trigger_threshold numeric [not null, note: '触发阈值，小数形式保存，如0.04表示4%。']
+  trigger_return numeric [not null, note: '触发时实际涨幅，小数形式保存。single_bar_return时为当前K收盘相对当前K开盘涨幅；intraday_return_from_pre_close时为当前K收盘相对上一交易日收盘涨幅。']
+
+  indexes {
+    (job_id, a_full_code, trigger_type, trigger_threshold) [name: 'idx_stock_linkage_trigger_a_condition']
+    (job_id, trade_date, bar_index) [name: 'idx_stock_linkage_trigger_time']
+  }
+
+  Note: '股票联动套利A股票触发事件表。用于复查A为何触发，并支撑样本数和触发覆盖率计算。'
+}
+
+Table stock_linkage_baseline_metric [headercolor: #8a5a00] {
+  id varchar(255) [pk, unique, note: '基准指标ID，建议使用UUID。每条记录表示一个B股票在某观察口径和目标阈值下的自然上涨概率。']
+  job_id varchar(255) [not null, note: '所属回测任务ID，关联stock_linkage_backtest_job.id。']
+  b_full_code varchar(255) [not null, note: 'B股票完整代码，如000001.SZ。']
+  observation_type varchar(255) [not null, note: 'B观察结果类型：t_day_high为T日触发后至收盘前最高价；t_day_close为T日收盘价；next_day_high为T+1交易日最高价；next_day_close为T+1交易日收盘价。']
+  target_threshold numeric [not null, note: 'B目标涨幅阈值，小数形式保存，如0.03表示3%。']
+  baseline_sample_count integer [not null, note: 'B自身有效模拟买入样本数。按同一回测区间内B所有有效5分钟K的下一根开盘价作为模拟买入点统计。']
+  baseline_hit_count integer [not null, note: 'B自身达到目标阈值的次数。']
+  baseline_probability numeric [not null, note: 'B自身基准概率，计算方式为baseline_hit_count / baseline_sample_count。']
+
+  indexes {
+    (job_id, b_full_code, observation_type, target_threshold) [name: 'uq_stock_linkage_baseline_b_metric', unique]
+  }
+
+  Note: 'B股票自身基准概率表。用于衡量B在没有指定A触发条件时达到同等涨幅目标的自然概率。'
+}
+
+Table stock_linkage_backtest_result [headercolor: #8a5a00] {
+  id varchar(255) [pk, unique, note: '结果ID，建议使用UUID。每条记录表示一个A-B股票对在某触发条件、观察口径和目标阈值下的统计结果。']
+  job_id varchar(255) [not null, note: '所属回测任务ID，关联stock_linkage_backtest_job.id。']
+  a_full_code varchar(255) [not null, note: 'A股票完整代码，如000001.SZ。']
+  b_full_code varchar(255) [not null, note: 'B股票完整代码，如000001.SZ。']
+  trigger_type varchar(255) [not null, note: 'A触发类型。single_bar_return表示单根5分钟K涨幅触发；intraday_return_from_pre_close表示盘中相对昨收累计涨幅触发。']
+  trigger_threshold numeric [not null, note: 'A触发阈值，小数形式保存，如0.04表示4%。']
+  observation_type varchar(255) [not null, note: 'B观察结果类型：t_day_high为T日触发后至收盘前最高价；t_day_close为T日收盘价；next_day_high为T+1交易日最高价；next_day_close为T+1交易日收盘价。']
+  target_threshold numeric [not null, note: 'B目标涨幅阈值，小数形式保存，如0.03表示3%。']
+  sample_count integer [not null, note: 'A触发后，B有完整行情可观察的有效样本数。']
+  hit_count integer [not null, note: '在有效样本中，B观察结果达到target_threshold的次数。']
+  condition_probability numeric [not null, note: 'A触发条件下B达到目标阈值的条件概率，计算方式为hit_count / sample_count。']
+  baseline_probability numeric [not null, note: 'B自身基准概率，来自stock_linkage_baseline_metric。']
+  probability_lift numeric [not null, note: '概率提升，计算方式为condition_probability - baseline_probability。']
+  lift_multiple numeric [note: '提升倍数，计算方式为condition_probability / baseline_probability；baseline_probability为0时可为空。']
+  trigger_coverage_rate numeric [not null, note: '触发覆盖率，计算方式为触发交易日数 / 有效交易日数。']
+  confidence_level varchar(255) [not null, note: '可信度等级：high/medium/low/insufficient。由样本数和触发覆盖率计算。']
+  score numeric [not null, note: '默认排序综合分，计算方式为probability_lift * log(sample_count + 1)。']
+  created_at datetime [not null, note: '结果记录创建时间。']
+
+  indexes {
+    (job_id, score) [name: 'idx_stock_linkage_result_job_score']
+    (job_id, a_full_code, b_full_code) [name: 'idx_stock_linkage_result_pair']
+    (job_id, trigger_type, trigger_threshold) [name: 'idx_stock_linkage_result_trigger']
+    (job_id, observation_type, target_threshold) [name: 'idx_stock_linkage_result_observation']
+  }
+
+  Note: '股票联动套利回测结果表。用于页面查询、排序和展示A->B条件概率、基准概率、概率提升及可信度。'
+}
+
+Ref fk_stock_linkage_trigger_event_job {
+  stock_linkage_trigger_event.job_id > stock_linkage_backtest_job.id [delete: no action, update: cascade]
+}
+
+Ref fk_stock_linkage_baseline_metric_job {
+  stock_linkage_baseline_metric.job_id > stock_linkage_backtest_job.id [delete: no action, update: cascade]
+}
+
+Ref fk_stock_linkage_backtest_result_job {
+  stock_linkage_backtest_result.job_id > stock_linkage_backtest_job.id [delete: no action, update: cascade]
 }
