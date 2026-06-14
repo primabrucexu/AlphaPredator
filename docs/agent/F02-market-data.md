@@ -22,6 +22,7 @@
 
 - 数据来源：
   - 通过麦蕊智数接口抓取股票列表和天级别交易数据。
+  - 麦蕊接口请求使用令牌桶进行统一流量控制，速率阈值直接使用 `settings.market_data_rate_limit`。
 - 数据存储：
   - 股票列表保存在 SQLite 的 `stock_list` 表中。
   - 天级别交易数据保存在 DuckDB 的 `daily_price` 表中。

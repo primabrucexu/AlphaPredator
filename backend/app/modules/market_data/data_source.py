@@ -4,7 +4,7 @@ Mairui data source adapter.
 Fetches A-share market data via Mairui and converts it into
 the internal batch format used by import_market_data_batch().
 
-Rate limiting: strict cap at 300 req/min (or lower if configured).
+Rate limiting: token bucket controlled by settings.market_data_rate_limit.
 Stock universe: fetched from Mairui remote API.
 """
 
@@ -15,7 +15,6 @@ import logging
 import os
 import threading
 import time
-from collections import deque
 from datetime import date
 from typing import Any
 from urllib import error as urllib_error
@@ -37,31 +36,54 @@ class UnlistedStockSkipError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# Rate limiter (sliding-window, thread-safe)
+# Rate limiter (token bucket, thread-safe)
 # ---------------------------------------------------------------------------
 
-_rate_lock = threading.Lock()
-_call_timestamps: deque[float] = deque()  # monotonic timestamps of recent calls
+
+class _TokenBucket:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._tokens: float | None = None
+        self._updated_at: float | None = None
+
+    def acquire(self) -> None:
+        """Wait until one request token is available."""
+        rate_per_minute = int(settings.market_data_rate_limit)
+        if rate_per_minute <= 0:
+            raise ValueError('settings.market_data_rate_limit must be greater than 0')
+
+        capacity = float(rate_per_minute)
+        refill_per_second = capacity / 60.0
+
+        with self._lock:
+            while True:
+                now = time.monotonic()
+                if self._tokens is None or self._updated_at is None:
+                    self._tokens = capacity
+                    self._updated_at = now
+                else:
+                    elapsed = max(0.0, now - self._updated_at)
+                    self._tokens = min(capacity, self._tokens + elapsed * refill_per_second)
+                    self._updated_at = now
+
+                if self._tokens >= 1.0:
+                    self._tokens -= 1.0
+                    return
+
+                missing_tokens = 1.0 - self._tokens
+                time.sleep(missing_tokens / refill_per_second)
+
+
+_market_data_token_bucket = _TokenBucket()
+
+
+def _acquire_market_data_token() -> None:
+    _market_data_token_bucket.acquire()
 
 
 def _rate_limited_call(func: Any, **kwargs: Any) -> Any:
     """Call *func* while enforcing the configured requests-per-minute limit."""
-    rate_limit = max(1, min(int(settings.market_data_rate_limit), 300))
-    window = 60.0  # seconds
-
-    with _rate_lock:
-        while True:
-            now = time.monotonic()
-            while _call_timestamps and now - _call_timestamps[0] >= window:
-                _call_timestamps.popleft()
-            if len(_call_timestamps) < rate_limit:
-                _call_timestamps.append(now)
-                break
-
-            wait = window - (now - _call_timestamps[0])
-            if wait > 0:
-                time.sleep(wait)
-
+    _acquire_market_data_token()
     try:
         return func(**kwargs)
     except Exception as exc:  # noqa: BLE001
@@ -78,22 +100,7 @@ def _rate_limited_call(func: Any, **kwargs: Any) -> Any:
 
 
 def _rate_limited_http_get(url: str) -> Any:
-    rate_limit = max(1, min(int(settings.market_data_rate_limit), 300))
-    window = 60.0
-
-    with _rate_lock:
-        while True:
-            now = time.monotonic()
-            while _call_timestamps and now - _call_timestamps[0] >= window:
-                _call_timestamps.popleft()
-            if len(_call_timestamps) < rate_limit:
-                _call_timestamps.append(now)
-                break
-
-            wait = window - (now - _call_timestamps[0])
-            if wait > 0:
-                time.sleep(wait)
-
+    _acquire_market_data_token()
     with urllib_request.urlopen(url, timeout=30) as response:
         payload = response.read()
     return payload

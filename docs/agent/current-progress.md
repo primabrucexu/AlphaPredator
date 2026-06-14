@@ -36,11 +36,12 @@
 
 ### 最近动作
 
-- 已将数据初始化页“当日增量更新”调整为“一键增量更新”：基于最近一次成功 `MARKET_DATA` 任务自动计算补齐区间并创建增量同步任务。
 - 已在数据初始化页和首页展示最近一次成功行情同步区间与完成时间。
 - 已将数据初始化页布局调整为：上方“当前行情数据 + 一键增量更新”，中间“初始化任务 / 数据源配置”分区按钮，下方按分区展示任务或配置内容。
 - 已为初始化任务进度区新增任务类型切换：行情同步、热点复盘、股票列表；切换后展示该类型最新一条任务记录；已新增 `/api/data-init/tasks/latest?task_type=...` 查询接口，复用现有 `task_info` 任务记录，不新增数据库表。
+- 已将初始化任务进度区的任务类型切换控件从右侧分段按钮改为左侧下拉框；已运行前端 `npm.cmd run build` 成功；已用 Playwright 检查下拉选择“热点复盘”会请求对应 latest 任务接口。
 - 已将麦蕊历史行情拉取逻辑从逐股预查 `hscp/gsjj` 公司简介改为直接请求历史行情；当历史行情返回 `{"error":"数据不存在"}` 时按未上市/无数据股票跳过，其他非数组响应仍作为失败处理；已运行 `.\.venv\Scripts\pytest.exe backend\tests\test_market_data_5m_import.py`，结果 4 passed；已运行 `.\.venv\Scripts\pytest.exe backend\tests\test_v2_initializer.py`，结果 28 passed；已运行前端 `npm.cmd run build` 和 `npm.cmd run check:playwright` 成功。
+- 已将麦蕊请求速率限制从滑动窗口重构为统一令牌桶；`_rate_limited_call` 和 `_rate_limited_http_get` 共用 `_acquire_market_data_token()`，速率阈值直接使用 `settings.market_data_rate_limit`，不再做 300 上限或 `max/min` 运算；已运行 `.\.venv\Scripts\pytest.exe backend\tests\test_market_data_rate_limit.py`，结果 4 passed；已运行 `.\.venv\Scripts\pytest.exe backend\tests\test_market_data_5m_import.py`，结果 4 passed；已运行 `.\.venv\Scripts\pytest.exe backend\tests\test_v2_initializer.py`，结果 28 passed。
 
 ### 下一步
 
