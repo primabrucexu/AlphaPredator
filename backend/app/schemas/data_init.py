@@ -56,6 +56,9 @@ class InitOverviewResponse(BaseModel):
     market_data_start_date: str | None = Field(None, description='本地已入库行情起始交易日（YYYY-MM-DD）')
     market_data_end_date: str | None = Field(None, description='本地已入库行情截止交易日（YYYY-MM-DD）')
     market_data_trading_day_count: int = Field(0, description='本地已入库行情交易日数量')
+    market_data_last_sync_start_date: str | None = Field(None, description='最近成功行情同步任务的起始日期（YYYYMMDD）')
+    market_data_last_sync_end_date: str | None = Field(None, description='最近成功行情同步任务的截止日期（YYYYMMDD）')
+    market_data_last_sync_finished_at: str | None = Field(None, description='最近成功行情同步任务完成时间（ISO 8601）')
     board_counts: dict[str, int] = Field(default_factory=dict, description='各板块当前上市股票数')
 
 
@@ -186,6 +189,7 @@ class BatchTaskResponse(BaseModel):
 class InitV2OverviewResponse(BaseModel):
     running_task: TaskResponse | None = None
     latest_task: TaskResponse | None = None
+    latest_market_data_task: TaskResponse | None = None
     data_range: DataRangeInfo = Field(default_factory=DataRangeInfo)
     market_data_configured: bool = False
     daily_quote_cutoff_time: str | None = None

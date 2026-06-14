@@ -9,6 +9,7 @@ from app.modules.market_data.data_source import _get_mairui_licence
 from app.modules.market_data.initializer import (
     create_batch_tasks,
     create_task,
+    get_latest_task_by_type,
     get_overview,
     get_task,
     list_tasks,
@@ -194,6 +195,13 @@ def list_init_tasks(limit: int = Query(20, ge=1, le=100)) -> list[TaskResponse]:
     return [TaskResponse.from_db_row(t) for t in tasks]
 
 
+@router.get('/tasks/latest', response_model=TaskResponse | None)
+def get_latest_init_task_by_type(task_type: str = Query(..., pattern='^(MARKET_DATA|JYGS_REVIEW|STOCK_LIST_SYNC)$')) -> TaskResponse | None:
+    """Return the newest task for a specific initialization task type."""
+    task = get_latest_task_by_type(task_type)
+    return TaskResponse.from_db_row(task) if task else None
+
+
 @router.get('/tasks/{task_id}', response_model=TaskResponse)
 def get_init_task(task_id: str) -> TaskResponse:
     """Return the current status and progress of an init task."""
@@ -343,11 +351,13 @@ def get_init_v2_overview() -> InitV2OverviewResponse:
     v2 = get_overview()
     running = v2.get('running_task')
     latest = v2.get('latest_task')
+    latest_market_data = v2.get('latest_market_data_task')
     dr = v2.get('data_range', {})
 
     return InitV2OverviewResponse(
         running_task=TaskResponse.from_db_row(running) if running else None,
         latest_task=TaskResponse.from_db_row(latest) if latest else None,
+        latest_market_data_task=TaskResponse.from_db_row(latest_market_data) if latest_market_data else None,
         data_range=DataRangeInfo(
             min_trade_date=dr.get('min_trade_date'),
             max_trade_date=dr.get('max_trade_date'),
@@ -389,6 +399,7 @@ def get_init_overview() -> InitOverviewResponse:
         (v2.get('latest_task') or {}).get('status') == 'SUCCESS'
     )
     data_range = v2.get('data_range', {})
+    latest_market_data = v2.get('latest_market_data_task') or {}
 
     cst = ZoneInfo('Asia/Shanghai')
     now_cst = datetime.now(cst)
@@ -402,5 +413,8 @@ def get_init_overview() -> InitOverviewResponse:
         market_data_start_date=data_range.get('min_trade_date'),
         market_data_end_date=data_range.get('max_trade_date'),
         market_data_trading_day_count=data_range.get('trading_day_count', 0),
+        market_data_last_sync_start_date=latest_market_data.get('start_date'),
+        market_data_last_sync_end_date=latest_market_data.get('end_date'),
+        market_data_last_sync_finished_at=latest_market_data.get('task_end_date'),
         board_counts=board_counts,
     )

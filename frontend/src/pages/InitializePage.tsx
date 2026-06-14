@@ -9,6 +9,7 @@ import {
     Input,
     Progress,
     Row,
+    Segmented,
     Select,
     Space,
     Statistic,
@@ -32,6 +33,7 @@ import {
     getInitTask,
     getInitV2Overview,
     getJygsAuthStatus,
+    getLatestInitTaskByType,
     getMairuiLicenceConfig,
     getTaskItems,
     type InitV2OverviewResponse,
@@ -45,8 +47,6 @@ import {
     type TaskResponse,
     type TaskType,
     terminateInitTask,
-    triggerDailyUpdate,
-    type UpdateResult,
 } from '../lib/api';
 
 const POLL_INTERVAL_MS = 2000;
@@ -54,6 +54,13 @@ const DEFAULT_START_DATE = '20240101';
 
 function todayYYYYMMDD(): string {
   return dayjs().format('YYYYMMDD');
+}
+
+function addOneDayYYYYMMDD(dateText: string): string {
+  if (!/^\d{8}$/.test(dateText)) return '';
+  return dayjs(`${dateText.slice(0, 4)}-${dateText.slice(4, 6)}-${dateText.slice(6, 8)}`)
+    .add(1, 'day')
+    .format('YYYYMMDD');
 }
 
 function formatIso(iso: string): string {
@@ -122,12 +129,15 @@ export function InitializePage() {
   const [mairuiMessage, setMairuiMessage] = useState<string | null>(null);
 
   const [initOverview, setInitOverview] = useState<InitV2OverviewResponse | null>(null);
+  const [activeSection, setActiveSection] = useState<'tasks' | 'data-source'>('tasks');
 
   // Task
   const [startDate, setStartDate] = useState<string>(DEFAULT_START_DATE);
   const [endDate, setEndDate] = useState<string>(todayYYYYMMDD());
   const [startLoading, setStartLoading] = useState(false);
   const [currentTask, setCurrentTask] = useState<TaskResponse | null>(null);
+  const [progressTaskType, setProgressTaskType] = useState<TaskType>('MARKET_DATA');
+  const [progressTaskLoading, setProgressTaskLoading] = useState(false);
   const [selectedTaskType, setSelectedTaskType] = useState<TaskType>('MARKET_DATA');
   const [selectedMode, setSelectedMode] = useState<string>('FULL_SYNC');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -138,9 +148,8 @@ export function InitializePage() {
   const [itemsLoading, setItemsLoading] = useState(false);
   const [retryItemLabel, setRetryItemLabel] = useState('');
 
-  // Daily update
+  // Incremental update
   const [updateLoading, setUpdateLoading] = useState(false);
-  const [updateResult, setUpdateResult] = useState<UpdateResult | null>(null);
   const [taskActionLoading, setTaskActionLoading] = useState(false);
 
     // Batch tasks
@@ -157,7 +166,9 @@ export function InitializePage() {
     Promise.all([getInitV2Overview(), getJygsAuthStatus(), getMairuiLicenceConfig()])
         .then(([overview, jygs, mairui]) => {
         setInitOverview(overview);
-        setCurrentTask(overview.running_task ?? overview.latest_task ?? null);
+        const task = overview.running_task ?? overview.latest_task ?? null;
+        setCurrentTask(task);
+        if (task) setProgressTaskType(task.task_type);
         setJygsStatus(jygs);
           setMairuiConfig(mairui);
       })
@@ -190,6 +201,13 @@ export function InitializePage() {
         pollRef.current = null;
       }
     };
+  }, [currentTask?.status, currentTask?.task_id]);
+
+  useEffect(() => {
+    if (!currentTask || !['SUCCESS', 'FAILED', 'TERMINATED'].includes(currentTask.status)) return;
+    getInitV2Overview()
+      .then(setInitOverview)
+      .catch(() => {});
   }, [currentTask?.status, currentTask?.task_id]);
 
 
@@ -255,6 +273,7 @@ export function InitializePage() {
       const ed = selectedTaskType === 'STOCK_LIST_SYNC' ? todayYYYYMMDD() : endDate;
       const mode = selectedTaskType === 'MARKET_DATA' ? selectedMode : 'FULL_SYNC';
       const task = await createInitTask(sd, ed, mode, selectedTaskType);
+      setProgressTaskType(selectedTaskType);
       setCurrentTask(task);
     } catch (e) {
       setError(e instanceof Error ? e.message : '启动初始化失败');
@@ -271,15 +290,37 @@ export function InitializePage() {
     setShowDays(!showDays);
   };
 
-  const handleDailyUpdate = async () => {
+  const handleOneClickIncrementalUpdate = async () => {
     setError(null);
     setUpdateLoading(true);
-    setUpdateResult(null);
     try {
-      const result = await triggerDailyUpdate();
-      setUpdateResult(result);
+      const latestMarketTask = initOverview?.latest_market_data_task;
+      if (!latestMarketTask) {
+        setError('暂无成功行情同步记录，请先执行一次全量行情同步。');
+        return;
+      }
+
+      const nextStartDate = addOneDayYYYYMMDD(latestMarketTask.end_date);
+      const targetEndDate = todayYYYYMMDD();
+      if (!nextStartDate) {
+        setError('最近成功行情任务的截止日期格式异常，无法自动计算增量区间。');
+        return;
+      }
+      if (nextStartDate > targetEndDate) {
+        setMairuiMessage('行情已同步到今天，无需增量更新。');
+        return;
+      }
+
+      setSelectedTaskType('MARKET_DATA');
+      setSelectedMode('INCREMENTAL_SYNC');
+      setStartDate(nextStartDate);
+      setEndDate(targetEndDate);
+      setShowDays(false);
+      const task = await createInitTask(nextStartDate, targetEndDate, 'INCREMENTAL_SYNC', 'MARKET_DATA');
+      setProgressTaskType('MARKET_DATA');
+      setCurrentTask(task);
     } catch (e) {
-      setError(e instanceof Error ? e.message : '增量更新失败');
+      setError(e instanceof Error ? e.message : '一键增量更新失败');
     } finally {
       setUpdateLoading(false);
     }
@@ -315,6 +356,7 @@ export function InitializePage() {
     setTaskActionLoading(true);
     try {
       const task = await retryInitTask(currentTask.task_id);
+      setProgressTaskType(task.task_type);
       setCurrentTask(task);
     } catch (e) {
       setError(e instanceof Error ? e.message : '断点继续失败');
@@ -334,6 +376,7 @@ export function InitializePage() {
     setTaskActionLoading(true);
     try {
       const task = await retryInitSubtask(currentTask.task_id, label);
+      setProgressTaskType(task.task_type);
       setCurrentTask(task);
       setShowDays(false);
       setTaskItems(null);
@@ -371,6 +414,8 @@ export function InitializePage() {
         try {
             const result = await createBatchInitTasks(startDate, endDate);
             setBatchTasks(result);
+            setProgressTaskType('MARKET_DATA');
+            setCurrentTask(result.market_data_task);
             batchTaskIdsRef.current = {
                 stock: result.stock_list_task.task_id,
                 market: result.market_data_task.task_id,
@@ -382,6 +427,22 @@ export function InitializePage() {
             setBatchStartLoading(false);
         }
     };
+
+  const handleProgressTaskTypeChange = async (taskType: TaskType) => {
+    setProgressTaskType(taskType);
+    setShowDays(false);
+    setTaskItems(null);
+    setRetryItemLabel('');
+    setProgressTaskLoading(true);
+    try {
+      const task = await getLatestInitTaskByType(taskType);
+      setCurrentTask(task);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '获取最新任务失败');
+    } finally {
+      setProgressTaskLoading(false);
+    }
+  };
 
   // ── 韭研公社连接 handlers ───────────────────────────────────────────────
 
@@ -414,6 +475,9 @@ export function InitializePage() {
   const isTerminated = currentTask?.status === 'TERMINATED';
   const isMarketTask = selectedTaskType === 'MARKET_DATA' || selectedTaskType === 'STOCK_LIST_SYNC';
   const canStartTask = isMarketTask ? !!initOverview?.market_data_configured : !!jygsStatus?.valid;
+  const latestMarketTask = initOverview?.latest_market_data_task ?? null;
+  const oneClickStartDate = latestMarketTask ? addOneDayYYYYMMDD(latestMarketTask.end_date) : '';
+  const oneClickEndDate = todayYYYYMMDD();
 
   const progressPercent = currentTask && currentTask.total_items > 0
     ? Math.round(currentTask.progress_percent)
@@ -442,16 +506,6 @@ export function InitializePage() {
         />
       )}
 
-      {updateResult && (
-        <Alert
-          type="success"
-          showIcon
-          closable
-          message={`增量更新完成：交易日 ${updateResult.trade_date}，更新 ${updateResult.stock_count} 支股票，${updateResult.bar_count} 条记录`}
-          onClose={() => setUpdateResult(null)}
-        />
-      )}
-
       {mairuiMessage && (
         <Alert
           type="success"
@@ -462,6 +516,74 @@ export function InitializePage() {
         />
       )}
 
+      <Card
+        className="page-card"
+        title={
+          <Space>
+            <DatabaseOutlined />
+            当前行情数据
+          </Space>
+        }
+      >
+        <Row gutter={[24, 16]} align="middle">
+          <Col xs={24} lg={16}>
+            <Descriptions column={2} size="small">
+              <Descriptions.Item label="最近成功同步区间">
+                {latestMarketTask ? `${latestMarketTask.start_date} — ${latestMarketTask.end_date}` : '暂无成功同步记录'}
+              </Descriptions.Item>
+              <Descriptions.Item label="最近同步完成时间">
+                {latestMarketTask ? formatIso(latestMarketTask.task_end_date) : '—'}
+              </Descriptions.Item>
+              <Descriptions.Item label="本地行情任务覆盖">
+                {initOverview?.data_range.min_trade_date && initOverview?.data_range.max_trade_date
+                  ? `${initOverview.data_range.min_trade_date} — ${initOverview.data_range.max_trade_date}`
+                  : '—'}
+              </Descriptions.Item>
+              <Descriptions.Item label="当前任务状态">
+                {currentTask ? (
+                  <Tag color={taskStatusColor(currentTask.status)}>{taskStatusLabel(currentTask.status)}</Tag>
+                ) : '—'}
+              </Descriptions.Item>
+            </Descriptions>
+          </Col>
+          <Col xs={24} lg={8}>
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              <Typography.Text strong>一键增量更新</Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {latestMarketTask
+                  ? oneClickStartDate > oneClickEndDate
+                    ? '行情已同步到今天'
+                    : `将补齐：${oneClickStartDate} — ${oneClickEndDate}`
+                  : '需先完成一次行情同步'}
+              </Typography.Text>
+              <Button
+                type="primary"
+                icon={<SyncOutlined />}
+                loading={updateLoading}
+                disabled={isRunning || !initOverview?.market_data_configured || !latestMarketTask}
+                onClick={handleOneClickIncrementalUpdate}
+              >
+                一键增量更新
+              </Button>
+            </Space>
+          </Col>
+        </Row>
+      </Card>
+
+      <Card className="page-card" bodyStyle={{ padding: 12 }}>
+        <Segmented
+          block
+          value={activeSection}
+          onChange={(value) => setActiveSection(value as 'tasks' | 'data-source')}
+          options={[
+            { label: '初始化任务', value: 'tasks' },
+            { label: '数据源配置', value: 'data-source' },
+          ]}
+        />
+      </Card>
+
+      {activeSection === 'data-source' && (
+        <>
       <Card
           className="page-card"
           title={
@@ -568,8 +690,12 @@ export function InitializePage() {
           )}
         </Space>
       </Card>
+        </>
+      )}
 
       {/* V2 Init task creation */}
+      {activeSection === 'tasks' && (
+        <>
       <Card
         className="page-card"
         title={
@@ -786,8 +912,30 @@ export function InitializePage() {
         )}
 
       {/* Task progress */}
-      {currentTask && (
-        <Card className="page-card" title="任务进度">
+      <Card
+        className="page-card"
+        title="任务进度"
+        extra={
+          <Segmented
+            size="small"
+            value={progressTaskType}
+            onChange={(value) => handleProgressTaskTypeChange(value as TaskType)}
+            options={[
+              { label: '行情同步', value: 'MARKET_DATA' },
+              { label: '热点复盘', value: 'JYGS_REVIEW' },
+              { label: '股票列表', value: 'STOCK_LIST_SYNC' },
+            ]}
+          />
+        }
+      >
+        {progressTaskLoading ? (
+          <Typography.Text type="secondary">正在加载最新任务…</Typography.Text>
+        ) : !currentTask ? (
+          <Typography.Text type="secondary">
+            暂无{taskTypeLabel(progressTaskType)}任务记录
+          </Typography.Text>
+        ) : (
+          <>
           <Row gutter={[16, 16]}>
             <Col xs={24} md={6}>
               <Statistic
@@ -938,25 +1086,12 @@ export function InitializePage() {
                 暂无子任务数据
               </Typography.Text>
           )}
-        </Card>
-      )}
-
-      {/* Daily update */}
-      <Card className="page-card" title="当日增量更新">
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Typography.Text type="secondary">
-            仅拉取今日行情并刷新数据库，适合每个交易日收盘后执行，耗时较短。
-          </Typography.Text>
-          <Button
-            icon={<SyncOutlined />}
-            loading={updateLoading}
-            disabled={isRunning}
-            onClick={handleDailyUpdate}
-          >
-            当日增量更新
-          </Button>
-        </Space>
+          </>
+        )}
       </Card>
+
+        </>
+      )}
     </Space>
   );
 }

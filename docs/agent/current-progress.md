@@ -1,8 +1,8 @@
 # 当前执行进度
 
 > **用途**：记录当前活跃需求和最近事实状态，帮助后续 agent / AI 助手接续工作。
-> **维护规则**：每次会话结束时由 agent 更新；只记录事实状态，不写主观判断。
-> **格式**：当前需求 → 最近动作 → 下一步 → 已知问题 / 阻塞 / 待人工决策。
+> **维护规则**：每次会话结束时由 agent 更新；只记录事实状态，不写主观判断。记录完成后清理不活跃文件的相关内容动作
+> **格式**：当前活跃需求文件 → 然后按照每个文件进行分组，记录如下内容：最近动作（只保留最近5条） → 下一步 → 已知问题 / 阻塞 / 待人工决策。
 
 ---
 
@@ -34,6 +34,16 @@
 - 已将 F04 联动回测从同步 API 改为后台任务执行模式：创建任务后异步执行，任务状态保存到 `stock_linkage_backtest_job`，API 支持任务详情、任务列表和结果查询。
 - 已新增前端“联动套利”页面并接入侧边导航；页面已支持提交后台任务、轮询任务状态、任务成功后加载结果。
 - 已运行后端 F04 相关测试，结果 14 passed；已运行前端 `npm.cmd run build` 成功；已用 Playwright + 本机 Edge 冒烟检查 `/stock-linkage` 页面标题、模式和按钮渲染。
+- 已将数据初始化页“当日增量更新”调整为“一键增量更新”：基于最近一次成功 `MARKET_DATA` 任务自动计算补齐区间并创建增量同步任务。
+- 已在数据初始化页和首页展示最近一次成功行情同步区间与完成时间。
+- 已运行 `.\.venv\Scripts\pytest.exe backend\tests\test_v2_initializer.py`，结果 26 passed；已运行前端 `npm.cmd run build` 成功。
+- 已将数据初始化页布局调整为：上方“当前行情数据 + 一键增量更新”，中间“初始化任务 / 数据源配置”分区按钮，下方按分区展示任务或配置内容。
+- 已运行前端 `npm.cmd run build` 成功；已运行 `npm.cmd run check:playwright` 成功；已用 Playwright 检查 `/initialize` 默认任务区和数据源配置区切换文案渲染。
+- 已为初始化任务进度区新增任务类型切换：行情同步、热点复盘、股票列表；切换后展示该类型最新一条任务记录。
+- 已新增 `/api/data-init/tasks/latest?task_type=...` 查询接口，复用现有 `task_info` 任务记录，不新增数据库表。
+- 已运行 `.\.venv\Scripts\pytest.exe backend\tests\test_v2_initializer.py`，结果 28 passed；已运行前端 `npm.cmd run build` 和 `npm.cmd run check:playwright` 成功；已用 Playwright 检查任务进度类型切换请求。
+- 已将麦蕊历史行情拉取逻辑从逐股预查 `hscp/gsjj` 公司简介改为直接请求历史行情；当历史行情返回 `{"error":"数据不存在"}` 时按未上市/无数据股票跳过，其他非数组响应仍作为失败处理。
+- 已运行 `.\.venv\Scripts\pytest.exe backend\tests\test_market_data_5m_import.py`，结果 4 passed；已运行 `.\.venv\Scripts\pytest.exe backend\tests\test_v2_initializer.py`，结果 28 passed。
 
 ## 下一步
 

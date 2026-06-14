@@ -217,6 +217,15 @@ def list_tasks(
     return _task_repo(sqlite_path).list_tasks(limit)
 
 
+def get_latest_task_by_type(
+    task_type: str,
+    sqlite_path: Path | None = None,
+) -> dict[str, Any] | None:
+    """Return the newest task for a task type, regardless of status."""
+    _ensure_schema(sqlite_path)
+    return _task_repo(sqlite_path).get_latest_task_by_type(task_type)
+
+
 
 def reimport_day(trade_date: str, sqlite_path: Path | None = None, duckdb_path: Path | None = None) -> dict[str, Any]:
     """Create and immediately start a one-day MARKET_DATA task for *trade_date* (YYYYMMDD).
@@ -333,10 +342,12 @@ def get_overview(sqlite_path: Path | None = None) -> dict[str, Any]:
     repo = _task_repo(sqlite_path)
     running_row = repo.get_running_task()
     latest_row = repo.get_latest_finished_task()
+    latest_market_data_row = repo.get_latest_successful_market_data_task()
     range_row = repo.get_market_data_range()
     return {
         'running_task': running_row,
         'latest_task': latest_row,
+        'latest_market_data_task': latest_market_data_row,
         'data_range': {
             'min_trade_date': range_row['min_trade_date'] if range_row else None,
             'max_trade_date': range_row['max_trade_date'] if range_row else None,

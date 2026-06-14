@@ -212,6 +212,15 @@ export function HomeSearchPage() {
             {/* Timestamps */}
             <Space direction="vertical" size={2}>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                上一次行情同步：{formatRange(
+                  overview.market_data_last_sync_start_date,
+                  overview.market_data_last_sync_end_date,
+                )}
+                {overview.market_data_last_sync_finished_at
+                  ? `，完成于 ${formatIsoShort(overview.market_data_last_sync_finished_at)}`
+                  : ''}
+              </Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 已有每日行情区间：{formatRange(overview.market_data_start_date, overview.market_data_end_date)}
                 {overview.market_data_trading_day_count > 0 ? `（${overview.market_data_trading_day_count} 个交易日）` : ''}
               </Typography.Text>

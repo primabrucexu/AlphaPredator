@@ -58,6 +58,17 @@ class InitTaskRepo:
         finally:
             conn.close()
 
+    def get_latest_task_by_type(self, task_type: str) -> dict[str, Any] | None:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                'SELECT * FROM task_info WHERE task_type = ? ORDER BY id DESC LIMIT 1',
+                (task_type,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
     def get_task_status(self, task_id: str) -> str | None:
         conn = self._connect()
         try:
@@ -189,6 +200,18 @@ class InitTaskRepo:
             row = conn.execute(
                 "SELECT * FROM task_info WHERE status IN ('SUCCESS', 'FAILED', 'TERMINATED') "
                 "ORDER BY task_end_date DESC LIMIT 1"
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_latest_successful_market_data_task(self) -> dict[str, Any] | None:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT * FROM task_info "
+                "WHERE task_type = 'MARKET_DATA' AND status = 'SUCCESS' "
+                "ORDER BY task_end_date DESC, id DESC LIMIT 1"
             ).fetchone()
             return dict(row) if row else None
         finally:

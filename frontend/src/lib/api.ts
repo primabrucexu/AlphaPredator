@@ -195,6 +195,7 @@ export interface DataRangeInfo {
 export interface InitV2OverviewResponse {
   running_task: TaskResponse | null;
   latest_task: TaskResponse | null;
+  latest_market_data_task: TaskResponse | null;
   data_range: DataRangeInfo;
     market_data_configured: boolean;
   daily_quote_cutoff_time: string | null;
@@ -430,6 +431,10 @@ export function getInitTask(taskId: string): Promise<TaskResponse> {
   return fetchJson<TaskResponse>(`/api/data-init/tasks/${taskId}`);
 }
 
+export function getLatestInitTaskByType(taskType: TaskType): Promise<TaskResponse | null> {
+  return fetchJson<TaskResponse | null>(`/api/data-init/tasks/latest?task_type=${encodeURIComponent(taskType)}`);
+}
+
 export function getTaskItems(taskId: string): Promise<TaskItemsResponse> {
     return fetchJson<TaskItemsResponse>(`/api/data-init/tasks/${taskId}/items`);
 }
@@ -486,6 +491,9 @@ export interface InitOverviewResponse {
   market_data_start_date: string | null;
   market_data_end_date: string | null;
   market_data_trading_day_count: number;
+  market_data_last_sync_start_date: string | null;
+  market_data_last_sync_end_date: string | null;
+  market_data_last_sync_finished_at: string | null;
   board_counts: Record<string, number>;
 }
 

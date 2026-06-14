@@ -22,6 +22,7 @@ from app.modules.market_data.initializer import (
     create_task,
     get_overview,
     get_task,
+    get_latest_task_by_type,
     read_init_status,
     reimport_day,
     retry_task,
@@ -588,7 +589,86 @@ def test_get_overview_returns_empty_when_no_tasks(tmp_path: Path) -> None:
     overview = get_overview(sqlite_path=sqlite_path)
     assert overview['running_task'] is None
     assert overview['latest_task'] is None
+    assert overview['latest_market_data_task'] is None
     assert overview['data_range']['min_trade_date'] is None
+
+
+def test_get_overview_returns_latest_successful_market_data_task(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / 'test.db'
+    ensure_sqlite_schema(sqlite_path)
+
+    with _patch_licence(), patch(
+        'app.modules.market_data.initializer.check_jygs_auth_available',
+        return_value={'is_valid': True},
+    ):
+        older_market = create_task('20240101', '20240131', sqlite_path=sqlite_path)
+        jygs_task = create_task('20240201', '20240229', task_type='JYGS_REVIEW', sqlite_path=sqlite_path)
+        latest_market = create_task('20240301', '20240331', sqlite_path=sqlite_path)
+
+    conn = connect_sqlite(sqlite_path)
+    try:
+        conn.execute(
+            "UPDATE task_info SET status = 'SUCCESS', task_end_date = ? WHERE task_id = ?",
+            ('2024-02-01T10:00:00Z', older_market['task_id']),
+        )
+        conn.execute(
+            "UPDATE task_info SET status = 'SUCCESS', task_end_date = ? WHERE task_id = ?",
+            ('2024-03-01T10:00:00Z', jygs_task['task_id']),
+        )
+        conn.execute(
+            "UPDATE task_info SET status = 'SUCCESS', task_end_date = ? WHERE task_id = ?",
+            ('2024-04-01T10:00:00Z', latest_market['task_id']),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    overview = get_overview(sqlite_path=sqlite_path)
+
+    assert overview['latest_market_data_task']['task_id'] == latest_market['task_id']
+    assert overview['latest_market_data_task']['start_date'] == '20240301'
+    assert overview['latest_market_data_task']['end_date'] == '20240331'
+    assert overview['latest_market_data_task']['task_end_date'] == '2024-04-01T10:00:00Z'
+
+
+def test_get_latest_task_by_type_returns_newest_created_task_for_type(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / 'test.db'
+    ensure_sqlite_schema(sqlite_path)
+
+    with _patch_licence(), patch(
+        'app.modules.market_data.initializer.check_jygs_auth_available',
+        return_value={'is_valid': True},
+    ):
+        first_market = create_task('20240101', '20240131', sqlite_path=sqlite_path)
+        create_task('20240201', '20240229', task_type='JYGS_REVIEW', sqlite_path=sqlite_path)
+        latest_market = create_task('20240301', '20240331', sqlite_path=sqlite_path)
+
+    conn = connect_sqlite(sqlite_path)
+    try:
+        conn.execute(
+            "UPDATE task_info SET status = 'FAILED', task_end_date = ? WHERE task_id = ?",
+            ('2024-04-01T10:00:00Z', latest_market['task_id']),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    task = get_latest_task_by_type('MARKET_DATA', sqlite_path=sqlite_path)
+
+    assert task is not None
+    assert task['task_id'] == latest_market['task_id']
+    assert task['task_id'] != first_market['task_id']
+    assert task['status'] == 'FAILED'
+
+
+def test_get_latest_task_by_type_returns_none_when_type_has_no_tasks(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / 'test.db'
+    ensure_sqlite_schema(sqlite_path)
+
+    with _patch_licence():
+        create_task('20240101', '20240131', sqlite_path=sqlite_path)
+
+    assert get_latest_task_by_type('JYGS_REVIEW', sqlite_path=sqlite_path) is None
 
 
 # ---------------------------------------------------------------------------
