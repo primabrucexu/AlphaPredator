@@ -42,8 +42,6 @@ class UnlistedStockSkipError(RuntimeError):
 
 _rate_lock = threading.Lock()
 _call_timestamps: deque[float] = deque()  # monotonic timestamps of recent calls
-_listing_cache_lock = threading.Lock()
-_listing_date_cache: dict[str, str] = {}
 
 
 def _rate_limited_call(func: Any, **kwargs: Any) -> Any:
@@ -193,38 +191,18 @@ def _normalize_market_code(stock_code: str) -> str:
     return f'{code}.SZ'
 
 
-def _mairui_get_listing_date(full_code: str) -> str:
-    """Return listing date from Mairui company profile; '--' means not yet listed."""
-    code6 = str(full_code).split('.')[0].zfill(6)
-    with _listing_cache_lock:
-        cached = _listing_date_cache.get(code6)
-    if cached is not None:
-        return cached
-
-    licence = _get_mairui_licence()
-    if not licence:
-        raise ValueError('Mairui licence not configured. Please set MAIRUI_LICENCE or save it to the licence file.')
-
-    payload = _mairui_get_json(f'hscp/gsjj/{code6}/{licence}')
-    ldate = ''
-    if isinstance(payload, list) and payload and isinstance(payload[0], dict):
-        ldate = str(payload[0].get('ldate') or '').strip()
-    elif isinstance(payload, dict):
-        ldate = str(payload.get('ldate') or '').strip()
-
-    with _listing_cache_lock:
-        _listing_date_cache[code6] = ldate
-    return ldate
+def _is_mairui_data_missing(payload: Any) -> bool:
+    return isinstance(payload, dict) and str(payload.get('error') or '').strip() == '数据不存在'
 
 
-def _is_unlisted_new_stock(full_code: str) -> bool:
-    """A stock is treated as unlisted when company profile ldate == '--'."""
-    try:
-        return _mairui_get_listing_date(full_code) == '--'
-    except Exception as exc:  # noqa: BLE001
-        # Keep current behavior (do not block history fetch) when profile check fails.
-        logger.warning('Company profile listing-date check failed for %s: %s', full_code, exc)
-        return False
+def _raise_for_unexpected_history_payload(payload: Any, market_code: str, label: str) -> None:
+    if _is_mairui_data_missing(payload):
+        raise UnlistedStockSkipError(f'{market_code} has no Mairui history data (数据不存在)')
+    payload_preview = repr(payload)
+    raise RuntimeError(
+        f'Unexpected Mairui {label} payload for {market_code}: '
+        f'expected list, got {type(payload).__name__} → {payload_preview}'
+    )
 
 
 def _build_mairui_url(path: str, *, params: dict[str, Any] | None = None) -> str:
@@ -299,20 +277,12 @@ def _mairui_fetch_history_rows(stock_code: str, start_date: str, end_date: str) 
         raise ValueError('Mairui licence not configured. Please set MAIRUI_LICENCE or save it to the licence file.')
     market_code = _normalize_market_code(stock_code)
 
-    # Skip not-yet-listed new stocks before requesting history endpoint.
-    if _is_unlisted_new_stock(market_code):
-        raise UnlistedStockSkipError(f'{market_code} is not listed yet (ldate=--)')
-
     payload = _mairui_get_json(
         f'hsstock/history/{market_code}/d/n/{licence}',
         params={'st': start_date.replace('-', ''), 'et': end_date.replace('-', '')},
     )
     if not isinstance(payload, list):
-        payload_preview = repr(payload)
-        raise RuntimeError(
-            f'Unexpected Mairui kline payload for {market_code}: '
-            f'expected list, got {type(payload).__name__} → {payload_preview}'
-        )
+        _raise_for_unexpected_history_payload(payload, market_code, 'kline')
 
     rows: list[dict[str, Any]] = []
     for item in payload:
@@ -350,19 +320,13 @@ def fetch_5m_history_rows(stock_code: str, start_date: str, end_date: str) -> li
     if not licence:
         raise ValueError('Mairui licence not configured. Please set MAIRUI_LICENCE or save it to the licence file.')
     market_code = _normalize_market_code(stock_code)
-    if _is_unlisted_new_stock(market_code):
-        raise UnlistedStockSkipError(f'{market_code} is not listed yet (ldate=--)')
 
     payload = _mairui_get_json(
         f'hsstock/history/{market_code}/5/n/{licence}',
         params={'st': start_date.replace('-', ''), 'et': end_date.replace('-', '')},
     )
     if not isinstance(payload, list):
-        payload_preview = repr(payload)
-        raise RuntimeError(
-            f'Unexpected Mairui 5m kline payload for {market_code}: '
-            f'expected list, got {type(payload).__name__} → {payload_preview}'
-        )
+        _raise_for_unexpected_history_payload(payload, market_code, '5m kline')
 
     rows: list[dict[str, Any]] = []
     for item in payload:

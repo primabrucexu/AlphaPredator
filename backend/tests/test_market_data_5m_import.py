@@ -1,7 +1,7 @@
 from unittest.mock import patch
 
 from app.db.duckdb_storage import ensure_duckdb_schema, run_sql
-from app.modules.market_data.data_source import fetch_5m_history_rows
+from app.modules.market_data.data_source import UnlistedStockSkipError, _mairui_fetch_history_rows, fetch_5m_history_rows
 from app.modules.market_data.initializer import write_duckdb_5m_stock_bulk
 
 
@@ -13,7 +13,6 @@ def test_fetch_5m_history_rows_reuses_history_endpoint_with_5m_interval():
 
     with (
         patch('app.modules.market_data.data_source._get_mairui_licence', return_value='LICENCE'),
-        patch('app.modules.market_data.data_source._is_unlisted_new_stock', return_value=False),
         patch('app.modules.market_data.data_source._mairui_get_json', return_value=payload) as get_json,
     ):
         rows = fetch_5m_history_rows('000001.SZ', '2025-01-02', '2025-01-02')
@@ -56,6 +55,37 @@ def test_fetch_5m_history_rows_reuses_history_endpoint_with_5m_interval():
             'is_stop': False,
         },
     ]
+
+
+def test_fetch_daily_history_skips_when_mairui_reports_data_missing():
+    with (
+        patch('app.modules.market_data.data_source._get_mairui_licence', return_value='LICENCE'),
+        patch('app.modules.market_data.data_source._mairui_get_json', return_value={'error': '数据不存在'}) as get_json,
+    ):
+        try:
+            _mairui_fetch_history_rows('001389.SZ', '2026-06-01', '2026-06-14')
+        except UnlistedStockSkipError as exc:
+            assert '001389.SZ' in str(exc)
+        else:
+            raise AssertionError('expected UnlistedStockSkipError')
+
+    get_json.assert_called_once_with(
+        'hsstock/history/001389.SZ/d/n/LICENCE',
+        params={'st': '20260601', 'et': '20260614'},
+    )
+
+
+def test_fetch_daily_history_fails_for_other_non_list_payloads():
+    with (
+        patch('app.modules.market_data.data_source._get_mairui_licence', return_value='LICENCE'),
+        patch('app.modules.market_data.data_source._mairui_get_json', return_value={'error': '接口频率超限'}),
+    ):
+        try:
+            _mairui_fetch_history_rows('000001.SZ', '2026-06-01', '2026-06-14')
+        except RuntimeError as exc:
+            assert 'Unexpected Mairui kline payload' in str(exc)
+        else:
+            raise AssertionError('expected RuntimeError')
 
 
 def test_write_duckdb_5m_stock_bulk_replaces_stock_range(tmp_path):
