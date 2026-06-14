@@ -8,7 +8,7 @@
 
 ## 当前需求
 
-- 当前活跃需求文件：[F01：热点复盘](F01-hot-review.md)
+- 当前活跃需求文件：[F04：股票联动套利分析](F04-stock-linkage-arbitrage.md)
 - 相关需求文件：[F02：市场数据](F02-market-data.md)
 
 ## 最近动作
@@ -22,12 +22,19 @@
   - `docs/agent/F04-pattern-pick.md`
 - 已保留 `docs/human/api-docs/*`、`docs/human/data-model/AlphaPredator.dbml` 和 `docs/human/mysj.md` 作为人类维护硬规范。
 - 已将前端 Playwright 冒烟脚本调整为优先调用本机 `msedge` / `chrome`，并支持通过 `PLAYWRIGHT_BROWSER_CHANNEL` 指定浏览器 channel。
+- 已将后端 JYGS Python Playwright 登录入口调整为优先调用本机 `msedge` / `chrome`，并支持通过 `PLAYWRIGHT_BROWSER_CHANNEL` 指定浏览器 channel。
+- 已通过 `tmp/jygs_playwright_capture.py` 捕获韭研公社真实浏览器请求，确认复盘接口 token 生成规则为 `md5("Uu0KfOB8iUP69d3c:" + timestamp)`。
+- 已新增 JYGS 动态请求头构造模块，并将鉴权探针和复盘抓取请求从固定 token 改为动态 token。
+- 已运行 `pytest backend\tests\test_jygs_request_headers.py backend\tests\test_jygs_playwright_browser.py`，结果 6 passed；已运行 `pytest backend\tests\test_v2_initializer.py -k jygs`，结果 1 passed。
+- 已删除本地 `data/status/jygs-flow-trace.jsonl`，并将 JYGS flow trace 默认开关改为关闭。
+- 已新增 `docs/agent/F04-stock-linkage-arbitrage.md`，记录 5 分钟级别股票联动套利分析的触发口径、B 股票观察口径、输出格式和待确认问题。
+- 已更新 `docs/guide.md`，加入 F04 文档索引。
 
 ## 下一步
 
-- 继续补齐首页热点复盘模块：`HomeSearchPage.tsx` 增加轻量版热点复盘入口，包含最新交易日板块列表、复盘图片入口和跳转 `/sentiment`。
-- 验证 JYGS 鉴权前置校验是否完善。
-- 如前端冒烟检查需要固定浏览器，设置 `PLAYWRIGHT_BROWSER_CHANNEL=msedge` 或 `PLAYWRIGHT_BROWSER_CHANNEL=chrome` 后运行 `npm run check:playwright`。
+- 继续确认 F04 的 A 股票池、B 股票池、回测时间范围、样本数门槛、排序指标，以及是否需要保存回测任务与结果表。
+- 如后续需要新增 5 分钟行情表或回测结果表，先输出完整数据库表设计并等待用户审批。
+- 暂停后可继续补齐首页热点复盘模块：`HomeSearchPage.tsx` 增加轻量版热点复盘入口，包含最新交易日板块列表、复盘图片入口和跳转 `/sentiment`。
 
 ## 已知问题 / 阻塞 / 待人工决策
 
