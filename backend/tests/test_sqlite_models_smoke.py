@@ -62,3 +62,16 @@ def test_sqlite_task_models_smoke(tmp_path: Path) -> None:
         ).scalars().one()
 
         assert stored_task.total_items == 4
+
+
+def test_sqlite_schema_does_not_create_task_item_info(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / 'schema-no-task-item.db'
+    ensure_sqlite_schema(sqlite_path)
+
+    session_factory = get_sqlite_session_factory(sqlite_path)
+    with session_factory() as session:
+        row = session.connection().exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'task_item_info'"
+        ).fetchone()
+
+    assert row is None

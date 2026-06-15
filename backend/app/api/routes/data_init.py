@@ -206,13 +206,7 @@ def get_init_task(task_id: str) -> TaskResponse:
 
 @router.get('/tasks/{task_id}/items', response_model=TaskItemsResponse)
 def get_task_items(task_id: str) -> TaskItemsResponse:
-    """Return subtask detail for a given task, synthesised from task_info.
-
-    Since individual item records are not persisted, this endpoint returns the
-    current progress snapshot (current_label, processed/total counts) together
-    with task-type–specific metadata so the frontend can render a meaningful
-    subtask panel.
-    """
+    """Return task progress metadata synthesised from task_info."""
     task = get_task(task_id)
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Task not found')

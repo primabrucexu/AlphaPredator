@@ -152,7 +152,7 @@ class RetrySubtaskRequest(BaseModel):
 
 
 class TaskItemsResponse(BaseModel):
-    """子任务明细：基于 task_info 合成，无需独立 item 表。"""
+    """任务处理进度快照：基于 task_info 合成。"""
     task_id: str
     task_type: str
     label_type: str = Field('', description='处理单元类型：stock | date | sync')

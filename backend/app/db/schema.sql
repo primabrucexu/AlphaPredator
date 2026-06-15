@@ -47,17 +47,6 @@ CREATE TABLE IF NOT EXISTS task_info
 
 CREATE INDEX IF NOT EXISTS idx_task_info_status ON task_info (status);
 
-CREATE TABLE IF NOT EXISTS task_item_info
-(
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    task_id       TEXT NOT NULL UNIQUE,
-    item          TEXT NOT NULL DEFAULT '',
-    status        TEXT NOT NULL DEFAULT 'PENDING',
-    error_message TEXT NOT NULL DEFAULT '',
-    started_at    TEXT NOT NULL DEFAULT '',
-    finished_at   TEXT NOT NULL DEFAULT ''
-);
-
 CREATE TABLE IF NOT EXISTS data_range_meta
 (
     dataset           TEXT PRIMARY KEY,

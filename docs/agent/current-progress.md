@@ -36,12 +36,12 @@
 
 ### 最近动作
 
-- 已在数据初始化页和首页展示最近一次成功行情同步区间与完成时间。
 - 已将数据初始化页布局调整为：上方“当前行情数据 + 一键增量更新”，中间“初始化任务 / 数据源配置”分区按钮，下方按分区展示任务或配置内容。
 - 已为初始化任务进度区新增任务类型切换：行情同步、热点复盘、股票列表；切换后展示该类型最新一条任务记录；已新增 `/api/data-init/tasks/latest?task_type=...` 查询接口，复用现有 `task_info` 任务记录，不新增数据库表。
 - 已将初始化任务进度区的任务类型切换控件从右侧分段按钮改为左侧下拉框；已运行前端 `npm.cmd run build` 成功；已用 Playwright 检查下拉选择“热点复盘”会请求对应 latest 任务接口。
 - 已将麦蕊历史行情拉取逻辑从逐股预查 `hscp/gsjj` 公司简介改为直接请求历史行情；当历史行情返回 `{"error":"数据不存在"}` 时按未上市/无数据股票跳过，其他非数组响应仍作为失败处理；已运行 `.\.venv\Scripts\pytest.exe backend\tests\test_market_data_5m_import.py`，结果 4 passed；已运行 `.\.venv\Scripts\pytest.exe backend\tests\test_v2_initializer.py`，结果 28 passed；已运行前端 `npm.cmd run build` 和 `npm.cmd run check:playwright` 成功。
 - 已将麦蕊数据源配置从单独 licence 文本升级为 `data/config/mairui.json`，页面可保存 licence、请求速率阈值和并发拉取数；令牌桶速率从该 JSON 配置读取；`MARKET_DATA` 初始化任务按配置并发拉取历史行情并串行写入 DuckDB；麦蕊 HTTP 诊断日志输出脱敏 endpoint、`rate_limit`、`rate_wait`、网络耗时、总耗时和响应字节数；已运行 `.\.venv\Scripts\pytest.exe backend\tests\test_mairui_config.py backend\tests\test_market_data_rate_limit.py backend\tests\test_v2_initializer.py`，结果 37 passed；已运行 `.\.venv\Scripts\pytest.exe backend\tests\test_market_data_5m_import.py`，结果 4 passed；已运行前端 `npm.cmd run build` 和 `npm.cmd run check:playwright` 成功。
+- 已移除 SQLite schema 中未使用的 `task_item_info` 建表语句，保留基于 `task_info` 合成的任务进度接口；已运行 `.\.venv\Scripts\pytest.exe backend\tests\test_sqlite_models_smoke.py`，结果 3 passed；已运行 `.\.venv\Scripts\pytest.exe backend\tests\test_v2_initializer.py`，结果 28 passed。
 
 ### 下一步
 
