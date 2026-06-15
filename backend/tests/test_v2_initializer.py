@@ -451,6 +451,29 @@ def _mock_mairui_fetch_history_rows(stock_code: str, start_date: str, end_date: 
     return []
 
 
+def _mock_fetch_5m_history_rows(stock_code: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
+    if stock_code not in {'000001.SZ', '600036.SH'}:
+        return []
+    return [
+        {
+            'full_code': stock_code,
+            'trade_date': '2024-01-02 09:30:00',
+            'open': 10.0,
+            'high': 10.5,
+            'low': 9.9,
+            'close': 10.3,
+            'pre_close': 10.0,
+            'change': 0.3,
+            'pct_chg': 3.0,
+            'vol': 1200.0,
+            'amount': 123456.0,
+            'is_up_limit': False,
+            'is_down_limit': False,
+            'is_stop': False,
+        }
+    ]
+
+
 def test_full_task_run_succeeds(tmp_path: Path) -> None:
     sqlite_path = tmp_path / 'test.db'
     duckdb_path = tmp_path / 'test.duckdb'
@@ -507,6 +530,56 @@ def test_full_task_run_succeeds(tmp_path: Path) -> None:
     ).fetchone()[0]
     dconn.close()
     assert dcount >= 1, f'Expected at least 1 DuckDB row for 2024-01-02, got {dcount}'
+
+
+def test_5m_task_run_succeeds(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / 'test.db'
+    duckdb_path = tmp_path / 'test.duckdb'
+
+    with _patch_licence():
+        task = create_task('20240102', '20240102', task_type='MARKET_DATA_5M', sqlite_path=sqlite_path)
+
+    task_id = task['task_id']
+
+    licence_patcher = patch('app.modules.market_data.initializer._get_mairui_licence', return_value='mock_licence')
+    universe_patcher = patch(
+        'app.modules.market_data.initializer._resolve_stock_universe',
+        side_effect=_mock_resolve_stock_universe,
+    )
+    fetch_patcher = patch(
+        'app.modules.market_data.initializer.fetch_5m_history_rows',
+        side_effect=_mock_fetch_5m_history_rows,
+    )
+    licence_patcher.start()
+    universe_patcher.start()
+    fetch_patcher.start()
+    try:
+        started = start_task(task_id, sqlite_path=sqlite_path, duckdb_path=duckdb_path)
+        assert started is True
+
+        for _ in range(50):
+            time.sleep(0.2)
+            t = get_task(task_id, sqlite_path=sqlite_path)
+            if t and t['status'] in ('SUCCESS', 'FAILED'):
+                break
+    finally:
+        fetch_patcher.stop()
+        universe_patcher.stop()
+        licence_patcher.stop()
+
+    t = get_task(task_id, sqlite_path=sqlite_path)
+    assert t is not None
+    assert t['status'] == 'SUCCESS', f'Unexpected status: {t}'
+    assert t['task_type'] == 'MARKET_DATA_5M'
+    assert t['total_items'] == 2
+    assert t['processed_items'] == 2
+
+    dconn = connect_duckdb(duckdb_path)
+    dcount = dconn.execute(
+        'SELECT COUNT(*) FROM "5m_level_trade_data" WHERE CAST(trade_date AS DATE) = DATE \'2024-01-02\''
+    ).fetchone()[0]
+    dconn.close()
+    assert dcount == 2
 
 
 def test_task_fails_on_fetch_error(tmp_path: Path) -> None:

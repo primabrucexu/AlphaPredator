@@ -151,7 +151,7 @@ export const ALL_MARKET_BOARDS: MarketBoard[] = ['主板', '创业板', '科创�
 
 export type TaskStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'TERMINATED';
 
-export type TaskType = 'STOCK_LIST_SYNC' | 'MARKET_DATA' | 'JYGS_REVIEW';
+export type TaskType = 'STOCK_LIST_SYNC' | 'MARKET_DATA' | 'MARKET_DATA_5M' | 'JYGS_REVIEW';
 
 export interface TaskResponse {
   task_id: string;

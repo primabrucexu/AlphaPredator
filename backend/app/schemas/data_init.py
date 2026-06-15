@@ -83,12 +83,12 @@ class CreateTaskRequest(BaseModel):
         description='导入截止日期（YYYYMMDD）；STOCK_LIST_SYNC 可留空',
     )
     mode: str = Field('FULL_SYNC', description='任务模式：FULL_SYNC | INCREMENTAL_SYNC | RANGE（旧别名）')
-    task_type: str = Field('MARKET_DATA', description='任务类型：STOCK_LIST_SYNC | MARKET_DATA | JYGS_REVIEW')
+    task_type: str = Field('MARKET_DATA', description='任务类型：STOCK_LIST_SYNC | MARKET_DATA | MARKET_DATA_5M | JYGS_REVIEW')
 
 
 class TaskResponse(BaseModel):
     task_id: str
-    task_type: str = Field('MARKET_DATA', description='任务类型：STOCK_LIST_SYNC | MARKET_DATA | JYGS_REVIEW')
+    task_type: str = Field('MARKET_DATA', description='任务类型：STOCK_LIST_SYNC | MARKET_DATA | MARKET_DATA_5M | JYGS_REVIEW')
     start_date: str
     end_date: str
     status: str = Field(..., description='PENDING | RUNNING | SUCCESS | FAILED | TERMINATED')
@@ -148,7 +148,7 @@ class ReimportDayRequest(BaseModel):
 
 
 class RetrySubtaskRequest(BaseModel):
-    item_label: str = Field(..., min_length=1, description='子任务标识：MARKET_DATA=股票代码, JYGS_REVIEW=YYYYMMDD')
+    item_label: str = Field(..., min_length=1, description='子任务标识：MARKET_DATA/MARKET_DATA_5M=股票代码, JYGS_REVIEW=YYYYMMDD')
 
 
 class TaskItemsResponse(BaseModel):

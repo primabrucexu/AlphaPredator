@@ -111,6 +111,8 @@ function taskTypeLabel(taskType: string | undefined): string {
   switch (taskType) {
     case 'STOCK_LIST_SYNC':
       return '股票列表同步';
+    case 'MARKET_DATA_5M':
+      return '5分钟K同步';
     case 'JYGS_REVIEW':
       return '韭研复盘抓取';
     default:
@@ -480,7 +482,7 @@ export function InitializePage() {
   const isDone = currentTask?.status === 'SUCCESS';
   const isFailed = currentTask?.status === 'FAILED';
   const isTerminated = currentTask?.status === 'TERMINATED';
-  const isMarketTask = selectedTaskType === 'MARKET_DATA' || selectedTaskType === 'STOCK_LIST_SYNC';
+  const isMarketTask = selectedTaskType === 'MARKET_DATA' || selectedTaskType === 'MARKET_DATA_5M' || selectedTaskType === 'STOCK_LIST_SYNC';
   const canStartTask = isMarketTask ? !!initOverview?.market_data_configured : !!jygsStatus?.valid;
   const latestMarketTask = initOverview?.latest_market_data_task ?? null;
   const oneClickStartDate = latestMarketTask ? addOneDayYYYYMMDD(latestMarketTask.end_date) : '';
@@ -740,7 +742,7 @@ export function InitializePage() {
       >
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <Typography.Text type="secondary">
-            支持三类任务：股票列表同步、行情数据同步（全量/增量）、韭研复盘抓取。
+            支持四类任务：股票列表同步、行情数据同步（全量/增量）、5分钟K同步、韭研复盘抓取。
           </Typography.Text>
           <Space wrap>
             <Space direction="vertical" size={4}>
@@ -749,13 +751,14 @@ export function InitializePage() {
                 value={selectedTaskType}
                 onChange={(v) => {
                   setSelectedTaskType(v);
-                  if (v === 'MARKET_DATA') setSelectedMode('FULL_SYNC');
+                  if (v !== 'MARKET_DATA') setSelectedMode('FULL_SYNC');
                 }}
                 disabled={isRunning}
                 style={{ width: 220 }}
                 options={[
                   {label: '股票列表同步', value: 'STOCK_LIST_SYNC'},
                   {label: '行情数据同步', value: 'MARKET_DATA'},
+                  {label: '5分钟K同步', value: 'MARKET_DATA_5M'},
                   { label: '韭研复盘抓取', value: 'JYGS_REVIEW' },
                 ]}
               />
@@ -822,6 +825,7 @@ export function InitializePage() {
             >
               {isRunning ? '任务运行中…' : (
                   selectedTaskType === 'STOCK_LIST_SYNC' ? '同步股票列表' :
+                      selectedTaskType === 'MARKET_DATA_5M' ? '同步5分钟K' :
                       selectedTaskType === 'JYGS_REVIEW' ? '开始韭研复盘抓取' :
                           selectedMode === 'INCREMENTAL_SYNC' ? '增量同步行情' : '全量同步行情'
               )}
@@ -955,6 +959,7 @@ export function InitializePage() {
             style={{ width: 160 }}
             options={[
               { label: '行情同步', value: 'MARKET_DATA' },
+              { label: '5分钟K', value: 'MARKET_DATA_5M' },
               { label: '热点复盘', value: 'JYGS_REVIEW' },
               { label: '股票列表', value: 'STOCK_LIST_SYNC' },
             ]}

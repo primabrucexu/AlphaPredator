@@ -7,6 +7,7 @@ Task types:
   the provided date range.
 - MARKET_DATA (INCREMENTAL_SYNC): Automatically detect the latest trade date in
   DuckDB ``day_level_trade_data`` and fetch only newer data.
+- MARKET_DATA_5M: Fetch 5-minute bars for every stock in the provided date range.
 - JYGS_REVIEW: Fetch and parse JYGS hotlist review data date by date.
 
 Key properties:
@@ -32,8 +33,8 @@ from app.core.settings import settings
 from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_parent, ensure_duckdb_schema
 from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
 from app.modules.market_data.data_source import _get_mairui_licence, _resolve_stock_universe, \
-    _mairui_fetch_history_rows, MairuiHttpStatusError, UnlistedStockSkipError, fetch_daily_bars_by_date, \
-    sync_stock_list_to_sqlite
+    _mairui_fetch_history_rows, MairuiHttpStatusError, UnlistedStockSkipError, fetch_5m_history_rows, \
+    fetch_daily_bars_by_date, sync_stock_list_to_sqlite
 from app.modules.market_data.jygs_review import check_jygs_auth_available, fetch_and_parse_jygs_review_for_date
 from app.modules.market_data.limit_rules import compute_limit_fields
 from app.modules.market_data.mairui_config import load_mairui_config
@@ -50,6 +51,15 @@ _scoped_retry_labels: dict[str, str] = {}
 class _StockFetchResult:
     stock_code: str
     stock_name: str
+    ok: bool
+    raw_rows: list[dict[str, Any]]
+    fetch_elapsed: float
+    error: str = ''
+
+
+@dataclass(frozen=True)
+class _Stock5mFetchResult:
+    stock_code: str
     ok: bool
     raw_rows: list[dict[str, Any]]
     fetch_elapsed: float
@@ -139,7 +149,7 @@ def create_task(
     _ensure_schema(sqlite_path)
 
     # Validate credentials based on task type
-    if task_type in ('MARKET_DATA', 'STOCK_LIST_SYNC'):
+    if task_type in ('MARKET_DATA', 'MARKET_DATA_5M', 'STOCK_LIST_SYNC'):
         if not _get_mairui_licence():
             raise ValueError(
                 'Market data credentials not configured. '
@@ -170,7 +180,7 @@ def create_task(
         # Date-based loop: total_items = number of weekdays (skip weekends)
         dates = _generate_date_list(start_date, end_date, weekdays_only=True)
         total_items = len(dates)
-    else:  # MARKET_DATA
+    else:  # MARKET_DATA / MARKET_DATA_5M
         # Stock-based loop: total_items will be set after resolving stock universe in _run_task
         total_items = 0
 
@@ -279,7 +289,7 @@ def _normalize_retry_item_label(task_type: str, label: str) -> str:
     text = str(label or '').strip().upper()
     if not text:
         raise ValueError('item_label cannot be empty')
-    if task_type == 'MARKET_DATA':
+    if task_type in ('MARKET_DATA', 'MARKET_DATA_5M'):
         code = text.split('.')[0].zfill(6)
         if code.startswith('6'):
             return f'{code}.SH'
@@ -302,7 +312,7 @@ def retry_subtask(
 ) -> dict[str, Any] | None:
     """Create and start a new scoped retry task for one subtask item.
 
-    - MARKET_DATA: retry one stock (item_label: stock code/full_code)
+    - MARKET_DATA / MARKET_DATA_5M: retry one stock (item_label: stock code/full_code)
     - JYGS_REVIEW: retry one date (item_label: YYYYMMDD)
     - STOCK_LIST_SYNC: no real subtask dimension; rejected
     """
@@ -340,6 +350,51 @@ def retry_subtask(
             _scoped_retry_labels.pop(new_task['task_id'], None)
         return None
     return get_task(new_task['task_id'], sqlite_path)
+
+
+def _prepare_stock_task_items(
+    *,
+    task_id: str,
+    all_stocks_df: Any,
+    scoped_retry_label: str,
+    resume_label: str,
+    resume_processed: int,
+    sqlite_path: Path | None,
+) -> tuple[Any, list[tuple[str, str]]]:
+    stock_list_df = all_stocks_df
+    if scoped_retry_label:
+        stock_list_df = stock_list_df[
+            stock_list_df['full_code'].astype(str).str.upper() == scoped_retry_label
+        ].copy()
+        if stock_list_df.empty:
+            raise RuntimeError(f'Retry stock not found in stock_list: {scoped_retry_label}')
+        _task_repo(sqlite_path).set_processed_items(task_id, 0)
+    else:
+        start_idx = 0
+        if resume_label:
+            matched = all_stocks_df.index[
+                all_stocks_df['full_code'].astype(str).str.upper() == resume_label
+            ].tolist()
+            if matched:
+                start_idx = int(matched[0])
+        elif resume_processed > 0:
+            start_idx = min(resume_processed, len(all_stocks_df))
+
+        if start_idx > 0:
+            stock_list_df = all_stocks_df.iloc[start_idx:].copy()
+            _task_repo(sqlite_path).set_processed_items(task_id, start_idx)
+        else:
+            _task_repo(sqlite_path).set_processed_items(task_id, 0)
+
+    stock_items = [
+        (
+            str(stock['full_code']).strip().upper(),
+            str(stock.get('name') or '').strip(),
+        )
+        for _, stock in stock_list_df.iterrows()
+        if str(stock['full_code']).strip().upper()
+    ]
+    return stock_list_df, stock_items
 
 
 def terminate_task(task_id: str, sqlite_path: Path | None = None) -> dict[str, Any] | None:
@@ -407,7 +462,7 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
                 _task_repo(sqlite_path).mark_task_failed(task_id, _now_iso(), str(exc))
                 return
 
-        elif task_type == 'MARKET_DATA':
+        elif task_type in ('MARKET_DATA', 'MARKET_DATA_5M'):
             # ── 股票级别行情数据同步 ────────────────────────────────────────────
             start_date = task['start_date']
             end_date = task['end_date']
@@ -417,35 +472,19 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
                 sqlite_path=sqlite_path,
                 use_uploaded_universe=True,
             )
-            stock_list_df = all_stocks_df
-            if scoped_retry_label:
-                stock_list_df = stock_list_df[
-                    stock_list_df['full_code'].astype(str).str.upper() == scoped_retry_label
-                    ].copy()
-                if stock_list_df.empty:
-                    raise RuntimeError(f'Retry stock not found in stock_list: {scoped_retry_label}')
-                _task_repo(sqlite_path).set_processed_items(task_id, 0)
-            else:
-                start_idx = 0
-                if resume_label:
-                    matched = all_stocks_df.index[
-                        all_stocks_df['full_code'].astype(str).str.upper() == resume_label
-                        ].tolist()
-                    if matched:
-                        start_idx = int(matched[0])
-                elif resume_processed > 0:
-                    start_idx = min(resume_processed, len(all_stocks_df))
-
-                if start_idx > 0:
-                    stock_list_df = all_stocks_df.iloc[start_idx:].copy()
-                    _task_repo(sqlite_path).set_processed_items(task_id, start_idx)
-                else:
-                    _task_repo(sqlite_path).set_processed_items(task_id, 0)
+            stock_list_df, stock_items = _prepare_stock_task_items(
+                task_id=task_id,
+                all_stocks_df=all_stocks_df,
+                scoped_retry_label=scoped_retry_label,
+                resume_label=resume_label,
+                resume_processed=resume_processed,
+                sqlite_path=sqlite_path,
+            )
 
             total_stocks = len(stock_list_df)
             logger.info(
-                'Task %s: MARKET_DATA, processing %d stocks (%s → %s)',
-                task_id, total_stocks, start_date, end_date,
+                'Task %s: %s, processing %d stocks (%s → %s)',
+                task_id, task_type, total_stocks, start_date, end_date,
             )
 
             # Keep total_items as full universe size for stable resume progress.
@@ -453,47 +492,66 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
 
             concurrency = load_mairui_config().fetch_concurrency
             logger.info(
-                'Task %s: MARKET_DATA fetch concurrency=%d',
+                'Task %s: %s fetch concurrency=%d',
                 task_id,
+                task_type,
                 concurrency,
             )
 
-            stock_items = [
-                (
-                    str(stock['full_code']).strip().upper(),
-                    str(stock.get('name') or '').strip(),
-                )
-                for _, stock in stock_list_df.iterrows()
-                if str(stock['full_code']).strip().upper()
-            ]
-
             duckdb_conn = _connect_duckdb(duckdb_path)
             try:
-                for idx, fetch_result in enumerate(
-                    _iter_market_data_results(task_id, stock_items, start_date, end_date, sqlite_path, concurrency)
-                ):
-                    if fetch_result.stock_code == '':
-                        logger.info(
-                            'Task %s: terminated by user after processing %d/%d stocks',
+                if task_type == 'MARKET_DATA':
+                    for idx, fetch_result in enumerate(
+                        _iter_market_data_results(task_id, stock_items, start_date, end_date, sqlite_path, concurrency)
+                    ):
+                        if fetch_result.stock_code == '':
+                            logger.info(
+                                'Task %s: terminated by user after processing %d/%d stocks',
+                                task_id,
+                                idx,
+                                total_stocks,
+                            )
+                            return
+                        ok, err = _write_one_stock_result(
                             task_id,
-                            idx,
-                            total_stocks,
+                            fetch_result,
+                            start_date,
+                            end_date,
+                            sqlite_path,
+                            duckdb_path,
+                            duckdb_conn=duckdb_conn,
                         )
-                        return
-                    ok, err = _write_one_stock_result(
-                        task_id,
-                        fetch_result,
-                        start_date,
-                        end_date,
-                        sqlite_path,
-                        duckdb_path,
-                        duckdb_conn=duckdb_conn,
-                    )
-                    if not ok:
-                        if first_failed_label is None:
-                            first_failed_label = fetch_result.stock_code
-                        failed_items.append(f'{fetch_result.stock_code}: {err}')
-                        logger.warning('Task %s: continue after stock failure %s', task_id, fetch_result.stock_code)
+                        if not ok:
+                            if first_failed_label is None:
+                                first_failed_label = fetch_result.stock_code
+                            failed_items.append(f'{fetch_result.stock_code}: {err}')
+                            logger.warning('Task %s: continue after stock failure %s', task_id, fetch_result.stock_code)
+                else:
+                    for idx, fetch_result in enumerate(
+                        _iter_market_data_5m_results(task_id, stock_items, start_date, end_date, sqlite_path, concurrency)
+                    ):
+                        if fetch_result.stock_code == '':
+                            logger.info(
+                                'Task %s: terminated by user after processing %d/%d stocks',
+                                task_id,
+                                idx,
+                                total_stocks,
+                            )
+                            return
+                        ok, err = _write_one_stock_5m_result(
+                            task_id,
+                            fetch_result,
+                            start_date,
+                            end_date,
+                            sqlite_path,
+                            duckdb_path,
+                            duckdb_conn=duckdb_conn,
+                        )
+                        if not ok:
+                            if first_failed_label is None:
+                                first_failed_label = fetch_result.stock_code
+                            failed_items.append(f'{fetch_result.stock_code}: {err}')
+                            logger.warning('Task %s: continue after 5m stock failure %s', task_id, fetch_result.stock_code)
             finally:
                 duckdb_conn.close()
 
@@ -667,6 +725,139 @@ def _iter_market_data_results(
                         pending_future.cancel()
                     raise
                 submit_next()
+
+
+def _fetch_one_stock_5m_result(
+    task_id: str,
+    stock_code: str,
+    start_date: str,
+    end_date: str,
+) -> _Stock5mFetchResult:
+    t0 = time.monotonic()
+    logger.info('Task %s: fetching 5m %s [%s ~ %s] …', task_id, stock_code, start_date, end_date)
+    try:
+        raw_rows = fetch_5m_history_rows(stock_code, start_date, end_date)
+    except UnlistedStockSkipError as exc:
+        logger.info('Task %s: skip 5m %s: %s', task_id, stock_code, exc)
+        return _Stock5mFetchResult(stock_code, True, [], time.monotonic() - t0)
+    except MairuiHttpStatusError:
+        logger.exception('Task %s: fatal Mairui HTTP error while fetching 5m %s', task_id, stock_code)
+        raise
+    except Exception as exc:
+        logger.exception('Task %s: 5m fetch failed for %s: %s', task_id, stock_code, exc)
+        return _Stock5mFetchResult(
+            stock_code,
+            False,
+            [],
+            time.monotonic() - t0,
+            f'5m fetch failed for {stock_code}: {exc}',
+        )
+
+    fetch_elapsed = time.monotonic() - t0
+    logger.info(
+        'Task %s: fetched 5m %s — %d rows in %.1fs',
+        task_id, stock_code, len(raw_rows), fetch_elapsed,
+    )
+    return _Stock5mFetchResult(stock_code, True, raw_rows, fetch_elapsed)
+
+
+def _iter_market_data_5m_results(
+    task_id: str,
+    stock_items: list[tuple[str, str]],
+    start_date: str,
+    end_date: str,
+    sqlite_path: Path | None,
+    concurrency: int,
+):
+    if concurrency <= 1:
+        for stock_code, _stock_name in stock_items:
+            if _is_task_terminated(task_id, sqlite_path):
+                yield _Stock5mFetchResult('', True, [], 0.0)
+                return
+            yield _fetch_one_stock_5m_result(task_id, stock_code, start_date, end_date)
+        return
+
+    with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix='market-5m-fetch') as executor:
+        pending: set[Future[_Stock5mFetchResult]] = set()
+        next_index = 0
+
+        def submit_next() -> None:
+            nonlocal next_index
+            if next_index >= len(stock_items):
+                return
+            stock_code, _stock_name = stock_items[next_index]
+            pending.add(executor.submit(_fetch_one_stock_5m_result, task_id, stock_code, start_date, end_date))
+            next_index += 1
+
+        while next_index < len(stock_items) and len(pending) < concurrency:
+            submit_next()
+
+        while pending:
+            if _is_task_terminated(task_id, sqlite_path):
+                for future in pending:
+                    future.cancel()
+                yield _Stock5mFetchResult('', True, [], 0.0)
+                return
+
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                try:
+                    yield future.result()
+                except MairuiHttpStatusError:
+                    for pending_future in pending:
+                        pending_future.cancel()
+                    raise
+                submit_next()
+
+
+def _write_one_stock_5m_result(
+    task_id: str,
+    fetch_result: _Stock5mFetchResult,
+    start_date: str,
+    end_date: str,
+    sqlite_path: Path | None,
+    duckdb_path: Path | None = None,
+    *,
+    duckdb_conn: Any | None = None,
+) -> tuple[bool, str]:
+    stock_code = fetch_result.stock_code
+    raw_rows = fetch_result.raw_rows
+    fetch_elapsed = fetch_result.fetch_elapsed
+    t0 = time.monotonic() - fetch_elapsed
+
+    _task_repo(sqlite_path).set_current_label(task_id, stock_code)
+
+    if not fetch_result.ok:
+        return False, fetch_result.error
+
+    if not raw_rows:
+        logger.info('Task %s: %s has no 5m data in range, skip write', task_id, stock_code)
+        _task_repo(sqlite_path).increment_processed_items(task_id)
+        return True, ''
+
+    write_elapsed_start = time.monotonic()
+    try:
+        write_duckdb_5m_stock_bulk(
+            stock_code,
+            raw_rows,
+            start_date,
+            end_date,
+            duckdb_path,
+            duckdb_conn=duckdb_conn,
+        )
+    except Exception as exc:
+        logger.exception('Task %s: 5m write failed for %s: %s', task_id, stock_code, exc)
+        return False, f'5m write failed for {stock_code}: {exc}'
+
+    write_elapsed = time.monotonic() - write_elapsed_start
+    unique_dates = len({str(r.get('trade_date') or '')[:10] for r in raw_rows})
+    total_elapsed = time.monotonic() - t0
+    logger.info(
+        'Task %s: 5m %s done — %d rows written in %d dates (fetch=%.1fs write=%.1fs total=%.1fs)',
+        task_id, stock_code, len(raw_rows), unique_dates, fetch_elapsed, write_elapsed, total_elapsed,
+    )
+    _task_repo(sqlite_path).increment_processed_items(task_id)
+    return True, ''
 
 
 def _write_one_stock_result(
@@ -973,6 +1164,8 @@ def write_duckdb_5m_stock_bulk(
     start_date: str,
     end_date: str,
     duckdb_path: Path | None = None,
+    *,
+    duckdb_conn: Any | None = None,
 ) -> None:
     """Write all 5-minute rows for one stock and date range into DuckDB."""
     if not rows:
@@ -1000,7 +1193,7 @@ def write_duckdb_5m_stock_bulk(
         for r in rows
     ]
 
-    conn = _connect_duckdb(duckdb_path)
+    conn = duckdb_conn or _connect_duckdb(duckdb_path)
     try:
         conn.execute('BEGIN TRANSACTION')
         conn.execute(
@@ -1020,7 +1213,8 @@ def write_duckdb_5m_stock_bulk(
         conn.rollback()
         raise
     finally:
-        conn.close()
+        if duckdb_conn is None:
+            conn.close()
 
 
 def _write_duckdb_day(

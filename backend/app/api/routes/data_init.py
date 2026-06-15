@@ -109,6 +109,7 @@ def create_init_task(body: CreateTaskRequest) -> TaskResponse:
     Supports three task types:
     - STOCK_LIST_SYNC: Sync stock list from Mairui (no date range needed)
     - MARKET_DATA: Market data load (FULL_SYNC | INCREMENTAL_SYNC)
+    - MARKET_DATA_5M: 5-minute market data load
     - JYGS_REVIEW: JYGS review data fetch
 
     Returns 202 if started, 409 if another task is already running.
@@ -189,7 +190,9 @@ def list_init_tasks(limit: int = Query(20, ge=1, le=100)) -> list[TaskResponse]:
 
 
 @router.get('/tasks/latest', response_model=TaskResponse | None)
-def get_latest_init_task_by_type(task_type: str = Query(..., pattern='^(MARKET_DATA|JYGS_REVIEW|STOCK_LIST_SYNC)$')) -> TaskResponse | None:
+def get_latest_init_task_by_type(
+    task_type: str = Query(..., pattern='^(MARKET_DATA|MARKET_DATA_5M|JYGS_REVIEW|STOCK_LIST_SYNC)$'),
+) -> TaskResponse | None:
     """Return the newest task for a specific initialization task type."""
     task = get_latest_task_by_type(task_type)
     return TaskResponse.from_db_row(task) if task else None
@@ -212,7 +215,7 @@ def get_task_items(task_id: str) -> TaskItemsResponse:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Task not found')
 
     task_type = task.get('task_type', 'MARKET_DATA')
-    if task_type == 'MARKET_DATA':
+    if task_type in ('MARKET_DATA', 'MARKET_DATA_5M'):
         label_type = 'stock'
         label_name = '股票代码'
     elif task_type == 'JYGS_REVIEW':
