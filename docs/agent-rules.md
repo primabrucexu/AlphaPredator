@@ -36,7 +36,8 @@
 
 ## rule5: 在对话开始前需要执行的动作
 
-- 阅读[当前执行进度](agent/current-progress.md)：了解当前活跃需求文件、最近动作、下一步待做任务与已知阻塞。
+- 阅读[当前执行进度](agent/current-progress.md)：了解当前活跃需求和进度。
+- 阅读[最近操作](agent/recent-actions.md)：了解 agent 最近 5 条操作。
 - 如果 [当前执行进度](agent/current-progress.md) 指向某个 `Fxx-*.md` 需求文件，继续读取该需求文件后再开始需求分析。
 
 ## rule6: 在你完成每次编码或设计任务后，你需要进行自检的项目
@@ -44,7 +45,9 @@
 - 是否遵守本文件"约束"部分，且未触碰受限文档。
 - 是否违反 [human](human) 目录下定义的规则
 - 如果有新增或迁移需求文档，更新[guide.md](guide.md)中的索引
-- 更新[当前执行进度](agent/current-progress.md)，只记录当前需求、最近动作、下一步和阻塞，不写全局阶段规划
+- 更新[当前执行进度](agent/current-progress.md)：只记录当前活跃需求，使用完成情况勾选框追踪进度。如活跃需求未变则更新进度，如切换需求则完整替换。
+- 在[最近操作](agent/recent-actions.md)追加本次会话动作，保持最新 5 条。
+- 当某个需求不再活跃时，必须先检查是否有阻塞或待人工决策内容，如有则同步写入对应 `Fxx-*.md` 文件，然后从 `current-progress.md` 移除。
 - 提问用户是否需要进行commit，如果需要，是否需要打标签（feature/fix）
 
 ## rule7: python代码执行规则

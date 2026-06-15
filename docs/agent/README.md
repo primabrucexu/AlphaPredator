@@ -64,11 +64,13 @@
 - 需求变化时更新对应需求文件，不新增 Phase 规划。
 - 与 `docs/human` 冲突时，以 `docs/human` 为准。
 - 新增或迁移需求文件后，更新 [docs/guide.md](../guide.md) 索引。
-- 会话结束前更新 [current-progress.md](current-progress.md)，只记录当前需求、最近动作、下一步和阻塞。
+- 会话结束前更新 [current-progress.md](current-progress.md)，记录当前活跃需求的进度和完成情况；追加 [recent-actions.md](recent-actions.md) 操作日志。
+- 当某个需求不再活跃时，先将阻塞/待决策内容同步到对应 `Fxx-*.md`，再删除 `current-progress.md` 中该需求分区。
 
 ## 快速开始
 
-1. 阅读 [current-progress.md](current-progress.md)，确认当前活跃需求文件。
-2. 阅读对应 `Fxx-*.md` 文件。
+1. 阅读 [current-progress.md](current-progress.md)，确认当前活跃需求文件和进度。
+2. 阅读 [recent-actions.md](recent-actions.md)，了解 agent 最近操作。
+3. 阅读对应 `Fxx-*.md` 文件。
 3. 若是新需求，创建新的 `Fxx-<feature>.md` 并更新 [docs/guide.md](../guide.md)。
 4. 进入实现前，按 [code-rules.md](../code-rules.md) 先输出假设、取舍和验证标准。

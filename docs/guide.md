@@ -4,7 +4,7 @@
 
 ## 快速使用说明
 
-- **开始工作前**：先看 [Agent Guide](../AGENTS.md) 和 [当前执行进度](agent/current-progress.md)。
+- **开始工作前**：先看 [Agent Guide](../AGENTS.md)、[当前执行进度](agent/current-progress.md) 和 [最近操作](agent/recent-actions.md)。
 - **继续当前任务**：如果 `current-progress.md` 指向某个 `Fxx-*.md` 文件，继续读取该需求文件。
 - **查看功能需求**：看 `docs/agent/Fxx-*.md`。
 - **核对硬规范**：看 `docs/human` 下的人类维护文档。
@@ -17,7 +17,8 @@
 
 ## 当前入口
 
-- [当前执行进度](agent/current-progress.md)：记录当前活跃需求文件、最近动作、下一步和阻塞。
+- [当前执行进度](agent/current-progress.md)：记录当前活跃需求的进度、下一步和阻塞。
+- [最近操作](agent/recent-actions.md)：agent 最近 5 条操作日志。
 - [docs/agent 使用说明](agent/README.md)：需求文件命名规范、模板和维护规则。
 
 ## 功能需求

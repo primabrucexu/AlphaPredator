@@ -55,7 +55,7 @@
 
 ## 工作流程规范
 
-**会话开始前**：先读 [`docs/agent/current-progress.md`](docs/agent/current-progress.md) 了解当前活跃需求文件；如果其中记录了当前需求，再继续读取对应的 `docs/agent/Fxx-*.md` 需求文件。
+**会话开始前**：先读 [`docs/agent/current-progress.md`](docs/agent/current-progress.md) 了解当前活跃需求和进度；读 [`docs/agent/recent-actions.md`](docs/agent/recent-actions.md) 了解最近操作；如果其中记录了当前需求，再继续读取对应的 `docs/agent/Fxx-*.md` 需求文件。
 
 ### 1️⃣ 需求分析阶段
 
@@ -78,7 +78,7 @@
 - 检查是否遵守了 [agent-rules.md](docs/agent-rules.md) 的所有规则
 - 检查是否违反了 [human](docs/human) 目录下的规则
 - 如有新增或迁移需求文档，更新 [guide.md](docs/guide.md) 索引
-- 更新 [`docs/agent/current-progress.md`](docs/agent/current-progress.md) 中的当前需求指针和事实状态
+- 更新 [`docs/agent/current-progress.md`](docs/agent/current-progress.md) 进度和 [`docs/agent/recent-actions.md`](docs/agent/recent-actions.md) 操作日志
 - 提问用户是否需要 commit
 
 ---
