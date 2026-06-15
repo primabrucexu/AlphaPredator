@@ -35,6 +35,18 @@ class UnlistedStockSkipError(RuntimeError):
     """Raised when a stock is not yet listed and should be skipped."""
 
 
+class MairuiHttpStatusError(RuntimeError):
+    """Raised when Mairui returns a non-200 HTTP status."""
+
+    def __init__(self, exc: urllib_error.HTTPError) -> None:
+        self.status_code = int(exc.code)
+        self.reason = str(exc.reason)
+        super().__init__(
+            f'Mairui HTTP {self.status_code} '
+            f'({_mairui_http_status_message(self.status_code)}): {self.reason}'
+        )
+
+
 # ---------------------------------------------------------------------------
 # Rate limiter (token bucket, thread-safe)
 # ---------------------------------------------------------------------------
@@ -300,6 +312,9 @@ def _mairui_get_json(path: str, *, params: dict[str, Any] | None = None) -> Any:
     url = _build_mairui_url(path, params=params)
     try:
         raw = _rate_limited_http_get(url)
+    except urllib_error.HTTPError as exc:
+        logger.error('Mairui request returned non-200: %s', _redact_mairui_url(url))
+        raise MairuiHttpStatusError(exc) from exc
     except urllib_error.URLError as exc:  # noqa: BLE001
         logger.error('Mairui request failed: %s', _redact_mairui_url(url))
         raise RuntimeError(f'Mairui request failed: {exc}') from exc

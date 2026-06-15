@@ -17,7 +17,7 @@ Key properties:
 
 from __future__ import annotations
 
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 import logging
 import threading
@@ -32,7 +32,8 @@ from app.core.settings import settings
 from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_parent, ensure_duckdb_schema
 from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
 from app.modules.market_data.data_source import _get_mairui_licence, _resolve_stock_universe, \
-    _mairui_fetch_history_rows, UnlistedStockSkipError, fetch_daily_bars_by_date, sync_stock_list_to_sqlite
+    _mairui_fetch_history_rows, MairuiHttpStatusError, UnlistedStockSkipError, fetch_daily_bars_by_date, \
+    sync_stock_list_to_sqlite
 from app.modules.market_data.jygs_review import check_jygs_auth_available, fetch_and_parse_jygs_review_for_date
 from app.modules.market_data.limit_rules import compute_limit_fields
 from app.modules.market_data.mairui_config import load_mairui_config
@@ -585,6 +586,9 @@ def _fetch_one_stock_result(
     except UnlistedStockSkipError as exc:
         logger.info('Task %s: skip %s: %s', task_id, stock_code, exc)
         return _StockFetchResult(stock_code, stock_name, True, [], time.monotonic() - t0)
+    except MairuiHttpStatusError:
+        logger.exception('Task %s: fatal Mairui HTTP error while fetching %s', task_id, stock_code)
+        raise
     except Exception as exc:
         logger.exception('Task %s: fetch failed for %s: %s', task_id, stock_code, exc)
         return _StockFetchResult(
@@ -621,17 +625,38 @@ def _iter_market_data_results(
         return
 
     with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix='market-fetch') as executor:
-        futures: dict[Future[_StockFetchResult], str] = {
-            executor.submit(_fetch_one_stock_result, task_id, stock_code, stock_name, start_date, end_date): stock_code
-            for stock_code, stock_name in stock_items
-        }
-        for future in as_completed(futures):
+        pending: set[Future[_StockFetchResult]] = set()
+        next_index = 0
+
+        def submit_next() -> None:
+            nonlocal next_index
+            if next_index >= len(stock_items):
+                return
+            stock_code, stock_name = stock_items[next_index]
+            pending.add(
+                executor.submit(_fetch_one_stock_result, task_id, stock_code, stock_name, start_date, end_date)
+            )
+            next_index += 1
+
+        while next_index < len(stock_items) and len(pending) < concurrency:
+            submit_next()
+
+        while pending:
             if _is_task_terminated(task_id, sqlite_path):
-                for pending in futures:
-                    pending.cancel()
+                for future in pending:
+                    future.cancel()
                 yield _StockFetchResult('', '', True, [], 0.0)
                 return
-            yield future.result()
+
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                try:
+                    yield future.result()
+                except MairuiHttpStatusError:
+                    for pending_future in pending:
+                        pending_future.cancel()
+                    raise
+                submit_next()
 
 
 def _write_one_stock_result(

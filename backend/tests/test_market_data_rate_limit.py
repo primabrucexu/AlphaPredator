@@ -152,3 +152,17 @@ def test_rate_limited_http_get_logs_http_status_with_body(caplog: pytest.LogCapt
     assert 'rate_limit=1000/min' in messages
     assert 'secret-licence' not in messages
     assert 'body={"error":"too many requests"}' in messages
+
+
+def test_mairui_get_json_wraps_http_error_as_fatal() -> None:
+    error = HTTPError(
+        url='https://api.mairui.club/hsstock/history/000001.SZ/d/n/secret-licence',
+        code=503,
+        msg='Service Unavailable',
+        hdrs=None,
+        fp=BytesIO(b'{"error":"too many requests"}'),
+    )
+
+    with patch('app.modules.market_data.data_source._rate_limited_http_get', side_effect=error):
+        with pytest.raises(data_source.MairuiHttpStatusError, match='503'):
+            data_source._mairui_get_json('hsstock/history/000001.SZ/d/n/secret-licence')

@@ -7,13 +7,14 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 import pandas as pd
 import pytest
 
 from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_schema
 from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
-from app.modules.market_data.data_source import _to_full_code, load_stock_list
+from app.modules.market_data.data_source import MairuiHttpStatusError, _to_full_code, load_stock_list
 from app.modules.market_data.initializer import (
     _atomic_write_day,
     _generate_date_list,
@@ -549,6 +550,49 @@ def test_task_fails_on_fetch_error(tmp_path: Path) -> None:
     assert t is not None
     assert t['status'] == 'FAILED'
     assert 'network error' in t['error_message']
+
+
+def test_task_stops_on_mairui_http_status_error(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / 'test.db'
+
+    with _patch_licence():
+        task = create_task('20240102', '20240102', sqlite_path=sqlite_path)
+
+    task_id = task['task_id']
+    calls: list[str] = []
+
+    def fail_on_first_stock(stock_code: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
+        calls.append(stock_code)
+        raise MairuiHttpStatusError(HTTPError(
+            url='https://api.mairui.club/hsstock/history/000001.SZ/d/n/mock',
+            code=503,
+            msg='Service Unavailable',
+            hdrs=None,
+            fp=None,
+        ))
+
+    config = type('Config', (), {'fetch_concurrency': 1})()
+
+    with (
+        _patch_licence(),
+        patch('app.modules.market_data.initializer.sync_stock_list_to_sqlite'),
+        patch('app.modules.market_data.initializer._resolve_stock_universe', side_effect=_mock_resolve_stock_universe),
+        patch('app.modules.market_data.initializer._mairui_fetch_history_rows', side_effect=fail_on_first_stock),
+        patch('app.modules.market_data.initializer.load_mairui_config', return_value=config),
+    ):
+        start_task(task_id, sqlite_path=sqlite_path)
+
+        for _ in range(30):
+            time.sleep(0.2)
+            t = get_task(task_id, sqlite_path=sqlite_path)
+            if t and t['status'] in ('SUCCESS', 'FAILED'):
+                break
+
+    t = get_task(task_id, sqlite_path=sqlite_path)
+    assert t is not None
+    assert t['status'] == 'FAILED'
+    assert '503' in t['error_message']
+    assert calls == ['000001.SZ']
 
 
 # ---------------------------------------------------------------------------
