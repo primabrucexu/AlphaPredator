@@ -4,7 +4,7 @@ Mairui data source adapter.
 Fetches A-share market data via Mairui and converts it into
 the internal batch format used by import_market_data_batch().
 
-Rate limiting: token bucket controlled by settings.market_data_rate_limit.
+Rate limiting: token bucket controlled by the Mairui JSON config.
 Stock universe: fetched from Mairui remote API.
 """
 
@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
 import time
 from datetime import date
@@ -26,6 +25,7 @@ from pypinyin import Style, lazy_pinyin
 
 from app.core.settings import settings
 from app.db.sqlite import ensure_sqlite_schema
+from app.modules.market_data.mairui_config import load_mairui_config
 from app.repositories.stock_list_repo import StockListRepo
 
 logger = logging.getLogger(__name__)
@@ -46,14 +46,15 @@ class _TokenBucket:
         self._tokens: float | None = None
         self._updated_at: float | None = None
 
-    def acquire(self) -> None:
-        """Wait until one request token is available."""
-        rate_per_minute = int(settings.market_data_rate_limit)
+    def acquire(self) -> float:
+        """Wait until one request token is available and return total wait seconds."""
+        rate_per_minute = load_mairui_config().rate_limit_per_minute
         if rate_per_minute <= 0:
-            raise ValueError('settings.market_data_rate_limit must be greater than 0')
+            raise ValueError('rate_limit_per_minute must be greater than 0')
 
         capacity = float(rate_per_minute)
         refill_per_second = capacity / 60.0
+        total_wait = 0.0
 
         with self._lock:
             while True:
@@ -68,22 +69,32 @@ class _TokenBucket:
 
                 if self._tokens >= 1.0:
                     self._tokens -= 1.0
-                    return
+                    return total_wait
 
                 missing_tokens = 1.0 - self._tokens
-                time.sleep(missing_tokens / refill_per_second)
+                wait = missing_tokens / refill_per_second
+                total_wait += wait
+                time.sleep(wait)
 
 
 _market_data_token_bucket = _TokenBucket()
 
 
-def _acquire_market_data_token() -> None:
-    _market_data_token_bucket.acquire()
+def _acquire_market_data_token() -> float:
+    return _market_data_token_bucket.acquire()
 
 
 def _rate_limited_call(func: Any, **kwargs: Any) -> Any:
     """Call *func* while enforcing the configured requests-per-minute limit."""
-    _acquire_market_data_token()
+    rate_wait = _acquire_market_data_token()
+    rate_limit = load_mairui_config().rate_limit_per_minute
+    if rate_wait > 0:
+        logger.debug(
+            'Market data rate limiter waited %.3fs before %s (rate_limit=%d/min)',
+            rate_wait,
+            getattr(func, '__name__', str(func)),
+            rate_limit,
+        )
     try:
         return func(**kwargs)
     except Exception as exc:  # noqa: BLE001
@@ -99,10 +110,79 @@ def _rate_limited_call(func: Any, **kwargs: Any) -> Any:
         raise
 
 
+def _redact_mairui_url(url: str) -> str:
+    split = urllib_parse.urlsplit(url)
+    path_parts = split.path.split('/')
+    if path_parts and path_parts[-1]:
+        path_parts[-1] = '<licence>'
+    return urllib_parse.urlunsplit((split.scheme, split.netloc, '/'.join(path_parts), split.query, split.fragment))
+
+
+def _mairui_http_status_message(status_code: int) -> str:
+    return {
+        404: 'api_error',
+        503: 'request_rate_limit_exceeded',
+        101: 'request_quota_exceeded',
+        102: 'licence_error',
+    }.get(status_code, 'http_error')
+
+
+def _read_http_error_body(exc: urllib_error.HTTPError) -> str:
+    try:
+        body = exc.read()
+    except Exception:  # noqa: BLE001
+        return ''
+    if not body:
+        return ''
+    return body.decode('utf-8', errors='replace') if isinstance(body, bytes) else str(body)
+
+
 def _rate_limited_http_get(url: str) -> Any:
-    _acquire_market_data_token()
-    with urllib_request.urlopen(url, timeout=30) as response:
-        payload = response.read()
+    rate_limit = load_mairui_config().rate_limit_per_minute
+    request_start = time.monotonic()
+    rate_wait = _acquire_market_data_token()
+    network_start = time.monotonic()
+    try:
+        with urllib_request.urlopen(url, timeout=30) as response:
+            payload = response.read()
+            status_code = int(getattr(response, 'status', 200) or 200)
+    except urllib_error.HTTPError as exc:
+        finished_at = time.monotonic()
+        status_code = int(exc.code)
+        log = logger.warning if status_code == 503 else logger.error
+        body = _read_http_error_body(exc)
+        if body:
+            log(
+                'Mairui HTTP error endpoint=%s status_code=%d meaning=%s rate_limit=%d/min '
+                'rate_wait=%.3fs network=%.3fs total=%.3fs body=%s',
+                _redact_mairui_url(url),
+                status_code,
+                _mairui_http_status_message(status_code),
+                rate_limit,
+                rate_wait,
+                finished_at - network_start,
+                finished_at - request_start,
+                body,
+            )
+        else:
+            log(
+                'Mairui HTTP error endpoint=%s status_code=%d meaning=%s rate_limit=%d/min '
+                'rate_wait=%.3fs network=%.3fs total=%.3fs',
+                _redact_mairui_url(url),
+                status_code,
+                _mairui_http_status_message(status_code),
+                rate_limit,
+                rate_wait,
+                finished_at - network_start,
+                finished_at - request_start,
+            )
+        raise
+    finished_at = time.monotonic()
+    logger.debug(
+        'Mairui HTTP request endpoint=%s status_code=%d',
+        _redact_mairui_url(url),
+        status_code,
+    )
     return payload
 
 
@@ -112,12 +192,7 @@ def _rate_limited_http_get(url: str) -> Any:
 
 
 def _get_mairui_licence() -> str:
-    licence = os.environ.get('MAIRUI_LICENCE', '').strip()
-    if not licence:
-        path = settings.mairui_licence_path
-        if path.exists():
-            licence = path.read_text(encoding='utf-8').strip()
-    return licence
+    return load_mairui_config().licence
 
 
 def _get_market_data_source() -> str:
@@ -226,7 +301,7 @@ def _mairui_get_json(path: str, *, params: dict[str, Any] | None = None) -> Any:
     try:
         raw = _rate_limited_http_get(url)
     except urllib_error.URLError as exc:  # noqa: BLE001
-        logger.error('Mairui request failed: %s', url)
+        logger.error('Mairui request failed: %s', _redact_mairui_url(url))
         raise RuntimeError(f'Mairui request failed: {exc}') from exc
     try:
         return json.loads(raw.decode('utf-8'))
@@ -261,7 +336,7 @@ def _mairui_rows_to_stock_list_frame(rows: list[dict[str, Any]]):
 def _mairui_fetch_stock_list() -> Any:
     licence = _get_mairui_licence()
     if not licence:
-        raise ValueError('Mairui licence not configured. Please set MAIRUI_LICENCE or save it to the licence file.')
+        raise ValueError('Mairui licence not configured. Please save it in the initialization page.')
     payload = _mairui_get_json(f'hslt/list/{licence}')
     if not isinstance(payload, list):
         raise RuntimeError('Unexpected Mairui stock list payload')
@@ -281,7 +356,7 @@ def _mairui_fetch_history_rows(stock_code: str, start_date: str, end_date: str) 
     """
     licence = _get_mairui_licence()
     if not licence:
-        raise ValueError('Mairui licence not configured. Please set MAIRUI_LICENCE or save it to the licence file.')
+        raise ValueError('Mairui licence not configured. Please save it in the initialization page.')
     market_code = _normalize_market_code(stock_code)
 
     payload = _mairui_get_json(
@@ -325,7 +400,7 @@ def fetch_5m_history_rows(stock_code: str, start_date: str, end_date: str) -> li
     """Fetch 5-minute K-line data for one stock across a date range."""
     licence = _get_mairui_licence()
     if not licence:
-        raise ValueError('Mairui licence not configured. Please set MAIRUI_LICENCE or save it to the licence file.')
+        raise ValueError('Mairui licence not configured. Please save it in the initialization page.')
     market_code = _normalize_market_code(stock_code)
 
     payload = _mairui_get_json(

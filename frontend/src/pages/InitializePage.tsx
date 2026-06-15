@@ -7,6 +7,7 @@ import {
     DatePicker,
     Descriptions,
     Input,
+    InputNumber,
     Progress,
     Row,
     Segmented,
@@ -125,6 +126,8 @@ export function InitializePage() {
 
   const [mairuiConfig, setMairuiConfig] = useState<MairuiLicenceConfigResponse | null>(null);
   const [mairuiLicenceInput, setMairuiLicenceInput] = useState('');
+  const [mairuiRateLimitInput, setMairuiRateLimitInput] = useState(1000);
+  const [mairuiFetchConcurrencyInput, setMairuiFetchConcurrencyInput] = useState(4);
   const [mairuiSaveLoading, setMairuiSaveLoading] = useState(false);
   const [mairuiMessage, setMairuiMessage] = useState<string | null>(null);
 
@@ -169,8 +172,10 @@ export function InitializePage() {
         const task = overview.running_task ?? overview.latest_task ?? null;
         setCurrentTask(task);
         if (task) setProgressTaskType(task.task_type);
-        setJygsStatus(jygs);
+          setJygsStatus(jygs);
           setMairuiConfig(mairui);
+          setMairuiRateLimitInput(mairui.rate_limit_per_minute);
+          setMairuiFetchConcurrencyInput(mairui.fetch_concurrency);
       })
       .catch(() => {});
   }, []);
@@ -328,7 +333,7 @@ export function InitializePage() {
 
   const handleSaveMairuiLicence = async () => {
     const value = mairuiLicenceInput.trim();
-    if (!value) {
+    if (!value && !mairuiConfig?.configured) {
       setError('请输入有效的 Mairui licence');
       return;
     }
@@ -337,10 +342,12 @@ export function InitializePage() {
     setMairuiMessage(null);
     setMairuiSaveLoading(true);
     try {
-      const config = await saveMairuiLicence(value);
+      const config = await saveMairuiLicence(value, mairuiRateLimitInput, mairuiFetchConcurrencyInput);
       setMairuiConfig(config);
+      setMairuiRateLimitInput(config.rate_limit_per_minute);
+      setMairuiFetchConcurrencyInput(config.fetch_concurrency);
       setMairuiLicenceInput('');
-      setMairuiMessage('Mairui licence 已保存');
+      setMairuiMessage('麦蕊数据源配置已保存');
       const overview = await getInitV2Overview();
       setInitOverview(overview);
     } catch (e) {
@@ -589,7 +596,7 @@ export function InitializePage() {
           title={
             <Space>
               <DatabaseOutlined/>
-              Mairui Licence 配置
+              麦蕊数据源配置
             </Space>
           }
       >
@@ -610,23 +617,49 @@ export function InitializePage() {
             )}
           </Space>
 
-          <Space.Compact style={{width: '100%', maxWidth: 640}}>
-            <Input.Password
-                value={mairuiLicenceInput}
-                placeholder="请输入 Mairui licence"
-                onChange={(e) => setMairuiLicenceInput(e.target.value)}
-            />
-            <Button
-                type="primary"
-                loading={mairuiSaveLoading}
-                onClick={handleSaveMairuiLicence}
-            >
-              保存 Licence
-            </Button>
-          </Space.Compact>
+          <Row gutter={[12, 12]} align="bottom">
+            <Col xs={24} lg={12}>
+              <Typography.Text type="secondary">Licence</Typography.Text>
+              <Input.Password
+                  value={mairuiLicenceInput}
+                  placeholder="请输入 Mairui licence"
+                  onChange={(e) => setMairuiLicenceInput(e.target.value)}
+              />
+            </Col>
+            <Col xs={24} sm={12} lg={5}>
+              <Typography.Text type="secondary">请求速率（次/分钟）</Typography.Text>
+              <InputNumber
+                  min={1}
+                  precision={0}
+                  value={mairuiRateLimitInput}
+                  onChange={(value) => setMairuiRateLimitInput(Number(value || 1))}
+                  style={{width: '100%'}}
+              />
+            </Col>
+            <Col xs={24} sm={12} lg={4}>
+              <Typography.Text type="secondary">并发拉取数</Typography.Text>
+              <InputNumber
+                  min={1}
+                  precision={0}
+                  value={mairuiFetchConcurrencyInput}
+                  onChange={(value) => setMairuiFetchConcurrencyInput(Number(value || 1))}
+                  style={{width: '100%'}}
+              />
+            </Col>
+            <Col xs={24} lg={3}>
+              <Button
+                  type="primary"
+                  loading={mairuiSaveLoading}
+                  onClick={handleSaveMairuiLicence}
+                  block
+              >
+                保存配置
+              </Button>
+            </Col>
+          </Row>
 
           <Typography.Text type="secondary" style={{fontSize: 12}}>
-            保存后将写入后端配置文件，并用于后续麦蕊行情接口请求。
+            保存后将写入后端 JSON 配置文件，并用于后续麦蕊行情接口请求和初始化任务并发拉取。
           </Typography.Text>
         </Space>
       </Card>
@@ -912,22 +945,21 @@ export function InitializePage() {
         )}
 
       {/* Task progress */}
-      <Card
-        className="page-card"
-        title="任务进度"
-        extra={
-          <Segmented
-            size="small"
+      <Card className="page-card" title="任务进度">
+        <Space style={{ marginBottom: 16 }}>
+          <Typography.Text>任务类型：</Typography.Text>
+          <Select<TaskType>
             value={progressTaskType}
-            onChange={(value) => handleProgressTaskTypeChange(value as TaskType)}
+            onChange={handleProgressTaskTypeChange}
+            loading={progressTaskLoading}
+            style={{ width: 160 }}
             options={[
               { label: '行情同步', value: 'MARKET_DATA' },
               { label: '热点复盘', value: 'JYGS_REVIEW' },
               { label: '股票列表', value: 'STOCK_LIST_SYNC' },
             ]}
           />
-        }
-      >
+        </Space>
         {progressTaskLoading ? (
           <Typography.Text type="secondary">正在加载最新任务…</Typography.Text>
         ) : !currentTask ? (

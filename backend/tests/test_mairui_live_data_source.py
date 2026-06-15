@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
 
 import pytest
@@ -10,15 +11,13 @@ from app.modules.market_data import data_source
 
 def _ensure_file_licence(monkeypatch: pytest.MonkeyPatch) -> str:
     """Use the licence currently saved in the configured file path."""
-    monkeypatch.delenv('MAIRUI_LICENCE', raising=False)
+    config_path = settings.mairui_config_path
+    if not config_path.exists():
+        pytest.skip(f'Mairui config file not found: {config_path}')
 
-    licence_path = settings.mairui_licence_path
-    if not licence_path.exists():
-        pytest.skip(f'Mairui licence file not found: {licence_path}')
-
-    file_licence = licence_path.read_text(encoding='utf-8').strip()
+    file_licence = str(json.loads(config_path.read_text(encoding='utf-8')).get('licence') or '').strip()
     if not file_licence:
-        pytest.skip(f'Mairui licence file is empty: {licence_path}')
+        pytest.skip(f'Mairui licence is empty: {config_path}')
 
     return file_licence
 

@@ -137,7 +137,9 @@ export interface UpdateResult {
 export interface MairuiLicenceConfigResponse {
     configured: boolean;
     masked_licence: string | null;
-    source: 'env' | 'file' | 'none';
+    source: 'file' | 'none';
+    rate_limit_per_minute: number;
+    fetch_concurrency: number;
 }
 
 export type MarketBoard = '主板' | '创业板' | '科创板' | '北交所';
@@ -404,8 +406,16 @@ export function getMairuiLicenceConfig(): Promise<MairuiLicenceConfigResponse> {
     return fetchJson<MairuiLicenceConfigResponse>('/api/data-init/licence');
 }
 
-export function saveMairuiLicence(licence: string): Promise<MairuiLicenceConfigResponse> {
-    return postJson<MairuiLicenceConfigResponse>('/api/data-init/licence', {licence});
+export function saveMairuiLicence(
+    licence: string,
+    rateLimitPerMinute: number,
+    fetchConcurrency: number,
+): Promise<MairuiLicenceConfigResponse> {
+    return postJson<MairuiLicenceConfigResponse>('/api/data-init/licence', {
+        licence,
+        rate_limit_per_minute: rateLimitPerMinute,
+        fetch_concurrency: fetchConcurrency,
+    });
 }
 
 

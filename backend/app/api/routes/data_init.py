@@ -1,11 +1,10 @@
-import os
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query, status
 from zoneinfo import ZoneInfo
 
-from app.core.settings import settings
 from app.db.sqlite import ensure_sqlite_schema
 from app.modules.market_data.data_source import _get_mairui_licence
+from app.modules.market_data.mairui_config import load_mairui_config, save_mairui_config
 from app.modules.market_data.initializer import (
     create_batch_tasks,
     create_task,
@@ -49,20 +48,6 @@ def _mask_licence(licence: str) -> str:
     return f'{text[:4]}...{text[-4:]}'
 
 
-def _read_mairui_licence_state() -> tuple[str, str]:
-    env_licence = os.environ.get('MAIRUI_LICENCE', '').strip()
-    if env_licence:
-        return env_licence, 'env'
-
-    licence_path = settings.mairui_licence_path
-    if licence_path.exists():
-        file_licence = _get_mairui_licence().strip()
-        if file_licence:
-            return file_licence, 'file'
-
-    return '', 'none'
-
-
 def _load_stock_list_board_counts() -> dict[str, int]:
     """Load stock_list board counts from SQLite."""
     ensure_sqlite_schema()
@@ -79,33 +64,41 @@ def _load_stock_list_board_counts() -> dict[str, int]:
 @router.get('/licence', response_model=MairuiLicenceConfigResponse)
 def get_mairui_licence_config() -> MairuiLicenceConfigResponse:
     """Return current Mairui licence config state for UI rendering."""
-    licence, source = _read_mairui_licence_state()
+    config = load_mairui_config()
+    licence = config.licence
     configured = bool(licence)
     return MairuiLicenceConfigResponse(
         configured=configured,
         masked_licence=_mask_licence(licence) if configured else None,
-        source=source,
+        source='file' if configured else 'none',
+        rate_limit_per_minute=config.rate_limit_per_minute,
+        fetch_concurrency=config.fetch_concurrency,
     )
 
 
 @router.post('/licence', response_model=MairuiLicenceConfigResponse)
 def save_mairui_licence(body: SaveMairuiLicenceRequest) -> MairuiLicenceConfigResponse:
-    """Persist Mairui licence to configured file path."""
-    licence = body.licence.strip()
+    """Persist Mairui data source config to configured JSON file."""
+    current_config = load_mairui_config()
+    licence = body.licence.strip() or current_config.licence
     if not licence:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail='licence cannot be empty',
         )
 
-    licence_path = settings.mairui_licence_path
-    licence_path.parent.mkdir(parents=True, exist_ok=True)
-    licence_path.write_text(licence, encoding='utf-8')
+    config = save_mairui_config(
+        licence=licence,
+        rate_limit_per_minute=body.rate_limit_per_minute,
+        fetch_concurrency=body.fetch_concurrency,
+    )
 
     return MairuiLicenceConfigResponse(
         configured=True,
-        masked_licence=_mask_licence(licence),
+        masked_licence=_mask_licence(config.licence),
         source='file',
+        rate_limit_per_minute=config.rate_limit_per_minute,
+        fetch_concurrency=config.fetch_concurrency,
     )
 
 

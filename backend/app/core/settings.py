@@ -31,8 +31,10 @@ class Settings:
     # Market data provider configuration
     market_data_source: str = 'mairui'  # currently supports mairui
     mairui_base_url: str = 'https://api.mairuiapi.com'
-    mairui_licence_path: Path = DATA_DIR / 'config' / 'mairui.licence'
-    market_data_rate_limit: int = 300
+    mairui_config_path: Path = DATA_DIR / 'config' / 'mairui.json'
+    jygs_config_path: Path = DATA_DIR / 'config' / 'jygs_auth.json'
+    market_data_rate_limit: int = 1000
+    mairui_fetch_concurrency: int = 4
     # 韭研公社配置
     jygs_site_url: str = 'https://www.jiuyangongshe.com'
     jygs_api_url: str = 'https://app.jiuyangongshe.com/jystock-app'

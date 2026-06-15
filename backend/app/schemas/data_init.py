@@ -36,11 +36,15 @@ class UpdateResult(BaseModel):
 class MairuiLicenceConfigResponse(BaseModel):
     configured: bool = Field(False, description='麦蕊 licence 是否已配置')
     masked_licence: str | None = Field(None, description='脱敏后的 licence，用于页面展示')
-    source: str = Field('none', description='配置来源：env | file | none')
+    source: str = Field('none', description='配置来源：file | none')
+    rate_limit_per_minute: int = Field(..., ge=1, description='麦蕊请求速率限制（次/分钟）')
+    fetch_concurrency: int = Field(..., ge=1, description='行情数据并发拉取数量')
 
 
 class SaveMairuiLicenceRequest(BaseModel):
-    licence: str = Field(..., min_length=1, description='麦蕊 licence 原文')
+    licence: str = Field('', description='麦蕊 licence 原文；留空时保留现有配置')
+    rate_limit_per_minute: int = Field(..., ge=1, description='麦蕊请求速率限制（次/分钟）')
+    fetch_concurrency: int = Field(..., ge=1, description='行情数据并发拉取数量')
 
 
 
