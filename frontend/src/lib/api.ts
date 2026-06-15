@@ -60,10 +60,10 @@ export interface StockTags {
 }
 
 export interface StockIndicatorSeries {
-  ma5: (number | null)[];
-  ma10: (number | null)[];
-  ma20: (number | null)[];
-  ma60: (number | null)[];
+  expma8: (number | null)[];
+  expma17: (number | null)[];
+  expma21: (number | null)[];
+  expma55: (number | null)[];
   volume_ma5: (number | null)[];
   volume_ma10: (number | null)[];
   volume_ma20: (number | null)[];

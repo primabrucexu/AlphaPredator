@@ -1052,14 +1052,19 @@ class MarketDataService:
             result[i] = alpha * values[i] + (1 - alpha) * result[i - 1]
         return result
 
+    def _compute_expma_series(self, values: list[float], span: int) -> list[float | None]:
+        return [round(v, 2) for v in self._compute_ema_series(values, span)]
+
     def _compute_kdj_series(
         self,
         highs: list[float],
         lows: list[float],
         closes: list[float],
-        n: int = 9,
+        n: int = 6,
+        k_period: int = 3,
+        d_period: int = 3,
     ) -> tuple[list[float | None], list[float | None], list[float | None]]:
-        """KDJ using Wilder's smoothing (1/3 factor).  Seeds K=D=50."""
+        """KDJ(6,3,3). Seeds K=D=50."""
         N = len(closes)
         k_vals: list[float | None] = [None] * N
         d_vals: list[float | None] = [None] * N
@@ -1069,8 +1074,8 @@ class MarketDataService:
             h_n = max(highs[i - n + 1 : i + 1])
             l_n = min(lows[i - n + 1 : i + 1])
             rsv = (closes[i] - l_n) / (h_n - l_n) * 100 if h_n != l_n else 50.0
-            k = prev_k * 2 / 3 + rsv / 3
-            d = prev_d * 2 / 3 + k / 3
+            k = prev_k * (k_period - 1) / k_period + rsv / k_period
+            d = prev_d * (d_period - 1) / d_period + k / d_period
             j = 3 * k - 2 * d
             k_vals[i] = round(k, 2)
             d_vals[i] = round(d, 2)
@@ -1081,17 +1086,17 @@ class MarketDataService:
     def _compute_macd_series(
         self, closes: list[float]
     ) -> tuple[list[float | None], list[float | None], list[float | None]]:
-        """MACD(12,26,9). EMA seeded from first close."""
+        """MACD(8,17,6). EMA seeded from first close."""
         N = len(closes)
         dif_vals: list[float | None] = [None] * N
         dea_vals: list[float | None] = [None] * N
         hist_vals: list[float | None] = [None] * N
         if N == 0:
             return dif_vals, dea_vals, hist_vals
-        ema12 = self._compute_ema_series(closes, 12)
-        ema26 = self._compute_ema_series(closes, 26)
-        dif_raw = [ema12[i] - ema26[i] for i in range(N)]
-        dea_raw = self._compute_ema_series(dif_raw, 9)
+        ema8 = self._compute_ema_series(closes, 8)
+        ema17 = self._compute_ema_series(closes, 17)
+        dif_raw = [ema8[i] - ema17[i] for i in range(N)]
+        dea_raw = self._compute_ema_series(dif_raw, 6)
         for i in range(N):
             dif_vals[i] = round(dif_raw[i], 4)
             dea_vals[i] = round(dea_raw[i], 4)
@@ -1126,7 +1131,7 @@ class MarketDataService:
         if not daily_bars:
             empty: list[None] = []
             return {
-                'ma5': empty, 'ma10': empty, 'ma20': empty, 'ma60': empty,
+                'expma8': empty, 'expma17': empty, 'expma21': empty, 'expma55': empty,
                 'volume_ma5': empty, 'volume_ma10': empty, 'volume_ma20': empty,
                 'kdj_k': empty, 'kdj_d': empty, 'kdj_j': empty,
                 'macd_dif': empty, 'macd_dea': empty, 'macd_hist': empty,
@@ -1139,10 +1144,10 @@ class MarketDataService:
         k_vals, d_vals, j_vals = self._compute_kdj_series(highs, lows, closes)
         dif_vals, dea_vals, hist_vals = self._compute_macd_series(closes)
         return {
-            'ma5': self._compute_ma_series(closes, 5),
-            'ma10': self._compute_ma_series(closes, 10),
-            'ma20': self._compute_ma_series(closes, 20),
-            'ma60': self._compute_ma_series(closes, 60),
+            'expma8': self._compute_expma_series(closes, 8),
+            'expma17': self._compute_expma_series(closes, 17),
+            'expma21': self._compute_expma_series(closes, 21),
+            'expma55': self._compute_expma_series(closes, 55),
             'volume_ma5': self._compute_ma_series(volumes, 5),
             'volume_ma10': self._compute_ma_series(volumes, 10),
             'volume_ma20': self._compute_ma_series(volumes, 20),

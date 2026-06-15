@@ -20,7 +20,7 @@ export function StockDetailKlineModule({
   indicators,
   upColor,
   downColor,
-  maColors,
+  expmaColors,
 }: {
   top: string;
   activeBar: DailyBar;
@@ -30,7 +30,7 @@ export function StockDetailKlineModule({
   indicators: StockIndicatorSeries;
   upColor: string;
   downColor: string;
-  maColors: Record<'MA5' | 'MA10' | 'MA20' | 'MA60', string>;
+  expmaColors: Record<'EXPMA8' | 'EXPMA17' | 'EXPMA21' | 'EXPMA55', string>;
 }) {
   return (
     <PanelFloatCard top={top} title="K线">
@@ -46,10 +46,10 @@ export function StockDetailKlineModule({
       />
       <InfoRow
         items={[
-          {label: 'MA5', value: fmtNum(indicators.ma5[activeIdx]), color: maColors.MA5},
-          {label: 'MA10', value: fmtNum(indicators.ma10[activeIdx]), color: maColors.MA10},
-          {label: 'MA20', value: fmtNum(indicators.ma20[activeIdx]), color: maColors.MA20},
-          {label: 'MA60', value: fmtNum(indicators.ma60[activeIdx]), color: maColors.MA60},
+          {label: 'EXPMA8', value: fmtNum(indicators.expma8[activeIdx]), color: expmaColors.EXPMA8},
+          {label: 'EXPMA17', value: fmtNum(indicators.expma17[activeIdx]), color: expmaColors.EXPMA17},
+          {label: 'EXPMA21', value: fmtNum(indicators.expma21[activeIdx]), color: expmaColors.EXPMA21},
+          {label: 'EXPMA55', value: fmtNum(indicators.expma55[activeIdx]), color: expmaColors.EXPMA55},
         ]}
       />
     </PanelFloatCard>

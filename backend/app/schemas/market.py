@@ -65,10 +65,10 @@ class StockTags(BaseModel):
 class StockIndicatorSeries(BaseModel):
     """Per-bar indicator series aligned with daily_bars (None where history insufficient)."""
 
-    ma5: list[float | None] = Field(default_factory=list)
-    ma10: list[float | None] = Field(default_factory=list)
-    ma20: list[float | None] = Field(default_factory=list)
-    ma60: list[float | None] = Field(default_factory=list)
+    expma8: list[float | None] = Field(default_factory=list)
+    expma17: list[float | None] = Field(default_factory=list)
+    expma21: list[float | None] = Field(default_factory=list)
+    expma55: list[float | None] = Field(default_factory=list)
     volume_ma5: list[float | None] = Field(default_factory=list)
     volume_ma10: list[float | None] = Field(default_factory=list)
     volume_ma20: list[float | None] = Field(default_factory=list)

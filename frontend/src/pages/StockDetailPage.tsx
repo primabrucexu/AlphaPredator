@@ -27,11 +27,11 @@ const UP_LIMIT_BORDER = '#6A1B9A';
 const DOWN_LIMIT_COLOR = '#1565C0';
 const DOWN_LIMIT_BORDER = '#0D47A1';
 
-const MA_COLORS: Record<'MA5' | 'MA10' | 'MA20' | 'MA60', string> = {
-  MA5: '#f5a623',
-  MA10: '#7ed321',
-  MA20: '#4a90e2',
-  MA60: '#9013fe',
+const EXPMA_COLORS: Record<'EXPMA8' | 'EXPMA17' | 'EXPMA21' | 'EXPMA55', string> = {
+  EXPMA8: '#f5a623',
+  EXPMA17: '#7ed321',
+  EXPMA21: '#4a90e2',
+  EXPMA55: '#9013fe',
 };
 
 const KDJ_COLORS = { K: '#f5a623', D: '#7ed321', J: '#cf1322' };
@@ -71,7 +71,7 @@ function colorOf(change: number): string {
 
 function emptyIndicators(): StockIndicatorSeries {
   return {
-    ma5: [], ma10: [], ma20: [], ma60: [],
+    expma8: [], expma17: [], expma21: [], expma55: [],
     volume_ma5: [], volume_ma10: [], volume_ma20: [],
     kdj_k: [], kdj_d: [], kdj_j: [],
     macd_dif: [], macd_dea: [], macd_hist: [],
@@ -146,32 +146,32 @@ function buildKlineCardOption(data: StockDetailResponse, zoomRange: ZoomRange) {
         },
       },
       {
-        name: 'MA5',
+        name: 'EXPMA8',
         type: 'line' as const,
-        data: ind.ma5,
+        data: ind.expma8,
         showSymbol: false,
-        lineStyle: { width: 1, color: MA_COLORS.MA5 },
+        lineStyle: { width: 1, color: EXPMA_COLORS.EXPMA8 },
       },
       {
-        name: 'MA10',
+        name: 'EXPMA17',
         type: 'line' as const,
-        data: ind.ma10,
+        data: ind.expma17,
         showSymbol: false,
-        lineStyle: { width: 1, color: MA_COLORS.MA10 },
+        lineStyle: { width: 1, color: EXPMA_COLORS.EXPMA17 },
       },
       {
-        name: 'MA20',
+        name: 'EXPMA21',
         type: 'line' as const,
-        data: ind.ma20,
+        data: ind.expma21,
         showSymbol: false,
-        lineStyle: { width: 1, color: MA_COLORS.MA20 },
+        lineStyle: { width: 1, color: EXPMA_COLORS.EXPMA21 },
       },
       {
-        name: 'MA60',
+        name: 'EXPMA55',
         type: 'line' as const,
-        data: ind.ma60,
+        data: ind.expma55,
         showSymbol: false,
-        lineStyle: { width: 1, color: MA_COLORS.MA60 },
+        lineStyle: { width: 1, color: EXPMA_COLORS.EXPMA55 },
       },
     ],
   };
@@ -225,21 +225,21 @@ function buildVolumeCardOption(data: StockDetailResponse, zoomRange: ZoomRange) 
         type: 'line' as const,
         data: ind.volume_ma5,
         showSymbol: false,
-        lineStyle: { width: 1, color: MA_COLORS.MA5 },
+        lineStyle: { width: 1, color: EXPMA_COLORS.EXPMA8 },
       },
       {
         name: 'VOL_MA10',
         type: 'line' as const,
         data: ind.volume_ma10,
         showSymbol: false,
-        lineStyle: { width: 1, color: MA_COLORS.MA10 },
+        lineStyle: { width: 1, color: EXPMA_COLORS.EXPMA17 },
       },
       {
         name: 'VOL_MA20',
         type: 'line' as const,
         data: ind.volume_ma20,
         showSymbol: false,
-        lineStyle: { width: 1, color: MA_COLORS.MA20 },
+        lineStyle: { width: 1, color: EXPMA_COLORS.EXPMA21 },
       },
     ],
   };
@@ -642,9 +642,10 @@ export function StockDetailPage() {
       { label: '高', value: fmtNum(activeBar.high_price, 2), color: UP_COLOR },
       { label: '低', value: fmtNum(activeBar.low_price, 2), color: DOWN_COLOR },
       { label: '收', value: fmtNum(activeBar.close_price, 2), color: activeBar.close_price >= activeBar.open_price ? UP_COLOR : DOWN_COLOR },
-      { label: 'MA5', value: fmtNum(indicatorSeries.ma5[indicatorIdx], 2), color: MA_COLORS.MA5 },
-      { label: 'MA10', value: fmtNum(indicatorSeries.ma10[indicatorIdx], 2), color: MA_COLORS.MA10 },
-      { label: 'MA20', value: fmtNum(indicatorSeries.ma20[indicatorIdx], 2), color: MA_COLORS.MA20 },
+      { label: 'EXPMA8', value: fmtNum(indicatorSeries.expma8[indicatorIdx], 2), color: EXPMA_COLORS.EXPMA8 },
+      { label: 'EXPMA17', value: fmtNum(indicatorSeries.expma17[indicatorIdx], 2), color: EXPMA_COLORS.EXPMA17 },
+      { label: 'EXPMA21', value: fmtNum(indicatorSeries.expma21[indicatorIdx], 2), color: EXPMA_COLORS.EXPMA21 },
+      { label: 'EXPMA55', value: fmtNum(indicatorSeries.expma55[indicatorIdx], 2), color: EXPMA_COLORS.EXPMA55 },
     ]
     : [];
 
@@ -653,9 +654,9 @@ export function StockDetailPage() {
       { label: '成交量', value: (activeBar.volume ?? 0).toLocaleString() },
       { label: '成交额', value: fmtAmount(activeBar.turnover_amount_billion) },
       { label: '换手率', value: activeBar.turnover_rate != null ? `${activeBar.turnover_rate.toFixed(2)}%` : '--' },
-      { label: 'VOL_MA5', value: fmtNum(indicatorSeries.volume_ma5[indicatorIdx], 2), color: MA_COLORS.MA5 },
-      { label: 'VOL_MA10', value: fmtNum(indicatorSeries.volume_ma10[indicatorIdx], 2), color: MA_COLORS.MA10 },
-      { label: 'VOL_MA20', value: fmtNum(indicatorSeries.volume_ma20[indicatorIdx], 2), color: MA_COLORS.MA20 },
+      { label: 'VOL_MA5', value: fmtNum(indicatorSeries.volume_ma5[indicatorIdx], 2), color: EXPMA_COLORS.EXPMA8 },
+      { label: 'VOL_MA10', value: fmtNum(indicatorSeries.volume_ma10[indicatorIdx], 2), color: EXPMA_COLORS.EXPMA17 },
+      { label: 'VOL_MA20', value: fmtNum(indicatorSeries.volume_ma20[indicatorIdx], 2), color: EXPMA_COLORS.EXPMA21 },
     ]
     : [];
 
@@ -787,8 +788,8 @@ export function StockDetailPage() {
           onChange={(key) => setIndicatorTab(key as IndicatorTabKey)}
           size="small"
           items={[
-            { key: 'macd', label: 'MACD' },
-            { key: 'kdj', label: 'KDJ' },
+            { key: 'macd', label: 'MACD(8,17,6)' },
+            { key: 'kdj', label: 'KDJ(6,3,3)' },
           ]}
         />
         {bars.length > 0 ? (
