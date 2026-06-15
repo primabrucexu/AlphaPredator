@@ -8,7 +8,24 @@
 
 ## 当前活跃需求文件
 
-- [F04：股票联动套利分析](F04-stock-linkage-arbitrage.md)
+- [F05：MCP 交易复盘服务](F05-mcp-service.md)
+
+---
+
+## F05：MCP 交易复盘服务
+
+### 最近动作
+
+- 已完成 F05 设计文档 `docs/agent/F05-mcp-service.md`，确认技术选型（fastmcp + Streamable HTTP + 集成到 FastAPI）、7 个 MCP Tool 定义、OCR 交互流程和目标平台（Codex / Hermes）。
+
+### 下一步
+
+- 编码实现：添加 fastmcp 依赖，创建 `backend/app/api/routes/mcp.py`，定义 7 个 Tool，挂载到 FastAPI `/api/mcp`。
+- 实现后用 MCP Inspector 或 Codex / Hermes 验证 Tool 调用。
+
+### 已知问题 / 阻塞 / 待人工决策
+
+- Codex 和 Hermes 对粘贴图片的 base64 自动编码支持情况待验证。
 
 ---
 
