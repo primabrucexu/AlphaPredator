@@ -51,7 +51,7 @@ import {
 } from '../lib/api';
 
 const POLL_INTERVAL_MS = 2000;
-const DEFAULT_START_DATE = '20240101';
+const DEFAULT_START_DATE = '20241201';
 
 function todayYYYYMMDD(): string {
   return dayjs().format('YYYYMMDD');
