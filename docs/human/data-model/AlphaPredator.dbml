@@ -52,22 +52,6 @@ Table task_info [headercolor: #175e7a] {
 	task_end_date datetime [ note: '任务结束时间 YYYYMMDD HH:mm:ss' ]
 }
 
-Table task_item_info [headercolor: #175e7a] {
-	id integer [ pk, increment ]
-	task_id varchar(255) [ not null ]
-	item varchar(255) [ note: '子任务内容描述' ]
-	status varchar(255) [ not null, default: PENDING, note: 'PENDING, RUNNING, SKIP（非交易日标记为跳过）, SUCCESS, FAILED' ]
-	error_message text [ not null, note: '错误信息' ]
-	started_at datetime [ not null, note: '开始时间 YYYYMMDD HH:mm:ss' ]
-	finished_at datetime [ not null, note: '结束时间 YYYYMMDD HH:mm:ss' ]
-
-	indexes {
-		(task_id) [ name: 'task_item_info_index_0' ]
-	}
-
-	Note: '子任务信息'
-}
-
 Table user_trade_history [headercolor: #175e7a] {
 	id integer [ pk, increment, not null ]
 	trade_date date [ note: '交易日期 YYYYMMDD格式' ]
@@ -310,9 +294,6 @@ Table user_pattern_feedback [headercolor: #175e7a] {
 	Note: '用户对AI建议的反馈闭环表'
 }
 
-Ref fk_task_info_task_id_task_item_info {
-	task_info.task_id < task_item_info.task_id [ delete: no action, update: no action ]
-}
 
 Ref fk_user_trade_history_id_review_note {
 	user_trade_history.id < review_note.trade_id [ delete: no action, update: no action ]
