@@ -595,6 +595,109 @@ def test_task_stops_on_mairui_http_status_error(tmp_path: Path) -> None:
     assert calls == ['000001.SZ']
 
 
+class _FakeDuckdbConnection:
+    def __init__(self, *, fail_on_executemany: bool = False) -> None:
+        self.fail_on_executemany = fail_on_executemany
+        self.execute_calls: list[str] = []
+        self.executemany_calls = 0
+        self.commit_calls = 0
+        self.rollback_calls = 0
+        self.close_calls = 0
+
+    def execute(self, sql: str, params: Any = None):  # noqa: ANN001
+        self.execute_calls.append(sql)
+        return self
+
+    def executemany(self, sql: str, rows: Any):  # noqa: ANN001
+        self.executemany_calls += 1
+        if self.fail_on_executemany:
+            raise RuntimeError('duckdb locked')
+        return self
+
+    def commit(self) -> None:
+        self.commit_calls += 1
+
+    def rollback(self) -> None:
+        self.rollback_calls += 1
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
+def test_market_data_task_reuses_one_duckdb_connection(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / 'test.db'
+
+    with _patch_licence():
+        task = create_task('20240102', '20240102', sqlite_path=sqlite_path)
+
+    fake_conn = _FakeDuckdbConnection()
+    config = type('Config', (), {'fetch_concurrency': 1})()
+
+    with (
+        _patch_licence(),
+        patch('app.modules.market_data.initializer.sync_stock_list_to_sqlite'),
+        patch('app.modules.market_data.initializer._resolve_stock_universe', side_effect=_mock_resolve_stock_universe),
+        patch('app.modules.market_data.initializer._mairui_fetch_history_rows', side_effect=_mock_mairui_fetch_history_rows),
+        patch('app.modules.market_data.initializer.load_mairui_config', return_value=config),
+        patch('app.modules.market_data.initializer._connect_duckdb', return_value=fake_conn) as connect_duckdb_mock,
+        patch('app.modules.market_data.initializer._export_parquet'),
+    ):
+        start_task(task['task_id'], sqlite_path=sqlite_path)
+
+        for _ in range(30):
+            time.sleep(0.2)
+            t = get_task(task['task_id'], sqlite_path=sqlite_path)
+            if t and t['status'] in ('SUCCESS', 'FAILED'):
+                break
+
+    t = get_task(task['task_id'], sqlite_path=sqlite_path)
+    assert t is not None
+    assert t['status'] == 'SUCCESS'
+    assert connect_duckdb_mock.call_count == 1
+    assert fake_conn.executemany_calls == 2
+    assert fake_conn.close_calls == 1
+
+
+def test_market_data_task_stops_on_duckdb_write_failure(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / 'test.db'
+
+    with _patch_licence():
+        task = create_task('20240102', '20240102', sqlite_path=sqlite_path)
+
+    fetch_calls: list[str] = []
+
+    def fetch_rows(stock_code: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
+        fetch_calls.append(stock_code)
+        return _mock_mairui_fetch_history_rows(stock_code, start_date, end_date)
+
+    fake_conn = _FakeDuckdbConnection(fail_on_executemany=True)
+    config = type('Config', (), {'fetch_concurrency': 1})()
+
+    with (
+        _patch_licence(),
+        patch('app.modules.market_data.initializer.sync_stock_list_to_sqlite'),
+        patch('app.modules.market_data.initializer._resolve_stock_universe', side_effect=_mock_resolve_stock_universe),
+        patch('app.modules.market_data.initializer._mairui_fetch_history_rows', side_effect=fetch_rows),
+        patch('app.modules.market_data.initializer.load_mairui_config', return_value=config),
+        patch('app.modules.market_data.initializer._connect_duckdb', return_value=fake_conn),
+    ):
+        start_task(task['task_id'], sqlite_path=sqlite_path)
+
+        for _ in range(30):
+            time.sleep(0.2)
+            t = get_task(task['task_id'], sqlite_path=sqlite_path)
+            if t and t['status'] in ('SUCCESS', 'FAILED'):
+                break
+
+    t = get_task(task['task_id'], sqlite_path=sqlite_path)
+    assert t is not None
+    assert t['status'] == 'FAILED'
+    assert 'duckdb locked' in t['error_message']
+    assert fetch_calls == ['000001.SZ']
+    assert fake_conn.rollback_calls == 1
+    assert fake_conn.close_calls == 1
+
+
 # ---------------------------------------------------------------------------
 # Integration: reimport_day
 # ---------------------------------------------------------------------------

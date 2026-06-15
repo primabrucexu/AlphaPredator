@@ -467,25 +467,35 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
                 if str(stock['full_code']).strip().upper()
             ]
 
-            for idx, fetch_result in enumerate(
-                _iter_market_data_results(task_id, stock_items, start_date, end_date, sqlite_path, concurrency)
-            ):
-                if fetch_result.stock_code == '':
-                    logger.info('Task %s: terminated by user after processing %d/%d stocks', task_id, idx, total_stocks)
-                    return
-                ok, err = _write_one_stock_result(
-                    task_id,
-                    fetch_result,
-                    start_date,
-                    end_date,
-                    sqlite_path,
-                    duckdb_path,
-                )
-                if not ok:
-                    if first_failed_label is None:
-                        first_failed_label = fetch_result.stock_code
-                    failed_items.append(f'{fetch_result.stock_code}: {err}')
-                    logger.warning('Task %s: continue after stock failure %s', task_id, fetch_result.stock_code)
+            duckdb_conn = _connect_duckdb(duckdb_path)
+            try:
+                for idx, fetch_result in enumerate(
+                    _iter_market_data_results(task_id, stock_items, start_date, end_date, sqlite_path, concurrency)
+                ):
+                    if fetch_result.stock_code == '':
+                        logger.info(
+                            'Task %s: terminated by user after processing %d/%d stocks',
+                            task_id,
+                            idx,
+                            total_stocks,
+                        )
+                        return
+                    ok, err = _write_one_stock_result(
+                        task_id,
+                        fetch_result,
+                        start_date,
+                        end_date,
+                        sqlite_path,
+                        duckdb_path,
+                        duckdb_conn=duckdb_conn,
+                    )
+                    if not ok:
+                        if first_failed_label is None:
+                            first_failed_label = fetch_result.stock_code
+                        failed_items.append(f'{fetch_result.stock_code}: {err}')
+                        logger.warning('Task %s: continue after stock failure %s', task_id, fetch_result.stock_code)
+            finally:
+                duckdb_conn.close()
 
             logger.info('Task %s: completed %d stocks', task_id, total_stocks)
 
@@ -666,6 +676,8 @@ def _write_one_stock_result(
     end_date: str,
     sqlite_path: Path | None,
     duckdb_path: Path | None = None,
+    *,
+    duckdb_conn: Any | None = None,
 ) -> tuple[bool, str]:
     """Write one fetched stock result. Fetching may happen concurrently; writing stays serialized."""
     stock_code = fetch_result.stock_code
@@ -740,10 +752,10 @@ def _write_one_stock_result(
     # Write all rows for this stock in a single connection + transaction (bulk)
     write_elapsed_start = time.monotonic()
     try:
-        _write_duckdb_stock_bulk(stock_code, start_date, end_date, enriched_rows, duckdb_path)
+        _write_duckdb_stock_bulk(stock_code, start_date, end_date, enriched_rows, duckdb_path, duckdb_conn=duckdb_conn)
     except Exception as exc:
         logger.exception('Task %s: write failed for %s: %s', task_id, stock_code, exc)
-        return False, f'Write failed for {stock_code}: {exc}'
+        raise RuntimeError(f'Write failed for {stock_code}: {exc}') from exc
 
     write_elapsed = time.monotonic() - write_elapsed_start
 
@@ -885,11 +897,13 @@ def _atomic_write_day(
 
 
 def _write_duckdb_stock_bulk(
-        stock_code: str,
-        start_date: str,
-        end_date: str,
-        rows: list[dict[str, Any]],
-        duckdb_path: Path | None = None,
+    stock_code: str,
+    start_date: str,
+    end_date: str,
+    rows: list[dict[str, Any]],
+    duckdb_path: Path | None = None,
+    *,
+    duckdb_conn: Any | None = None,
 ) -> None:
     """Write all rows for a single stock across its full date range in one transaction.
 
@@ -925,7 +939,7 @@ def _write_duckdb_stock_bulk(
         for r in rows
     ]
 
-    conn = _connect_duckdb(duckdb_path)
+    conn = duckdb_conn or _connect_duckdb(duckdb_path)
     try:
         conn.execute('BEGIN TRANSACTION')
         # Delete all existing rows for this stock within the date range (idempotent)
@@ -949,7 +963,8 @@ def _write_duckdb_stock_bulk(
         conn.rollback()
         raise
     finally:
-        conn.close()
+        if duckdb_conn is None:
+            conn.close()
 
 
 def write_duckdb_5m_stock_bulk(
