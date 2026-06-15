@@ -19,7 +19,6 @@
 
 - [当前执行进度](agent/current-progress.md)：记录当前活跃需求的进度、下一步和阻塞。
 - [最近操作](agent/recent-actions.md)：agent 最近 5 条操作日志。
-- [docs/agent 使用说明](agent/README.md)：需求文件命名规范、模板和维护规则。
 
 ## 功能需求
 
