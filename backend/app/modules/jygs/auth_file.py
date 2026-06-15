@@ -16,12 +16,13 @@ JSON 格式：
 import json
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
+
+from app.core import settings
 
 logger = logging.getLogger(__name__)
 
 # 认证文件存储路径
-_AUTH_FILE = Path(__file__).parent.parent.parent.parent / 'data' / 'config' / 'jygs_auth.json'
+_AUTH_FILE = settings.jygs_config_path
 
 
 def _ensure_config_dir() -> None:
@@ -45,7 +46,7 @@ def load_credentials_from_file() -> dict | None:
     """
     try:
         if not _AUTH_FILE.exists():
-            logger.debug('JYGS auth file not found: %s', _AUTH_FILE)
+            logger.info('JYGS auth file not found: %s', _AUTH_FILE)
             return None
 
         with open(_AUTH_FILE, 'r', encoding='utf-8') as f:

@@ -36,7 +36,6 @@
 
 ## 人类维护硬规范
 
-- [A股市场数据源说明](human/mysj.md)：麦蕊数据接入说明。
 - [数据模型设计](human/data-model/AlphaPredator.dbml)：核心数据模型定义。
 - [韭研公社 API 文档](human/api-docs/jygs-api.yml)：韭研公社接口说明。
 - [麦蕊数据 API 文档](human/api-docs/mysj.yaml)：麦蕊接口说明。
