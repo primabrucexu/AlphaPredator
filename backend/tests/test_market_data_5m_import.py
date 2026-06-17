@@ -108,16 +108,35 @@ def test_write_duckdb_5m_stock_bulk_replaces_stock_range(tmp_path):
             'is_up_limit': False,
             'is_down_limit': False,
             'is_stop': False,
-        }
+        },
+        {
+            'full_code': '000001.SZ',
+            'trade_date': '2025-01-03 09:30:00',
+            'open': 11,
+            'high': 11.5,
+            'low': 10.9,
+            'close': 11.3,
+            'pre_close': 11,
+            'change': 0.3,
+            'pct_chg': 2.7,
+            'vol': 200,
+            'amount': 2000,
+            'is_up_limit': False,
+            'is_down_limit': False,
+            'is_stop': False,
+        },
     ]
     second_rows = [{**first_rows[0], 'close': 10.4, 'change': 0.4, 'pct_chg': 4}]
 
-    write_duckdb_5m_stock_bulk('000001.SZ', first_rows, '20250102', '20250102', duckdb_path)
+    write_duckdb_5m_stock_bulk('000001.SZ', first_rows, '20250102', '20250103', duckdb_path)
     write_duckdb_5m_stock_bulk('000001.SZ', second_rows, '20250102', '20250102', duckdb_path)
 
     rows = run_sql(
         'SELECT full_code, CAST(trade_date AS VARCHAR), close FROM "5m_level_trade_data" ORDER BY trade_date',
         duckdb_path=duckdb_path,
     )
-    assert rows == [('000001.SZ', '2025-01-02 09:30:00', rows[0][2])]
+    assert len(rows) == 2
+    assert rows[0][:2] == ('000001.SZ', '2025-01-02 09:30:00')
+    assert rows[1][:2] == ('000001.SZ', '2025-01-03 09:30:00')
     assert float(rows[0][2]) == 10.4
+    assert float(rows[1][2]) == 11.3

@@ -29,6 +29,8 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 from app.core.settings import settings
 from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_parent, ensure_duckdb_schema
 from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
@@ -1171,50 +1173,88 @@ def write_duckdb_5m_stock_bulk(
     if not rows:
         return
 
-    start_date_str = f'{start_date[:4]}-{start_date[4:6]}-{start_date[6:8]}'
-    end_date_str = f'{end_date[:4]}-{end_date[4:6]}-{end_date[6:8]}'
-    duckdb_rows = [
-        (
-            str(r.get('full_code') or stock_code),
-            str(r['trade_date']),
-            _to_decimal(r.get('open')),
-            _to_decimal(r.get('high')),
-            _to_decimal(r.get('low')),
-            _to_decimal(r.get('close')),
-            _to_decimal(r.get('pre_close')),
-            _to_decimal(r.get('change')),
-            _to_decimal(r.get('pct_chg')),
-            _to_decimal(r.get('vol')),
-            _to_decimal(r.get('amount')),
-            bool(r.get('is_up_limit', False)),
-            bool(r.get('is_down_limit', False)),
-            bool(r.get('is_stop', False)),
-        )
-        for r in rows
-    ]
+    write_start = time.monotonic()
+    start_ts = f'{start_date[:4]}-{start_date[4:6]}-{start_date[6:8]} 00:00:00'
+    end_dt = datetime.strptime(end_date, '%Y%m%d') + timedelta(days=1)
+    end_exclusive_ts = end_dt.strftime('%Y-%m-%d 00:00:00')
+    frame = pd.DataFrame(
+        [
+            {
+                'full_code': str(r.get('full_code') or stock_code),
+                'trade_date': str(r['trade_date']),
+                'open': float(r.get('open') or 0.0),
+                'high': float(r.get('high') or 0.0),
+                'low': float(r.get('low') or 0.0),
+                'close': float(r.get('close') or 0.0),
+                'pre_close': float(r.get('pre_close') or 0.0),
+                'change': float(r.get('change') or 0.0),
+                'pct_chg': float(r.get('pct_chg') or 0.0),
+                'vol': float(r.get('vol') or 0.0),
+                'amount': float(r.get('amount') or 0.0),
+                'is_up_limit': bool(r.get('is_up_limit', False)),
+                'is_down_limit': bool(r.get('is_down_limit', False)),
+                'is_stop': bool(r.get('is_stop', False)),
+            }
+            for r in rows
+        ],
+        columns=[
+            'full_code',
+            'trade_date',
+            'open',
+            'high',
+            'low',
+            'close',
+            'pre_close',
+            'change',
+            'pct_chg',
+            'vol',
+            'amount',
+            'is_up_limit',
+            'is_down_limit',
+            'is_stop',
+        ],
+    )
 
     conn = duckdb_conn or _connect_duckdb(duckdb_path)
+    relation_name = f'tmp_5m_rows_{uuid.uuid4().hex}'
     try:
+        conn.register(relation_name, frame)
         conn.execute('BEGIN TRANSACTION')
         conn.execute(
             'DELETE FROM "5m_level_trade_data" '
-            'WHERE full_code = ? AND CAST(trade_date AS DATE) BETWEEN ? AND ?',
-            [stock_code, start_date_str, end_date_str],
+            'WHERE full_code = ? AND trade_date >= ?::TIMESTAMP AND trade_date < ?::TIMESTAMP',
+            [stock_code, start_ts, end_exclusive_ts],
         )
-        conn.executemany(
+        conn.execute(
             'INSERT INTO "5m_level_trade_data" ('
             'full_code, trade_date, open, high, low, close, pre_close, change, pct_chg, vol, amount, '
             'is_up_limit, is_down_limit, is_stop'
-            ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            duckdb_rows,
+            ') '
+            f'SELECT full_code, trade_date::TIMESTAMP, open, high, low, close, pre_close, change, pct_chg, vol, amount, '
+            f'is_up_limit, is_down_limit, is_stop FROM {relation_name}',
         )
         conn.commit()
     except Exception:
         conn.rollback()
         raise
     finally:
+        try:
+            conn.unregister(relation_name)
+        except Exception:  # noqa: BLE001
+            pass
         if duckdb_conn is None:
             conn.close()
+    elapsed = time.monotonic() - write_start
+    rows_per_second = len(rows) / elapsed if elapsed > 0 else 0.0
+    logger.info(
+        'write_duckdb_5m_stock_bulk: %s [%s ~ %s] rows=%d elapsed=%.2fs rows_per_sec=%.0f',
+        stock_code,
+        start_date,
+        end_date,
+        len(rows),
+        elapsed,
+        rows_per_second,
+    )
 
 
 def _write_duckdb_day(
