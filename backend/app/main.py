@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import api_router
+from app.api.routes.mcp import mcp as mcp_server
 from app.core.logging import configure_logging
 from app.core.settings import settings
 from app.db.duckdb_storage import ensure_duckdb_parent, ensure_duckdb_schema
@@ -13,14 +14,23 @@ from app.db.sqlite import ensure_sqlite_parent, ensure_sqlite_schema
 # Apply one logging config so app and uvicorn logs are visible in console.
 configure_logging()
 
+mcp_app = mcp_server.http_app(path='/')
+
+
+def _ensure_localhost_binding() -> None:
+    if settings.app_host in {'0.0.0.0', '::'}:
+        raise RuntimeError('MCP service is unauthenticated and must bind to 127.0.0.1 or localhost')
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    _ensure_localhost_binding()
     ensure_sqlite_parent()
     ensure_sqlite_schema()
     ensure_duckdb_parent()
     ensure_duckdb_schema()
-    yield
+    async with mcp_app.lifespan(_):
+        yield
 
 
 app = FastAPI(
@@ -38,6 +48,7 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix='/api')
+app.mount('/api/mcp', mcp_app)
 
 
 @app.get('/')

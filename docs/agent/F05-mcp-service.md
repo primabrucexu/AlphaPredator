@@ -1,28 +1,78 @@
-# F05：MCP 交易复盘服务
+# F05：MCP 基础接入服务
 
 ## 背景
 
-- 需要将 AlphaPredator 的交易复盘能力通过 MCP（Model Context Protocol）暴露给 AI Agent，使用户能在 Agent 对话中直接管理复盘记录。
-- 第一期仅暴露交易复盘模块，后续按需扩展行情查询、联动套利等能力。
+- 项目需要先接入 MCP（Model Context Protocol），让 OpenAI Codex、Hermes 等 Agent 客户端可以连接 AlphaPredator 后端。
+- 当前阶段的目标是先打通 MCP 连接链路，不通过 MCP 暴露交易复盘、行情查询、联动套利等业务能力。
+- 后续确认客户端兼容性和本机连接稳定性后，再逐步增加业务 Tool。
 
 ## 目标
 
 - 以 Streamable HTTP 协议提供 MCP 服务端点。
-- 将现有 `trade_review_service` 的 7 个能力封装为 MCP Tool。
-- 集成到现有 FastAPI 后端，复用 service 层，不引入独立进程。
+- 集成到现有 FastAPI 后端，复用同一个后端进程，不引入独立 MCP 进程。
+- 挂载 MCP ASGI app 到 `/api/mcp`。
+- 保留现有 SQLite / DuckDB 初始化逻辑，同时正确初始化 FastMCP Streamable HTTP session manager。
+- 允许 MCP 客户端完成连接、初始化和基础工具发现。
 
 ## 不做什么
 
-- 第一期不暴露交易复盘以外的能力（行情查询、联动套利等后续规划）。
-- 第一期不加认证（先裸奔，绑定 localhost）。
-- 不做 stdio 传输（仅 HTTP）。
+- 第一阶段不暴露交易复盘 CRUD、月度统计或 OCR 能力。
+- 第一阶段不暴露行情查询、短线情绪、联动套利等能力。
+- 第一阶段不新建或修改数据库表。
+- 第一阶段不做 stdio 传输，仅做 Streamable HTTP。
+- 第一阶段不加认证；安全边界限定为本机使用，只允许绑定 `127.0.0.1` / `localhost`，不允许暴露到 `0.0.0.0` 或公网。
+
+## 分阶段设计
+
+### F05a：MCP 基础接入
+
+当前阶段。
+
+- 新增 `fastmcp>=3.0` 依赖。
+- 新增 MCP route 模块，创建 `FastMCP("AlphaPredator")` 实例。
+- 使用 `mcp_server.http_app(path="/")` 创建 MCP ASGI app。
+- 在 FastAPI 主 app 上挂载：
+
+```python
+app.mount("/api/mcp", mcp_app)
+```
+
+- 组合现有 FastAPI lifespan 与 `mcp_app.lifespan`。
+- 不接入业务 service。
+- 不读写业务数据库。
+
+### F05b：交易复盘只读 Tool
+
+后续阶段。
+
+- `list_trade_reviews`
+- `get_trade_review_detail`
+- `get_monthly_trade_stats`
+
+### F05c：交易复盘写入 Tool
+
+后续阶段。
+
+- `create_trade_review`
+- `update_trade_review`
+- `delete_trade_review`
+
+写入 Tool 需要补充调用前确认语义和 `ToolAnnotations`，其中删除 Tool 必须标注 destructive。
+
+### F05d：OCR Tool
+
+后续阶段。
+
+- `parse_trade_screenshot`
+- 验证 Codex / Hermes 是否能把粘贴图片自动转换为 base64。
+- 如果客户端不支持自动编码，则继续通过 Web 前端上传截图做 OCR。
 
 ## 目标平台
 
 - **OpenAI Codex**（Windows 客户端）
 - **Hermes**（新 Agent 客户端）
 
-两个平台均支持 Streamable HTTP 传输，当前设计无需做平台差异化。
+两个平台均按 Streamable HTTP 方式接入。当前阶段只验证连接和协议链路，不验证业务 Tool 能力。
 
 ## 技术选型
 
@@ -30,208 +80,102 @@
 |------|------|
 | MCP 库 | `fastmcp>=3.0`（PrefectHQ/fastmcp） |
 | 传输协议 | Streamable HTTP（单端点 POST/GET/DELETE） |
-| 集成方式 | `fastmcp.http_app()` 挂载到现有 FastAPI `api.mount()` |
+| 集成方式 | `fastmcp.http_app(path="/")` 挂载到现有 FastAPI `app.mount("/api/mcp", mcp_app)` |
 | 端点路径 | `/api/mcp` |
-| 认证 | 无（先裸奔，仅绑定 localhost） |
+| 认证 | 第一阶段无认证；仅允许本机访问 |
 
 ## 架构
 
-```
+```text
 Agent (Codex / Hermes)
     │  POST /api/mcp  (JSON-RPC 请求)
     │  GET  /api/mcp  (SSE 服务器推送)
     │  DELETE /api/mcp (结束会话)
     ▼
 ┌─────────────────────────────┐
-│  FastAPI (/api 前缀)         │
+│  FastAPI                    │
 │                              │
+│  app.mount("/api/mcp")       │
 │  ┌─────────────────────────┐│
 │  │ FastMCP 实例 (新增)      ││
 │  │ • JSON-RPC 解析          ││
 │  │ • Session 管理            ││
 │  │ • SSE 流推送             ││
-│  │ • @mcp.tool 注册与调度   ││
-│  └──────────┬──────────────┘│
-│             │ 直接函数调用   │
-│  ┌──────────▼──────────────┐│
-│  │ trade_review_service     ││ ← 复用现有
-│  │ parse_trade_screenshot   ││
+│  │ • 工具发现               ││
 │  └─────────────────────────┘│
+│                              │
+│  第一阶段不连接业务 service  │
 └─────────────────────────────┘
 ```
 
-**原则**：MCP 层只做协议适配，不写业务逻辑。
+**原则**：第一阶段只做 MCP 协议接入，不做业务能力适配。
 
-## MCP Tool 定义
+## MCP Tool 策略
 
-### Tool 1：list_trade_reviews
+第一阶段默认不暴露业务 Tool。
 
-查询交易复盘列表。
+为了验证客户端是否能完成工具发现和工具调用，可选保留一个无业务含义、无副作用的探针 Tool：
+
+### 可选 Tool：get_alpha_predator_info
 
 | 属性 | 内容 |
 |------|------|
-| 名称 | `list_trade_reviews` |
+| 名称 | `get_alpha_predator_info` |
 | 只读 | ✓ |
-| 说明 | 列出所有交易复盘记录，支持按月份、股票代码、状态筛选 |
+| 说明 | 返回 AlphaPredator MCP 服务的基础信息，用于验证 MCP Tool 调用链路 |
 
-**参数**：
+**参数**：无。
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|:--:|------|
-| `month` | `string?` | | 月份筛选，格式 YYYY-MM |
-| `stock_code` | `string?` | | 股票代码筛选 |
-| `status` | `string?` | | 状态筛选：open / closed |
-| `limit` | `int` | | 每页条数，默认 50，最大 200 |
-| `offset` | `int` | | 分页偏移，默认 0 |
+**返回**：
 
-**返回**：`{ total: int, items: [...] }`
-
-### Tool 2：get_trade_review_detail
-
-获取单条复盘的完整详情。
-
-| 属性 | 内容 |
-|------|------|
-| 名称 | `get_trade_review_detail` |
-| 只读 | ✓ |
-| 说明 | 获取单条交易复盘的完整详情，包括操作明细、决策备注和 AI 分析结果 |
-
-**参数**：
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|:--:|------|
-| `review_id` | `string` | ✓ | 复盘记录 ID |
-
-**返回**：`TradeReviewDetail`（含 operations、decision_notes、ai_result）
-
-### Tool 3：create_trade_review
-
-创建新的复盘记录。
-
-| 属性 | 内容 |
-|------|------|
-| 名称 | `create_trade_review` |
-| 只读 | ✗ |
-| 说明 | 创建新的交易复盘记录，包含股票信息、交易区间、盈亏、操作明细和决策备注 |
-
-**参数**：
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|:--:|------|
-| `stock_code` | `string` | ✓ | 股票代码 |
-| `stock_name` | `string` | ✓ | 股票名称 |
-| `start_date` | `string` | ✓ | 建仓日期，YYYY-MM-DD |
-| `end_date` | `string?` | | 清仓日期，持仓中则为空 |
-| `status` | `string` | ✓ | open（持仓中）/ closed（已清仓） |
-| `total_buy_amount` | `float?` | | 总买入金额 |
-| `total_sell_amount` | `float?` | | 总卖出金额 |
-| `realized_pnl` | `float?` | | 已实现盈亏 |
-| `return_rate` | `float?` | | 收益率 |
-| `entry_reason` | `string` | | 买入理由，默认空 |
-| `entry_expectation` | `string` | | 买入预期，默认空 |
-| `reflection_did_well` | `string` | | 做得好，默认空 |
-| `reflection_did_poorly` | `string` | | 做得不好，默认空 |
-| `reflection_redo_plan` | `string` | | 重做计划，默认空 |
-| `operations` | `array` | | 操作明细列表 |
-| `decision_notes` | `array` | | 决策备注列表 |
-
-**返回**：`TradeReviewDetail`
-
-### Tool 4：update_trade_review
-
-更新已有复盘记录。
-
-| 属性 | 内容 |
-|------|------|
-| 名称 | `update_trade_review` |
-| 只读 | ✗ |
-| 说明 | 更新已有交易复盘记录，操作明细和决策备注会全量替换 |
-
-**参数**：与 `create_trade_review` 相同 + `review_id`（必填）
-
-**返回**：`TradeReviewDetail`
-
-### Tool 5：delete_trade_review
-
-删除复盘记录。
-
-| 属性 | 内容 |
-|------|------|
-| 名称 | `delete_trade_review` |
-| 只读 | ✗ |
-| 说明 | 删除指定的交易复盘记录 |
-
-**参数**：
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|:--:|------|
-| `review_id` | `string` | ✓ | 复盘记录 ID |
-
-**返回**：`{ deleted: true }`
-
-### Tool 6：get_monthly_trade_stats
-
-获取月度交易统计。
-
-| 属性 | 内容 |
-|------|------|
-| 名称 | `get_monthly_trade_stats` |
-| 只读 | ✓ |
-| 说明 | 获取指定月份的实时交易统计，包括总笔数、胜率、总盈亏、平均收益率、最大盈利和最大亏损 |
-
-**参数**：
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|:--:|------|
-| `month_key` | `string` | ✓ | 月份，格式 YYYY-MM |
-
-**返回**：`MonthlyStatsResponse`（trade_count, win_count, loss_count, realized_pnl, average_return_rate, max_gain, max_loss, reviews）
-
-### Tool 7：parse_trade_screenshot
-
-OCR 解析同花顺交易截图。
-
-| 属性 | 内容 |
-|------|------|
-| 名称 | `parse_trade_screenshot` |
-| 只读 | ✓ |
-| 说明 | 接受同花顺交易截图的 base64 编码，用本地 RapidOCR 识别并返回结构化的交易数据，供人工校对后创建复盘 |
-
-**参数**：
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|:--:|------|
-| `image_base64` | `string` | ✓ | 图片的 base64 编码内容（不含 `data:xxx;base64,` 前缀） |
-| `mime_type` | `string` | | 图片 MIME 类型，默认 image/jpeg |
-
-**返回**：`OcrParseResponse`（stock_name, stock_code, start_date, end_date, status, total_buy_amount, total_sell_amount, realized_pnl, return_rate, operations）
-
-## OCR 截图交互流程
-
-```
-人 (截图) → Agent 平台 (base64编码) → MCP Tool parse_trade_screenshot → OCR解析
-    ← Agent 展示解析结果，请求确认                              ← 返回结构化数据
-    → 人确认/修改
-    → MCP Tool create_trade_review → 写入SQLite
-    ← "复盘已创建 ✓"
+```json
+{
+  "name": "AlphaPredator",
+  "mcp_status": "ok",
+  "capabilities_stage": "F05a-basic-mcp"
+}
 ```
 
-**关键点**：
+说明：
 
-- 人在 Agent 对话中粘贴同花顺交易截图。
-- Agent 平台（Codex / Hermes）负责将图片编码为 base64，作为 Tool 的 `image_base64` 参数。
-- 如果平台不支持自动编码，备选路径：通过 AlphaPredator Web 前端上传截图做 OCR，再用 Agent 管理复盘记录。
+- 该 Tool 不读取业务数据库。
+- 该 Tool 不调用交易复盘、行情、联动套利等 service。
+- 如果用户希望严格“空服务”，可以不实现该 Tool，仅验证 MCP 初始化和工具列表为空的表现。
+
+## 挂载与生命周期
+
+- MCP ASGI app 使用 `mcp_server.http_app(path="/")` 创建。
+- 现有 FastAPI app 直接挂载到 `/api/mcp`：
+
+```python
+app.mount("/api/mcp", mcp_app)
+```
+
+- 不能用 `mcp_app.lifespan` 直接替换现有 FastAPI lifespan。
+- 实现时必须组合现有 lifespan 与 MCP lifespan，确保两件事都发生：
+  - 现有 SQLite / DuckDB schema 初始化仍正常执行。
+  - FastMCP Streamable HTTP session manager 正常初始化。
+
+## 本机安全边界
+
+第一阶段 MCP 服务没有认证，因此安全边界必须写死在部署约束里：
+
+- 后端 MCP 服务仅面向本机 Agent 客户端。
+- 开发启动时应绑定 `127.0.0.1` 或 `localhost`。
+- 不允许在无认证状态下绑定 `0.0.0.0` 或暴露到局域网 / 公网。
+- 如后续需要远程访问，必须先补充认证方案（API Key 或 OAuth）后再开放。
+- 如 MCP 客户端通过浏览器或 Inspector 直连，需要单独验证 `Origin` / CORS 行为，避免本地 MCP 服务被网页跨源滥用。
 
 ## 新增 / 修改文件
 
 ### 新增
 
-- `backend/app/api/routes/mcp.py`：FastMCP 实例创建 + 7 个 `@mcp.tool` 定义
+- `backend/app/api/routes/mcp.py`：FastMCP 实例创建；可选定义 `get_alpha_predator_info` 探针 Tool。
 
 ### 修改
 
-- `backend/app/main.py`：调用 `mcp.http_app(path="/")` 并 `api.mount("/mcp", mcp_app)`，传入 lifespan
-- `backend/pyproject.toml`：新增 `fastmcp>=3.0` 依赖
+- `backend/app/main.py`：调用 `mcp.http_app(path="/")` 并 `app.mount("/api/mcp", mcp_app)`；组合现有 FastAPI lifespan 与 `mcp_app.lifespan`。
+- `backend/pyproject.toml`：新增 `fastmcp>=3.0` 依赖。
 
 ## 核心代码结构预览
 
@@ -240,28 +184,26 @@ OCR 解析同花顺交易截图。
 
 from fastmcp import FastMCP
 from mcp.types import ToolAnnotations
-from app.modules.trade_review.service import trade_review_service
-from app.modules.trade_review.ocr_parser import parse_trade_screenshot
 
 mcp = FastMCP(
     "AlphaPredator",
-    instructions="A股智能选股工作台。提供交易复盘管理能力，包括查询、创建、更新、删除复盘记录，月度统计和OCR截图解析。",
+    instructions=(
+        "A股智能选股工作台。当前 MCP 阶段仅提供基础连接能力，"
+        "暂不暴露交易复盘、行情查询或联动套利等业务工具。"
+    ),
 )
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
-def list_trade_reviews(
-    month: str | None = None,
-    stock_code: str | None = None,
-    status: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
-) -> dict:
-    """列出所有交易复盘记录，支持按月份、股票代码、状态筛选"""
-    result = trade_review_service.list_reviews(month, stock_code, status, limit, offset)
-    return result.model_dump()
-
-# ... 其余 6 个 Tool
+def get_alpha_predator_info() -> dict:
+    """返回 MCP 服务基础信息，用于验证工具调用链路。"""
+    return {
+        "name": "AlphaPredator",
+        "mcp_status": "ok",
+        "capabilities_stage": "F05a-basic-mcp",
+    }
 ```
+
+如果选择严格空服务，则 `backend/app/api/routes/mcp.py` 只创建 `FastMCP` 实例，不定义任何 `@mcp.tool`。
 
 ```python
 # backend/app/main.py （新增挂载代码）
@@ -270,18 +212,40 @@ from app.api.routes.mcp import mcp as mcp_server
 
 mcp_app = mcp_server.http_app(path="/")
 
-# 在 app 创建后：
-app = FastAPI(lifespan=mcp_app.lifespan, ...)
-app.mount("/mcp", mcp_app)
+# 需要组合现有 lifespan 和 mcp_app.lifespan，不能直接替换数据库初始化 lifespan。
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    ensure_sqlite_parent()
+    ensure_sqlite_schema()
+    ensure_duckdb_parent()
+    ensure_duckdb_schema()
+    async with mcp_app.lifespan(app):
+        yield
+
+app = FastAPI(lifespan=lifespan, ...)
+app.mount("/api/mcp", mcp_app)
 ```
+
+## 验收标准
+
+- 后端能正常启动，现有 SQLite / DuckDB schema 初始化不回退。
+- MCP 端点可通过 `http://127.0.0.1:<port>/api/mcp` 访问。
+- MCP Inspector、Codex 或 Hermes 至少一个客户端可以完成连接初始化。
+- 如果实现探针 Tool，客户端可以发现并调用 `get_alpha_predator_info`，返回 `mcp_status = "ok"`。
+- 如果选择严格空服务，客户端可以连接，并能正确处理工具列表为空的情况。
+- MCP 服务未暴露到非本机地址。
 
 ## 待验证项
 
-- OpenAI Codex 和 Hermes 对粘贴图片的 base64 自动编码支持情况（影响 OCR Tool 的实际使用体验）。
 - Streamable HTTP 连接在 Windows 环境下的稳定性。
+- `app.mount("/api/mcp", mcp_app)` 与组合 lifespan 在本项目现有 FastAPI 初始化流程下是否能正常启动和完成 MCP session 初始化。
+- 在本机访问限制下，MCP Inspector / Codex / Hermes 的连接地址是否统一使用 `http://127.0.0.1:<port>/api/mcp`。
+- 严格空服务时，不同客户端对“无 Tool”的展示和交互体验是否清晰；如体验不佳，则启用 `get_alpha_predator_info` 探针 Tool。
 
 ## 后续规划
 
-- 第二期：暴露行情查询 Tool（search_stocks、get_stock_detail、get_kline 等）。
-- 第三期：暴露短线情绪、联动套利 Tool。
-- 按需添加认证（API Key 或 OAuth）。
+- 第二阶段：交易复盘只读 Tool。
+- 第三阶段：交易复盘写入 Tool。
+- 第四阶段：OCR Tool。
+- 后续按需暴露行情查询、短线情绪和联动套利 Tool。
+- 如需要远程访问，先补充认证（API Key 或 OAuth）。

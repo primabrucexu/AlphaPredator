@@ -26,7 +26,7 @@
 - [F02：市场数据](agent/F02-market-data.md)：股票列表、日线行情、同步任务、涨跌停计算与市场判断。
 - [F03：交易复盘](agent/F03-trading-review.md)：单标的操作复盘、月度 AI 复盘总结和问题归因。
 - [F04：股票联动套利分析](agent/F04-stock-linkage-arbitrage.md)：5 分钟级别 A->B 先动后动关系、触发事件、可交易观察口径与条件概率输出。
-- [F05：MCP 交易复盘服务](agent/F05-mcp-service.md)：通过 MCP 协议将交易复盘能力暴露给 AI Agent（Codex / Hermes），使用 fastmcp + Streamable HTTP。
+- [F05：MCP 基础接入服务](agent/F05-mcp-service.md)：先通过 fastmcp + Streamable HTTP 打通 Codex / Hermes 的 MCP 连接链路，业务 Tool 后续分阶段接入。
 
 ## 规则与协作约束
 

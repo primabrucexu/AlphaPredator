@@ -14,23 +14,26 @@
 
 ## 当前活跃需求
 
-- [F05：MCP 交易复盘服务](F05-mcp-service.md)
+- [F05：MCP 基础接入服务](F05-mcp-service.md)
 
 ---
 
 ### 完成情况
 
-- [x] 设计文档：技术选型（fastmcp v3 + Streamable HTTP）、7 个 Tool 定义、OCR 交互流程
-- [ ] 编码实现：
-  - [ ] 添加 `fastmcp>=3.0` 依赖到 `pyproject.toml`
-  - [ ] 创建 `backend/app/api/routes/mcp.py`，定义 7 个 `@mcp.tool`
-  - [ ] 在 `backend/app/main.py` 挂载 MCP ASGI app 到 `/api/mcp`
-- [ ] 验证：用 MCP Inspector 或 Codex / Hermes 测试 Tool 调用
+- [x] 设计文档：第一阶段改为 MCP 基础接入服务，仅打通 Streamable HTTP、`/api/mcp` 挂载、lifespan 组合和本机安全边界；交易复盘、OCR、行情和联动套利 Tool 后移
+- [x] 编码实现：
+  - [x] 添加 `fastmcp>=3.0` 依赖到 `pyproject.toml`
+  - [x] 创建 `backend/app/api/routes/mcp.py`，创建 `FastMCP("AlphaPredator")` 实例，并定义只读探针 Tool `get_alpha_predator_info`
+  - [x] 在 `backend/app/main.py` 挂载 MCP ASGI app 到 `/api/mcp`
+- [x] 自动化验证：
+  - [x] `backend/tests/test_mcp_basic.py` 覆盖探针 Tool 返回值、FastMCP client 工具发现与调用、`/api/mcp` 挂载、lifespan 组合和非本机绑定拦截
+- [ ] 外部客户端实连验证：用 MCP Inspector 或 Codex / Hermes 测试 `http://127.0.0.1:<port>/api/mcp` 连接初始化
 
 ### 下一步
 
-编码实现 7 个 MCP Tool 并挂载到 FastAPI。
+启动后端后，用 MCP Inspector、Codex 或 Hermes 连接 `http://127.0.0.1:<port>/api/mcp` 做外部客户端实连；如果连接成功，再确认能发现并调用 `get_alpha_predator_info`。
 
 ### 已知问题 / 阻塞 / 待人工决策
 
-- Codex 和 Hermes 对粘贴图片的 base64 自动编码支持情况待验证。
+- 已启用 `get_alpha_predator_info` 探针 Tool，用于验证工具发现和调用链路；该 Tool 不读取业务数据库，也不调用业务 service。
+- 尚未完成 MCP Inspector / Codex / Hermes 外部客户端实连验证。
