@@ -14,30 +14,41 @@
 
 ## 当前活跃需求
 
-- [F05：MCP 基础接入服务](F05-mcp-service.md)
+- [F06：MACD 形态预警](F06-macd-alert.md)
 
 ---
 
 ### 完成情况
 
-- [x] 设计文档：第一阶段改为 MCP 基础接入服务，仅打通 Streamable HTTP、`/api/mcp` 挂载、lifespan 组合和本机安全边界；交易复盘、OCR、行情和联动套利 Tool 后移
-- [x] 编码实现：
-  - [x] 添加 `fastmcp>=3.0` 依赖到 `pyproject.toml`
-  - [x] 创建 `backend/app/api/routes/mcp.py`，创建 `FastMCP("AlphaPredator")` 实例，并定义只读探针 Tool `get_alpha_predator_info`
-  - [x] 在 `backend/app/main.py` 挂载 MCP ASGI app 到 `/api/mcp`
-- [x] 自动化验证：
-  - [x] `backend/tests/test_mcp_basic.py` 覆盖探针 Tool 返回值、FastMCP client 工具发现与调用、`/api/mcp` 挂载、lifespan 组合和非本机绑定拦截
-- [x] 开发脚本：
-  - [x] 新增 `bin/alphapredator.sh` 一键管理入口，支持环境检查、依赖安装、启动、停止、重启和状态检查
-  - [x] 新增/恢复 `bin/dev-backend.sh`、`bin/dev-frontend.sh` 独立前后端启动脚本
-- [ ] 外部客户端实连验证：用 MCP Inspector 或 Codex / Hermes 测试 `http://127.0.0.1:<port>/api/mcp` 连接初始化
+- [x] 明确第一版只做日线级别 MACD 形态预警
+- [x] 明确输出目标：收盘后展示“连续绿柱缩短、临界金叉价”文案
+- [x] 将预警体系从“水下金叉临界”扩展为“金叉临界”，支持水下和水上金叉临界
+- [x] 补充趋势维持价：在金叉价之外，提示下一交易日收盘价不低于多少可维持绿柱缩短和金叉趋势
+- [x] 题材标注口径收敛为：只取个股上次涨停题材，并统计该题材当前活跃度
+- [x] 明确默认扫描范围为主板非 ST
+- [x] 补充 T+1 跟踪扫描：继续跟踪 T 日 active 预警标的
+- [x] 补充 MCP 接入设计：Tool 列表、只读/写入边界、分页限制、数据新鲜度、幂等策略和非买卖建议声明
+- [x] 恢复并强化金叉趋势历史回测：增加 T+1 趋势验证统计和 DBML 字段
+- [x] 调整回测定位：回测不再作为独立任务，而是每条预警发出时同步生成历史同类形态回测摘要
+- [x] 补充报告文件设计：扫描、跟踪和回测不自动生成报告；需要时按需生成 HTML/PDF 报告并返回文件引用
+- [x] 明确临界价展示策略：金叉价高于涨停价不删除但标记不可达并降权；重点列表默认金叉价距离 <= 5%，全量保留
+- [x] 明确回测规则：
+  - [x] 预警日 T 满足金叉临界条件，并记录水下/水上分类
+  - [x] T+1 开盘价买入
+  - [x] T+1 到 T+5 最多观察 5 个交易日是否金叉
+  - [x] 金叉成功后最多持有 10 个交易日
+  - [x] 出现红柱缩短按当日收盘价卖出，否则第 10 个交易日收盘价卖出
+- [x] 输出 F06 设计文档，包含 DBML 数据库设计草案和输出示例
+- [ ] 用户审批 DBML 数据库设计
+- [ ] 用户更新 `docs/human/data-model/AlphaPredator.dbml`
+- [ ] 编码实现
+- [ ] 自动化验证
 
 ### 下一步
 
-启动后端后，用 MCP Inspector、Codex 或 Hermes 连接 `http://127.0.0.1:<port>/api/mcp` 做外部客户端实连；如果连接成功，再确认能发现并调用 `get_alpha_predator_info`。
+等待用户审阅并审批 `docs/agent/F06-macd-alert.md` 中的 DBML 数据库设计；审批后由用户更新 `docs/human/data-model/AlphaPredator.dbml`，再进入编码实现。
 
 ### 已知问题 / 阻塞 / 待人工决策
 
-- 已启用 `get_alpha_predator_info` 探针 Tool，用于验证工具发现和调用链路；该 Tool 不读取业务数据库，也不调用业务 service。
-- 尚未完成 MCP Inspector / Codex / Hermes 外部客户端实连验证。
-- 当前本机 shell 可用 Python 3.14.6，但未找到 `node` / `npm`；因此脚本已具备前端依赖安装入口，但本机尚无法实际安装或启动前端依赖。
+- 数据库设计尚未审批，不能落表或修改 schema。
+- MCP 外部客户端实连验证仍依赖 F05 未完成项。
