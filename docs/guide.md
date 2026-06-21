@@ -27,6 +27,7 @@
 - [F03：交易复盘](agent/F03-trading-review.md)：单标的操作复盘、月度 AI 复盘总结和问题归因。
 - [F04：股票联动套利分析](agent/F04-stock-linkage-arbitrage.md)：5 分钟级别 A->B 先动后动关系、触发事件、可交易观察口径与条件概率输出。
 - [F05：MCP 基础接入服务](agent/F05-mcp-service.md)：先通过 fastmcp + Streamable HTTP 打通 Codex / Hermes 的 MCP 连接链路，业务 Tool 后续分阶段接入。
+- [F06：MACD 形态预警](agent/F06-macd-alert.md)：日线 MACD 金叉临界预警、水下/水上分类、临界金叉价输出和历史回测。
 
 ## 规则与协作约束
 
