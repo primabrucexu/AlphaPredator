@@ -39,16 +39,17 @@
   - [x] 金叉成功后最多持有 10 个交易日
   - [x] 出现红柱缩短按当日收盘价卖出，否则第 10 个交易日收盘价卖出
 - [x] 输出 F06 设计文档，包含 DBML 数据库设计草案和输出示例
-- [ ] 用户审批 DBML 数据库设计
-- [ ] 用户更新 `docs/human/data-model/AlphaPredator.dbml`
+- [x] 补充 DBML 草案：金叉价理论可达性字段、重复扫描更新时间字段，并将报告状态命名收敛为按需可生成
+- [x] 用户审批 DBML 数据库设计
+- [x] 用户更新 `docs/human/data-model/AlphaPredator.dbml`
 - [ ] 编码实现
 - [ ] 自动化验证
 
 ### 下一步
 
-等待用户审阅并审批 `docs/agent/F06-macd-alert.md` 中的 DBML 数据库设计；审批后由用户更新 `docs/human/data-model/AlphaPredator.dbml`，再进入编码实现。
+DBML 设计已审批并更新到 `docs/human/data-model/AlphaPredator.dbml`。下一步可以进入编码实现；实现前按 code-rules 先输出简短实现计划和验证标准。
 
 ### 已知问题 / 阻塞 / 待人工决策
 
-- 数据库设计尚未审批，不能落表或修改 schema。
-- MCP 外部客户端实连验证仍依赖 F05 未完成项。
+- MCP 外部客户端实连验证仍依赖 F05 未完成项；这不阻塞后端、前端和 MCP Tool 代码实现，但会影响最终外部客户端端到端验收。
+

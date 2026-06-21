@@ -562,3 +562,156 @@ Ref fk_stock_linkage_baseline_metric_job {
 Ref fk_stock_linkage_backtest_result_job {
   stock_linkage_backtest_result.job_id > stock_linkage_backtest_job.id [delete: no action, update: cascade]
 }
+
+// macd金叉趋势预警
+Table macd_alert_result [headercolor: #7a3f8f] {
+  id varchar(255) [pk, unique, note: '预警结果ID，建议使用UUID。']
+  trade_date date [not null, note: '触发预警的交易日，YYYYMMDD。']
+  stock_code varchar(255) [not null, note: '6位股票代码，如600545。']
+  stock_name varchar(255) [not null, note: '股票名称，冗余保存便于展示历史结果。']
+  pattern_key varchar(255) [not null, note: '形态键，第一版为golden_cross_setup。']
+  pattern_name varchar(255) [not null, note: '形态展示名称，如金叉临界。']
+  cross_zone varchar(255) [not null, note: '预警日金叉位置类型：underwater/above_zero/mixed。']
+  close_price numeric [not null, note: '预警日收盘价。']
+  next_cross_trigger_price numeric [not null, note: '下一交易日形成金叉所需的最低收盘价。']
+  cross_trigger_distance_pct numeric [not null, note: '金叉价相对预警日收盘价的涨跌幅，小数形式，如0.0262表示2.62%。']
+  next_limit_up_price numeric [note: '按预警日收盘价和涨跌停规则估算的下一交易日涨停价；无法估算时为空。']
+  cross_trigger_reachable boolean [not null, default: true, note: '金叉价在下一交易日是否理论可达；当金叉价高于涨停价时为false。']
+  cross_trigger_unreachable_reason varchar(255) [note: '金叉价理论不可达原因，如above_limit_up；可达时为空。']
+  next_trend_keep_price numeric [not null, note: '下一交易日维持金叉趋势所需的最低收盘价；达到该价表示绿柱继续缩短。']
+  trend_keep_distance_pct numeric [not null, note: '趋势维持价相对预警日收盘价的涨跌幅，小数形式。']
+  macd_dif numeric [not null, note: '预警日DIF值。']
+  macd_dea numeric [not null, note: '预警日DEA值。']
+  macd_hist numeric [not null, note: '预警日MACD柱值。']
+  green_shrink_days integer [not null, default: 2, note: '连续绿柱缩短天数。']
+  last_limit_up_date date [note: '该股预警日前最近一次涨停日期；近120日无涨停记录时为空。']
+  last_limit_up_theme varchar(255) [note: '该股预警日前最近一次涨停复盘题材，来自daily_hot_info.hot_theme。']
+  last_limit_up_days_ago integer [note: '最近一次涨停距预警日的交易日间隔。']
+  theme_heat_window_days integer [not null, default: 5, note: '题材活跃度统计窗口交易日数。']
+  theme_recent_limit_up_count integer [not null, default: 0, note: '该题材在统计窗口内的去重涨停股票数。']
+  theme_recent_rank integer [note: '该题材在统计窗口内按去重涨停股票数排序的排名；无题材时为空。']
+  theme_heat_level varchar(255) [not null, default: 'none', note: '题材热度等级：strong/medium/weak/none。']
+  next_track_date date [note: '下一次跟踪日期，通常为下一交易日；尚未跟踪时可为空。']
+  track_status varchar(255) [not null, default: 'pending', note: '跟踪状态：pending/cross_confirmed/trend_kept/trend_weakened/data_missing。']
+  tracked_close_price numeric [note: '跟踪日实际收盘价；尚未跟踪或缺数据时为空。']
+  tracked_macd_dif numeric [note: '跟踪日DIF值；尚未跟踪或缺数据时为空。']
+  tracked_macd_dea numeric [note: '跟踪日DEA值；尚未跟踪或缺数据时为空。']
+  tracked_macd_hist numeric [note: '跟踪日MACD柱值；尚未跟踪或缺数据时为空。']
+  tracked_at datetime [note: '跟踪计算时间；尚未跟踪时为空。']
+  backtest_lookback_days integer [not null, default: 720, note: '预警内置回测回看交易日数量。']
+  backtest_sample_count integer [not null, default: 0, note: '该标的历史同类形态样本数。']
+  backtest_cross_success_count integer [not null, default: 0, note: '历史样本中5个交易日内形成金叉的次数。']
+  backtest_cross_success_rate numeric [note: '历史样本金叉成功率。']
+  backtest_t1_cross_confirmed_count integer [not null, default: 0, note: '历史样本中T+1已形成金叉的次数。']
+  backtest_t1_trend_kept_count integer [not null, default: 0, note: '历史样本中T+1趋势维持的次数。']
+  backtest_t1_trend_weakened_count integer [not null, default: 0, note: '历史样本中T+1趋势走弱的次数。']
+  backtest_t1_trend_keep_rate numeric [note: '历史样本T+1趋势维持率。']
+  backtest_completed_trade_count integer [not null, default: 0, note: '历史样本中完成买入和卖出的交易数。']
+  backtest_profit_trade_count integer [not null, default: 0, note: '历史样本中收益率大于0的完成交易数。']
+  backtest_win_rate numeric [note: '历史同类形态交易胜率。']
+  backtest_avg_return_pct numeric [note: '历史同类形态平均收益率。']
+  backtest_max_return_pct numeric [note: '历史同类形态最大收益率。']
+  backtest_max_loss_pct numeric [note: '历史同类形态最大亏损率。']
+  backtest_avg_holding_days numeric [note: '历史同类形态平均持有交易日数。']
+  backtest_confidence_level varchar(255) [not null, default: 'insufficient', note: '回测可信度：high/medium/low/insufficient。']
+  score numeric [not null, default: 0, note: '排序分，用于前端默认排序；可由临界价距离、绿柱缩短幅度、金叉价是否可达等计算。']
+  summary text [not null, note: '面向用户展示的一句话预警摘要。']
+  status varchar(255) [not null, default: 'active', note: '结果状态：active/ignored/archived。']
+  created_at datetime [not null, note: '创建时间。']
+  updated_at datetime [not null, note: '最近更新时间；重复扫描或跟踪覆盖结果时同步更新。']
+
+  indexes {
+    (trade_date, pattern_key, cross_zone) [name: 'idx_macd_alert_result_date_pattern_zone']
+    (stock_code, trade_date) [name: 'idx_macd_alert_result_stock_date']
+    (trade_date, score) [name: 'idx_macd_alert_result_date_score']
+    (trade_date, stock_code, pattern_key, cross_zone) [name: 'uq_macd_alert_result_unique', unique]
+  }
+
+  Note: 'MACD日线形态预警结果表。保存每日收盘后扫描得到的金叉临界预警，支撑水下/水上金叉临界结果回看和前端列表展示。'
+}
+
+Table macd_alert_backtest_sample [headercolor: #7a3f8f] {
+  id varchar(255) [pk, unique, note: '回测样本ID，建议使用UUID。']
+  alert_result_id varchar(255) [not null, note: '所属预警结果ID，关联macd_alert_result.id。']
+  stock_code varchar(255) [not null, note: '6位股票代码，如600545。']
+  stock_name varchar(255) [not null, note: '股票名称，冗余保存便于展示。']
+  alert_date date [not null, note: '预警日T，YYYYMMDD。']
+  alert_close_price numeric [not null, note: '预警日收盘价。']
+  next_cross_trigger_price numeric [not null, note: 'T+1形成金叉所需的最低收盘价。']
+  cross_trigger_distance_pct numeric [not null, note: '金叉价相对预警日收盘价的涨跌幅，小数形式。']
+  next_trend_keep_price numeric [not null, note: 'T+1维持金叉趋势所需的最低收盘价。']
+  trend_keep_distance_pct numeric [not null, note: '趋势维持价相对预警日收盘价的涨跌幅，小数形式。']
+  alert_macd_dif numeric [not null, note: '预警日DIF值。']
+  alert_macd_dea numeric [not null, note: '预警日DEA值。']
+  alert_macd_hist numeric [not null, note: '预警日MACD柱值。']
+  alert_cross_zone varchar(255) [not null, note: '预警日金叉位置类型：underwater/above_zero/mixed。']
+  last_limit_up_date date [note: '该股预警日前最近一次涨停日期；近120日无涨停记录时为空。']
+  last_limit_up_theme varchar(255) [note: '该股预警日前最近一次涨停复盘题材。']
+  last_limit_up_days_ago integer [note: '最近一次涨停距预警日的交易日间隔。']
+  theme_heat_window_days integer [not null, default: 5, note: '题材活跃度统计窗口交易日数。']
+  theme_recent_limit_up_count integer [not null, default: 0, note: '该题材在统计窗口内的去重涨停股票数。']
+  theme_recent_rank integer [note: '该题材在统计窗口内按去重涨停股票数排序的排名；无题材时为空。']
+  theme_heat_level varchar(255) [not null, default: 'none', note: '题材热度等级：strong/medium/weak/none。']
+  buy_date date [note: '买入日，通常为T+1；数据不足时为空。']
+  buy_price numeric [note: '买入价，取T+1开盘价。']
+  t1_close_price numeric [note: 'T+1收盘价，用于验证金叉价和趋势维持价。']
+  t1_track_status varchar(255) [note: 'T+1趋势验证状态：t1_cross_confirmed/t1_trend_kept/t1_trend_weakened/t1_data_missing。']
+  t1_macd_dif numeric [note: 'T+1 DIF值。']
+  t1_macd_dea numeric [note: 'T+1 DEA值。']
+  t1_macd_hist numeric [note: 'T+1 MACD柱值。']
+  cross_date date [note: '首次形成DIF>=DEA的日期；未金叉时为空。']
+  cross_type varchar(255) [note: '实际金叉类型：underwater/above_zero/mixed/none。']
+  sell_date date [note: '卖出日期；未完成交易时为空。']
+  sell_price numeric [note: '卖出价格。']
+  sell_reason varchar(255) [note: '卖出原因：red_shrink/timeout。']
+  return_pct numeric [note: '收益率，小数形式，如0.05表示5%。']
+  holding_days integer [note: '从买入到卖出的持有交易日数。']
+  status varchar(255) [not null, note: '样本状态：pending_cross/cross_failed/cross_success/sold_by_red_shrink/sold_by_timeout/insufficient_data。']
+  created_at datetime [not null, note: '记录创建时间。']
+
+  indexes {
+    (alert_result_id, alert_date) [name: 'idx_macd_alert_sample_result_date']
+    (alert_result_id, return_pct) [name: 'idx_macd_alert_sample_result_return']
+    (stock_code, alert_date) [name: 'idx_macd_alert_sample_stock_date']
+  }
+
+  Note: 'MACD形态预警内置回测样本表。每条记录表示某条预警结果对应的一次历史同类形态样本。'
+}
+
+Table macd_alert_report [headercolor: #7a3f8f] {
+  id varchar(255) [pk, unique, note: '报告ID，建议使用UUID。']
+  report_type varchar(255) [not null, note: '报告类型：daily_scan/daily_tracking/daily_brief/backtest。']
+  trade_date date [note: '报告对应交易日；回测报告可为空。']
+  source_trade_date date [note: '跟踪报告对应的来源预警日；非跟踪报告可为空。']
+  alert_result_id varchar(255) [note: '单条预警报告关联的预警结果ID；非单条预警报告可为空。']
+  html_file_path text [note: 'HTML报告文件相对路径，如data/reports/macd-alert/2026-06-05/brief-report.html。']
+  pdf_file_path text [note: 'PDF报告文件相对路径，如data/reports/macd-alert/2026-06-05/brief-report.pdf。']
+  csv_file_path text [note: 'CSV明细文件相对路径；未生成CSV时为空。']
+  formats_json text [not null, note: '已生成格式JSON数组，如["html","pdf"]。']
+  title varchar(255) [not null, note: '报告标题。']
+  summary text [note: '报告摘要，便于列表展示。']
+  created_at datetime [not null, note: '报告生成时间。']
+
+  indexes {
+    (report_type, trade_date) [name: 'idx_macd_alert_report_type_date']
+    (alert_result_id) [name: 'idx_macd_alert_report_alert_result']
+  }
+
+  Note: 'MACD预警报告文件索引表。报告按需生成，保存HTML/PDF/CSV文件路径，便于前端和MCP返回报告引用。'
+}
+
+Ref fk_macd_alert_result_stock_code {
+  macd_alert_result.stock_code > stock_list.code [delete: no action, update: no action]
+}
+
+Ref fk_macd_alert_backtest_sample_alert_result {
+  macd_alert_backtest_sample.alert_result_id > macd_alert_result.id [delete: no action, update: cascade]
+}
+
+Ref fk_macd_alert_backtest_sample_stock_code {
+  macd_alert_backtest_sample.stock_code > stock_list.code [delete: no action, update: no action]
+}
+
+Ref fk_macd_alert_report_alert_result {
+  macd_alert_report.alert_result_id > macd_alert_result.id [delete: set null, update: cascade]
+}
