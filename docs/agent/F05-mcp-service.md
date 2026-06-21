@@ -242,6 +242,16 @@ app.mount("/api/mcp", mcp_app)
 - 在本机访问限制下，MCP Inspector / Codex / Hermes 的连接地址是否统一使用 `http://127.0.0.1:<port>/api/mcp`。
 - 严格空服务时，不同客户端对“无 Tool”的展示和交互体验是否清晰；如体验不佳，则启用 `get_alpha_predator_info` 探针 Tool。
 
+## 当前状态
+
+- 已实现 MCP 基础接入：
+  - 已添加 `fastmcp>=3.0` 依赖。
+  - 已创建 `backend/app/api/routes/mcp.py`，定义 `FastMCP("AlphaPredator")` 和只读探针 Tool `get_alpha_predator_info`。
+  - 已在 `backend/app/main.py` 挂载 MCP ASGI app 到 `/api/mcp`，并组合现有数据库初始化 lifespan 与 MCP lifespan。
+  - 已补充 `backend/tests/test_mcp_basic.py`，覆盖探针 Tool 返回值、FastMCP client 工具发现与调用、`/api/mcp` 挂载、lifespan 组合和非本机绑定拦截。
+- 尚未完成 MCP Inspector / Codex / Hermes 外部客户端实连验证。
+- 当前本机 shell 可用 Python 3.14.6，但未找到 `node` / `npm`；前端依赖安装和启动仍需在具备 Node 环境后验证。
+
 ## 后续规划
 
 - 第二阶段：交易复盘只读 Tool。
