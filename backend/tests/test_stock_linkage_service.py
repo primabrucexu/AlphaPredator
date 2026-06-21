@@ -1,5 +1,5 @@
 from app.db.duckdb_storage import ensure_duckdb_schema, run_sql
-from app.db.sqlite import ensure_sqlite_schema
+from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
 from app.modules.stock_linkage.service import (
     StockLinkageBacktestRequest,
     create_stock_linkage_backtest_job,
@@ -66,33 +66,36 @@ def test_run_stock_linkage_backtest_persists_results_for_manual_a(tmp_path):
     assert summary.status == 'success'
     assert summary.trigger_event_count >= 2
     assert summary.result_count > 0
-    rows = run_sql(
-        "SELECT a_full_code, b_full_code, trigger_type, trigger_threshold, observation_type, "
-        "target_threshold, sample_count, hit_count, condition_probability, confidence_level "
-        "FROM stock_linkage_backtest_result WHERE job_id = ? "
-        "AND b_full_code = '000002.SZ' AND observation_type = 't_day_high' AND target_threshold = 0.02 "
-        "ORDER BY trigger_type, trigger_threshold",
-        params=[summary.job_id],
-        duckdb_path=duckdb_path,
-    )
+
+    conn = connect_sqlite(sqlite_path)
+    try:
+        rows = conn.execute(
+            "SELECT a_full_code, b_full_code, trigger_type, trigger_threshold, observation_type, "
+            "target_threshold, sample_count, hit_count, condition_probability, confidence_level "
+            "FROM stock_linkage_backtest_result WHERE job_id = ? "
+            "AND b_full_code = '000002.SZ' AND observation_type = 't_day_high' AND target_threshold = 0.02 "
+            "ORDER BY trigger_type, trigger_threshold",
+            [summary.job_id],
+        ).fetchall()
+        excluded = conn.execute(
+            "SELECT COUNT(*) FROM stock_linkage_backtest_result WHERE job_id = ? AND b_full_code = '000003.SZ'",
+            [summary.job_id],
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
     assert rows
     assert all(row[0] == '000001.SZ' for row in rows)
     assert all(row[1] == '000002.SZ' for row in rows)
     assert all(row[6] == 1 for row in rows)
     assert all(row[7] == 1 for row in rows)
     assert all(float(row[8]) == 1.0 for row in rows)
-
-    excluded = run_sql(
-        "SELECT COUNT(*) FROM stock_linkage_backtest_result WHERE job_id = ? AND b_full_code = '000003.SZ'",
-        params=[summary.job_id],
-        duckdb_path=duckdb_path,
-    )[0][0]
     assert excluded == 0
 
 
 def test_create_stock_linkage_backtest_job_persists_pending_job(tmp_path):
-    duckdb_path = tmp_path / 'alphapredator.duckdb'
-    ensure_duckdb_schema(duckdb_path)
+    sqlite_path = tmp_path / 'alphapredator.sqlite3'
+    ensure_sqlite_schema(sqlite_path)
 
     job = create_stock_linkage_backtest_job(
         StockLinkageBacktestRequest(
@@ -103,20 +106,21 @@ def test_create_stock_linkage_backtest_job_persists_pending_job(tmp_path):
             min_sample_count=30,
             job_name='手动测试',
         ),
-        duckdb_path=duckdb_path,
+        sqlite_path=sqlite_path,
     )
 
     assert job.status == 'pending'
     assert job.job_name == '手动测试'
     assert job.manual_a_full_code == '000001.SZ'
 
-    stored = get_stock_linkage_job(job.job_id, duckdb_path=duckdb_path)
+    stored = get_stock_linkage_job(job.job_id, sqlite_path=sqlite_path)
     assert stored is not None
     assert stored.status == 'pending'
     assert stored.start_date == '2025-01-02'
 
 
 def test_start_stock_linkage_backtest_job_marks_running_and_uses_background_runner(monkeypatch, tmp_path):
+    sqlite_path = tmp_path / 'alphapredator.sqlite3'
     duckdb_path = tmp_path / 'alphapredator.duckdb'
     job = create_stock_linkage_backtest_job(
         StockLinkageBacktestRequest(
@@ -125,7 +129,7 @@ def test_start_stock_linkage_backtest_job_marks_running_and_uses_background_runn
             start_date='2025-01-02',
             end_date='2025-01-03',
         ),
-        duckdb_path=duckdb_path,
+        sqlite_path=sqlite_path,
     )
     started_threads = []
 
@@ -138,16 +142,17 @@ def test_start_stock_linkage_backtest_job_marks_running_and_uses_background_runn
 
     monkeypatch.setattr('app.modules.stock_linkage.service.threading.Thread', FakeThread)
 
-    started = start_stock_linkage_backtest_job(job.job_id, duckdb_path=duckdb_path)
+    started = start_stock_linkage_backtest_job(job.job_id, sqlite_path=sqlite_path, duckdb_path=duckdb_path)
 
     assert started is True
-    assert get_stock_linkage_job(job.job_id, duckdb_path=duckdb_path).status == 'running'
+    assert get_stock_linkage_job(job.job_id, sqlite_path=sqlite_path).status == 'running'
     assert len(started_threads) == 1
     assert started_threads[0]['args'][0] == job.job_id
     assert started_threads[0]['daemon'] is True
 
 
 def test_start_stock_linkage_backtest_job_rejects_when_another_job_is_running(monkeypatch, tmp_path):
+    sqlite_path = tmp_path / 'alphapredator.sqlite3'
     duckdb_path = tmp_path / 'alphapredator.duckdb'
     first = create_stock_linkage_backtest_job(
         StockLinkageBacktestRequest(
@@ -156,7 +161,7 @@ def test_start_stock_linkage_backtest_job_rejects_when_another_job_is_running(mo
             start_date='2025-01-02',
             end_date='2025-01-03',
         ),
-        duckdb_path=duckdb_path,
+        sqlite_path=sqlite_path,
     )
     second = create_stock_linkage_backtest_job(
         StockLinkageBacktestRequest(
@@ -165,7 +170,7 @@ def test_start_stock_linkage_backtest_job_rejects_when_another_job_is_running(mo
             start_date='2025-01-02',
             end_date='2025-01-03',
         ),
-        duckdb_path=duckdb_path,
+        sqlite_path=sqlite_path,
     )
 
     class FakeThread:
@@ -177,6 +182,6 @@ def test_start_stock_linkage_backtest_job_rejects_when_another_job_is_running(mo
 
     monkeypatch.setattr('app.modules.stock_linkage.service.threading.Thread', FakeThread)
 
-    assert start_stock_linkage_backtest_job(first.job_id, duckdb_path=duckdb_path) is True
-    assert start_stock_linkage_backtest_job(second.job_id, duckdb_path=duckdb_path) is False
-    assert get_stock_linkage_job(second.job_id, duckdb_path=duckdb_path).status == 'pending'
+    assert start_stock_linkage_backtest_job(first.job_id, sqlite_path=sqlite_path, duckdb_path=duckdb_path) is True
+    assert start_stock_linkage_backtest_job(second.job_id, sqlite_path=sqlite_path, duckdb_path=duckdb_path) is False
+    assert get_stock_linkage_job(second.job_id, sqlite_path=sqlite_path).status == 'pending'

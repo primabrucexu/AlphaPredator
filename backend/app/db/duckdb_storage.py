@@ -87,94 +87,6 @@ CREATE TABLE IF NOT EXISTS "5m_level_trade_data"
 )
 '''
 
-STOCK_LINKAGE_SCHEMA_SQL = '''
-CREATE TABLE IF NOT EXISTS stock_linkage_backtest_job
-(
-    id VARCHAR PRIMARY KEY,
-    job_name VARCHAR,
-    a_select_mode VARCHAR NOT NULL,
-    manual_a_full_code VARCHAR,
-    hot_top_n INTEGER,
-    start_date DATE NOT NULL,
-    end_date DATE NOT NULL,
-    min_sample_count INTEGER NOT NULL DEFAULT 30,
-    status VARCHAR NOT NULL DEFAULT 'pending',
-    error_message TEXT,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    finished_at TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_stock_linkage_job_status_created
-    ON stock_linkage_backtest_job (status, created_at);
-CREATE INDEX IF NOT EXISTS idx_stock_linkage_job_created
-    ON stock_linkage_backtest_job (created_at);
-
-CREATE TABLE IF NOT EXISTS stock_linkage_trigger_event
-(
-    id VARCHAR PRIMARY KEY,
-    job_id VARCHAR NOT NULL,
-    a_full_code VARCHAR NOT NULL,
-    trade_date DATE NOT NULL,
-    bar_time TIMESTAMP NOT NULL,
-    bar_index INTEGER NOT NULL,
-    trigger_type VARCHAR NOT NULL,
-    trigger_threshold DECIMAL(12, 6) NOT NULL,
-    trigger_return DECIMAL(20, 8) NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_stock_linkage_trigger_a_condition
-    ON stock_linkage_trigger_event (job_id, a_full_code, trigger_type, trigger_threshold);
-CREATE INDEX IF NOT EXISTS idx_stock_linkage_trigger_time
-    ON stock_linkage_trigger_event (job_id, trade_date, bar_index);
-
-CREATE TABLE IF NOT EXISTS stock_linkage_baseline_metric
-(
-    id VARCHAR PRIMARY KEY,
-    job_id VARCHAR NOT NULL,
-    b_full_code VARCHAR NOT NULL,
-    observation_type VARCHAR NOT NULL,
-    target_threshold DECIMAL(12, 6) NOT NULL,
-    baseline_sample_count INTEGER NOT NULL,
-    baseline_hit_count INTEGER NOT NULL,
-    baseline_probability DECIMAL(20, 8) NOT NULL
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS uq_stock_linkage_baseline_b_metric
-    ON stock_linkage_baseline_metric (job_id, b_full_code, observation_type, target_threshold);
-
-CREATE TABLE IF NOT EXISTS stock_linkage_backtest_result
-(
-    id VARCHAR PRIMARY KEY,
-    job_id VARCHAR NOT NULL,
-    a_full_code VARCHAR NOT NULL,
-    b_full_code VARCHAR NOT NULL,
-    trigger_type VARCHAR NOT NULL,
-    trigger_threshold DECIMAL(12, 6) NOT NULL,
-    observation_type VARCHAR NOT NULL,
-    target_threshold DECIMAL(12, 6) NOT NULL,
-    sample_count INTEGER NOT NULL,
-    hit_count INTEGER NOT NULL,
-    condition_probability DECIMAL(20, 8) NOT NULL,
-    baseline_probability DECIMAL(20, 8) NOT NULL,
-    probability_lift DECIMAL(20, 8) NOT NULL,
-    lift_multiple DECIMAL(20, 8),
-    trigger_coverage_rate DECIMAL(20, 8) NOT NULL,
-    confidence_level VARCHAR NOT NULL,
-    score DECIMAL(20, 8) NOT NULL,
-    created_at TIMESTAMP NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_stock_linkage_result_job_score
-    ON stock_linkage_backtest_result (job_id, score);
-CREATE INDEX IF NOT EXISTS idx_stock_linkage_result_pair
-    ON stock_linkage_backtest_result (job_id, a_full_code, b_full_code);
-CREATE INDEX IF NOT EXISTS idx_stock_linkage_result_trigger
-    ON stock_linkage_backtest_result (job_id, trigger_type, trigger_threshold);
-CREATE INDEX IF NOT EXISTS idx_stock_linkage_result_observation
-    ON stock_linkage_backtest_result (job_id, observation_type, target_threshold);
-'''
-
 # Backward-compat alias; kept so older import paths still resolve
 DAILY_PRICE_SCHEMA_SQL = DAY_LEVEL_TRADE_DATA_SCHEMA_SQL
 
@@ -201,7 +113,6 @@ def ensure_duckdb_schema(duckdb_path: Path | None = None) -> None:
             connection.execute('ALTER TABLE daily_price RENAME TO day_level_trade_data')
         connection.execute(DAY_LEVEL_TRADE_DATA_SCHEMA_SQL)
         connection.execute(FIVE_MIN_LEVEL_TRADE_DATA_SCHEMA_SQL)
-        connection.execute(STOCK_LINKAGE_SCHEMA_SQL)
     finally:
         connection.close()
 

@@ -282,28 +282,28 @@ def _job_to_request(job: StockLinkageBacktestJob) -> StockLinkageBacktestRequest
 def create_stock_linkage_backtest_job(
     request: StockLinkageBacktestRequest,
     *,
-    duckdb_path: Path | None = None,
+    sqlite_path: Path | None = None,
 ) -> StockLinkageBacktestJob:
     _validate_request(request)
-    ensure_duckdb_schema(duckdb_path)
+    ensure_sqlite_schema(sqlite_path)
     job_id = str(uuid.uuid4())
-    conn = connect_duckdb(duckdb_path)
+    conn = connect_sqlite(sqlite_path)
     try:
         _insert_job(conn, request, job_id, 'pending')
+        conn.commit()
     finally:
         conn.close()
-    job = get_stock_linkage_job(job_id, duckdb_path=duckdb_path)
+    job = get_stock_linkage_job(job_id, sqlite_path=sqlite_path)
     assert job is not None
     return job
-
 
 def get_stock_linkage_job(
     job_id: str,
     *,
-    duckdb_path: Path | None = None,
+    sqlite_path: Path | None = None,
 ) -> StockLinkageBacktestJob | None:
-    ensure_duckdb_schema(duckdb_path)
-    conn = connect_duckdb(duckdb_path)
+    ensure_sqlite_schema(sqlite_path)
+    conn = connect_sqlite(sqlite_path)
     try:
         row = conn.execute(
             '''
@@ -318,14 +318,13 @@ def get_stock_linkage_job(
         conn.close()
     return _row_to_job(row) if row else None
 
-
 def list_stock_linkage_jobs(
     *,
     limit: int = 20,
-    duckdb_path: Path | None = None,
+    sqlite_path: Path | None = None,
 ) -> list[StockLinkageBacktestJob]:
-    ensure_duckdb_schema(duckdb_path)
-    conn = connect_duckdb(duckdb_path)
+    ensure_sqlite_schema(sqlite_path)
+    conn = connect_sqlite(sqlite_path)
     try:
         rows = conn.execute(
             '''
@@ -340,7 +339,6 @@ def list_stock_linkage_jobs(
     finally:
         conn.close()
     return [_row_to_job(row) for row in rows]
-
 
 def _find_running_stock_linkage_job_id(conn: Any) -> str | None:
     row = conn.execute(
@@ -368,16 +366,17 @@ def start_stock_linkage_backtest_job(
     sqlite_path: Path | None = None,
     duckdb_path: Path | None = None,
 ) -> bool:
-    ensure_duckdb_schema(duckdb_path)
+    ensure_sqlite_schema(sqlite_path)
     with _stock_linkage_lock:
-        conn = connect_duckdb(duckdb_path)
+        conn = connect_sqlite(sqlite_path)
         try:
             if _find_running_stock_linkage_job_id(conn):
                 return False
-            job = get_stock_linkage_job(job_id, duckdb_path=duckdb_path)
+            job = get_stock_linkage_job(job_id, sqlite_path=sqlite_path)
             if job is None or job.status != 'pending':
                 return False
             _mark_job_status(conn, job_id, 'running')
+            conn.commit()
         finally:
             conn.close()
 
@@ -389,13 +388,12 @@ def start_stock_linkage_backtest_job(
     thread.start()
     return True
 
-
 def _run_stock_linkage_job(
     job_id: str,
     sqlite_path: Path | None = None,
     duckdb_path: Path | None = None,
 ) -> None:
-    job = get_stock_linkage_job(job_id, duckdb_path=duckdb_path)
+    job = get_stock_linkage_job(job_id, sqlite_path=sqlite_path)
     if job is None:
         return
     try:
@@ -405,18 +403,19 @@ def _run_stock_linkage_job(
             duckdb_path=duckdb_path,
             job_id=job_id,
         )
-        conn = connect_duckdb(duckdb_path)
+        conn = connect_sqlite(sqlite_path)
         try:
             _mark_job_status(conn, job_id, 'success')
+            conn.commit()
         finally:
             conn.close()
     except Exception as exc:  # noqa: BLE001
-        conn = connect_duckdb(duckdb_path)
+        conn = connect_sqlite(sqlite_path)
         try:
             _mark_job_status(conn, job_id, 'failed', str(exc)[:1000])
+            conn.commit()
         finally:
             conn.close()
-
 
 def run_stock_linkage_backtest(
     request: StockLinkageBacktestRequest,
@@ -426,6 +425,7 @@ def run_stock_linkage_backtest(
     job_id: str | None = None,
 ) -> StockLinkageBacktestSummary:
     _validate_request(request)
+    ensure_sqlite_schema(sqlite_path)
     ensure_duckdb_schema(duckdb_path)
 
     target_job_id = job_id or str(uuid.uuid4())
@@ -521,7 +521,7 @@ def run_stock_linkage_backtest(
                             ]
                         )
 
-    conn = connect_duckdb(duckdb_path)
+    conn = connect_sqlite(sqlite_path)
     try:
         conn.execute('BEGIN TRANSACTION')
         if job_id is None:
@@ -597,9 +597,10 @@ def list_stock_linkage_results(
     *,
     limit: int = 50,
     offset: int = 0,
-    duckdb_path: Path | None = None,
+    sqlite_path: Path | None = None,
 ) -> list[dict[str, Any]]:
-    conn = connect_duckdb(duckdb_path)
+    ensure_sqlite_schema(sqlite_path)
+    conn = connect_sqlite(sqlite_path)
     try:
         rows = conn.execute(
             '''

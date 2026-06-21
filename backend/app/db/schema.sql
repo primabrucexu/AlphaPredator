@@ -175,3 +175,90 @@ CREATE TABLE IF NOT EXISTS trade_review_monthly_summary
     max_loss            REAL,
     generated_at        TEXT    NOT NULL
 );
+-- ── 股票联动套利回测 ────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS stock_linkage_backtest_job
+(
+    id                 TEXT PRIMARY KEY,
+    job_name           TEXT,
+    a_select_mode      TEXT    NOT NULL,
+    manual_a_full_code TEXT,
+    hot_top_n          INTEGER,
+    start_date         TEXT    NOT NULL,
+    end_date           TEXT    NOT NULL,
+    min_sample_count   INTEGER NOT NULL DEFAULT 30,
+    status             TEXT    NOT NULL DEFAULT 'pending',
+    error_message      TEXT,
+    created_at         TEXT    NOT NULL,
+    updated_at         TEXT    NOT NULL,
+    finished_at        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_linkage_job_status_created
+    ON stock_linkage_backtest_job (status, created_at);
+CREATE INDEX IF NOT EXISTS idx_stock_linkage_job_created
+    ON stock_linkage_backtest_job (created_at);
+
+CREATE TABLE IF NOT EXISTS stock_linkage_trigger_event
+(
+    id                TEXT PRIMARY KEY,
+    job_id            TEXT NOT NULL,
+    a_full_code       TEXT NOT NULL,
+    trade_date        TEXT NOT NULL,
+    bar_time          TEXT NOT NULL,
+    bar_index         INTEGER NOT NULL,
+    trigger_type      TEXT NOT NULL,
+    trigger_threshold REAL NOT NULL,
+    trigger_return    REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_linkage_trigger_a_condition
+    ON stock_linkage_trigger_event (job_id, a_full_code, trigger_type, trigger_threshold);
+CREATE INDEX IF NOT EXISTS idx_stock_linkage_trigger_time
+    ON stock_linkage_trigger_event (job_id, trade_date, bar_index);
+
+CREATE TABLE IF NOT EXISTS stock_linkage_baseline_metric
+(
+    id                   TEXT PRIMARY KEY,
+    job_id               TEXT    NOT NULL,
+    b_full_code          TEXT    NOT NULL,
+    observation_type     TEXT    NOT NULL,
+    target_threshold     REAL    NOT NULL,
+    baseline_sample_count INTEGER NOT NULL,
+    baseline_hit_count    INTEGER NOT NULL,
+    baseline_probability  REAL    NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_stock_linkage_baseline_b_metric
+    ON stock_linkage_baseline_metric (job_id, b_full_code, observation_type, target_threshold);
+
+CREATE TABLE IF NOT EXISTS stock_linkage_backtest_result
+(
+    id                    TEXT PRIMARY KEY,
+    job_id                TEXT    NOT NULL,
+    a_full_code           TEXT    NOT NULL,
+    b_full_code           TEXT    NOT NULL,
+    trigger_type          TEXT    NOT NULL,
+    trigger_threshold     REAL    NOT NULL,
+    observation_type      TEXT    NOT NULL,
+    target_threshold      REAL    NOT NULL,
+    sample_count          INTEGER NOT NULL,
+    hit_count             INTEGER NOT NULL,
+    condition_probability REAL    NOT NULL,
+    baseline_probability  REAL    NOT NULL,
+    probability_lift      REAL    NOT NULL,
+    lift_multiple         REAL,
+    trigger_coverage_rate REAL    NOT NULL,
+    confidence_level      TEXT    NOT NULL,
+    score                 REAL    NOT NULL,
+    created_at            TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_linkage_result_job_score
+    ON stock_linkage_backtest_result (job_id, score);
+CREATE INDEX IF NOT EXISTS idx_stock_linkage_result_pair
+    ON stock_linkage_backtest_result (job_id, a_full_code, b_full_code);
+CREATE INDEX IF NOT EXISTS idx_stock_linkage_result_trigger
+    ON stock_linkage_backtest_result (job_id, trigger_type, trigger_threshold);
+CREATE INDEX IF NOT EXISTS idx_stock_linkage_result_observation
+    ON stock_linkage_backtest_result (job_id, observation_type, target_threshold);

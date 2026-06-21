@@ -326,7 +326,7 @@ A 股票单根 5 分钟 K 涨幅超过 4% 触发了 40 次
 ```text
 1. 5 分钟 K 原始行情使用独立行情表 5m_level_trade_data，本节不展开该表设计。
 2. 联动回测结果需要可复查，所以保存任务配置、A 触发事件、B 基准概率、A->B 统计结果。
-3. 这些表建议放 DuckDB，因为回测结果是分析型数据。
+3. 按全局存储规则，这些回测任务和统计结果属于非 K 线持久化数据，应存储到 SQLite；DuckDB 仅保留 5 分钟 K 原始行情。
 ```
 
 行情依赖说明：
@@ -456,7 +456,7 @@ Ref fk_stock_linkage_backtest_result_job {
 ## 当前状态
 
 - 已实现第一版股票联动套利分析后端核心：
-  - DuckDB 初始化创建 `5m_level_trade_data` 和 4 张联动回测表。
+  - SQLite 初始化创建 4 张联动回测表；DuckDB 初始化只创建 `5m_level_trade_data` 等 K 线行情表。
   - 5 分钟 K 数据拉取复用麦蕊历史行情接口，使用 `interval=5`。
   - 后端支持 `manual_single` 和 `hot_limit_top` 两种 A 股票选择模式。
   - 后端支持后台创建并执行回测任务，保存触发事件、保存 B 基准概率、保存 A-B 统计结果。
