@@ -151,7 +151,7 @@ export const ALL_MARKET_BOARDS: MarketBoard[] = ['主板', '创业板', '科创�
 
 export type TaskStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'TERMINATED';
 
-export type TaskType = 'STOCK_LIST_SYNC' | 'MARKET_DATA' | 'MARKET_DATA_5M' | 'JYGS_REVIEW';
+export type TaskType = 'STOCK_LIST_SYNC' | 'MARKET_DATA' | 'MARKET_DATA_5M' | 'JYGS_REVIEW' | 'MACD_ALERT_SCAN';
 
 export interface TaskResponse {
   task_id: string;
@@ -730,8 +730,8 @@ export function getStockLinkageBacktestResults(
   );
 }
 
-export function scanMacdAlerts(request: MacdAlertScanRequest): Promise<MacdAlertScanResponse> {
-  return postJson<MacdAlertScanResponse>('/api/macd-alerts/scan', request);
+export function scanMacdAlerts(request: MacdAlertScanRequest): Promise<TaskResponse> {
+  return postJson<TaskResponse>('/api/macd-alerts/scan', request);
 }
 
 export function trackMacdAlerts(tradeDate: string, sourceTradeDate: string): Promise<MacdAlertTrackResponse> {

@@ -145,7 +145,7 @@ def create_task(
 
     *start_date* / *end_date*: YYYYMMDD format.
     *mode*: Ignored; kept for API backward compat. Time range is determined by task_type.
-    *task_type*: ``'STOCK_LIST_SYNC'`` | ``'MARKET_DATA'`` | ``'JYGS_REVIEW'``.
+    *task_type*: ``'STOCK_LIST_SYNC'`` | ``'MARKET_DATA'`` | ``'JYGS_REVIEW'`` | ``'MACD_ALERT_SCAN'``.
 
     Raises ValueError if credentials not configured.
     """
@@ -170,6 +170,8 @@ def create_task(
             raise ValueError(
                 f'韭研公社凭据无效，请重新登录后再启动任务。错误：{error}'
             )
+    elif task_type == 'MACD_ALERT_SCAN':
+        pass
     else:
         raise ValueError(f'Unknown task_type: {task_type}')
 
@@ -183,8 +185,10 @@ def create_task(
         # Date-based loop: total_items = number of weekdays (skip weekends)
         dates = _generate_date_list(start_date, end_date, weekdays_only=True)
         total_items = len(dates)
-    else:  # MARKET_DATA / MARKET_DATA_5M
+    elif task_type in ('MARKET_DATA', 'MARKET_DATA_5M'):
         # Stock-based loop: total_items will be set after resolving stock universe in _run_task
+        total_items = 0
+    else:  # MACD_ALERT_SCAN
         total_items = 0
 
     task_id = str(uuid.uuid4())
@@ -559,6 +563,18 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
                 duckdb_conn.close()
 
             logger.info('Task %s: completed %d stocks', task_id, total_stocks)
+
+        elif task_type == 'MACD_ALERT_SCAN':
+            from app.modules.macd_alert.service import scan_macd_alerts
+
+            trade_date = datetime.strptime(str(task['start_date']), '%Y%m%d').strftime('%Y-%m-%d')
+            logger.info('Task %s: started for MACD_ALERT_SCAN on %s', task_id, trade_date)
+            scan_macd_alerts(
+                trade_date=trade_date,
+                sqlite_path=sqlite_path,
+                duckdb_path=duckdb_path,
+                task_id=task_id,
+            )
 
         else:  # JYGS_REVIEW
             # ── 韭研公社复盘：按日期迭代 ──────────────────────────────────────

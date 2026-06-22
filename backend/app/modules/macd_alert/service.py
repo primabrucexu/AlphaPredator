@@ -18,10 +18,12 @@ from app.models.sqlite_models import (
     StockList,
 )
 from app.modules.macd_alert.indicators import MacdPoint, compute_macd_points
+from app.repositories.init_task_repo import InitTaskRepo
 
 PATTERN_KEY = 'golden_cross_setup'
 PATTERN_NAME = '金叉临界'
 DISCLAIMER = '以下为技术形态观察结果，不构成买卖建议。'
+MACD_ALERT_SCAN_TASK_TYPE = 'MACD_ALERT_SCAN'
 
 
 def _session_factory(sqlite_path: Path | None = None):
@@ -536,29 +538,39 @@ def scan_macd_alerts(
     green_shrink_days: int = 2,
     sqlite_path: Path | None = None,
     duckdb_path: Path | None = None,
+    task_id: str | None = None,
 ) -> dict[str, Any]:
     if universe_scope != 'market':
         raise ValueError('第一版仅支持 market 股票池')
     target_markets = markets or ['主板']
     stocks = _load_universe(sqlite_path, target_markets, exclude_st)
+    task_repo = InitTaskRepo(sqlite_path) if task_id else None
+    if task_repo and task_id:
+        task_repo.set_total_items(task_id, len(stocks))
+        task_repo.set_processed_items(task_id, 0)
     bars_by_code = _load_daily_bars(duckdb_path, [stock['full_code'] for stock in stocks], trade_date)
     matches: list[tuple[dict[str, str], AlertCandidate, list[dict[str, Any]]]] = []
     for stock in stocks:
+        if task_repo and task_id:
+            if task_repo.is_task_terminated(task_id):
+                break
+            task_repo.set_current_label(task_id, stock['full_code'])
         bars = bars_by_code.get(stock['full_code'], [])
         found = _find_candidate_on_date(stock, bars, trade_date, green_shrink_days)
-        if not found:
-            continue
-        candidate, _, idx = found
-        samples = _build_backtest_samples(
-            '',
-            stock,
-            bars,
-            idx,
-            candidate.cross_zone,
-            green_shrink_days,
-            sqlite_path,
-        )
-        matches.append((stock, candidate, samples))
+        if found:
+            candidate, _, idx = found
+            samples = _build_backtest_samples(
+                '',
+                stock,
+                bars,
+                idx,
+                candidate.cross_zone,
+                green_shrink_days,
+                sqlite_path,
+            )
+            matches.append((stock, candidate, samples))
+        if task_repo and task_id:
+            task_repo.increment_processed_items(task_id)
 
     ensure_sqlite_schema(sqlite_path)
     session_factory = _session_factory(sqlite_path)
@@ -582,6 +594,29 @@ def scan_macd_alerts(
         'report_generation_hint': '可按需调用 POST /api/macd-alerts/reports 生成 HTML/PDF 报告。',
         'results': results,
     }
+
+
+def create_macd_alert_scan_task(
+    *,
+    trade_date: str,
+    universe_scope: str = 'market',
+    markets: list[str] | None = None,
+    exclude_st: bool = True,
+    green_shrink_days: int = 2,
+    sqlite_path: Path | None = None,
+) -> dict[str, Any]:
+    if universe_scope != 'market':
+        raise ValueError('第一版仅支持 market 股票池')
+    if markets != ['主板']:
+        raise ValueError('第一版后台扫描仅支持默认主板股票池')
+    if exclude_st is not True:
+        raise ValueError('第一版后台扫描默认排除 ST')
+    if green_shrink_days != 2:
+        raise ValueError('第一版后台扫描暂只支持连续 2 天绿柱缩短')
+    from app.modules.market_data.initializer import create_task
+
+    day = trade_date.replace('-', '')
+    return create_task(day, day, task_type=MACD_ALERT_SCAN_TASK_TYPE, sqlite_path=sqlite_path)
 
 
 def _load_alert_rows(sqlite_path: Path | None, source_trade_date: str) -> list[Any]:

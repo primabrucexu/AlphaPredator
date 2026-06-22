@@ -191,7 +191,7 @@ def list_init_tasks(limit: int = Query(20, ge=1, le=100)) -> list[TaskResponse]:
 
 @router.get('/tasks/latest', response_model=TaskResponse | None)
 def get_latest_init_task_by_type(
-    task_type: str = Query(..., pattern='^(MARKET_DATA|MARKET_DATA_5M|JYGS_REVIEW|STOCK_LIST_SYNC)$'),
+    task_type: str = Query(..., pattern='^(MARKET_DATA|MARKET_DATA_5M|JYGS_REVIEW|STOCK_LIST_SYNC|MACD_ALERT_SCAN)$'),
 ) -> TaskResponse | None:
     """Return the newest task for a specific initialization task type."""
     task = get_latest_task_by_type(task_type)
@@ -221,6 +221,9 @@ def get_task_items(task_id: str) -> TaskItemsResponse:
     elif task_type == 'JYGS_REVIEW':
         label_type = 'date'
         label_name = '交易日期'
+    elif task_type == 'MACD_ALERT_SCAN':
+        label_type = 'stock'
+        label_name = '股票代码'
     else:  # STOCK_LIST_SYNC
         label_type = 'sync'
         label_name = '同步项'

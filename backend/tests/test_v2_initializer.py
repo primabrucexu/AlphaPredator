@@ -178,6 +178,18 @@ def test_create_task_sets_total_items_for_jygs_review(tmp_path: Path) -> None:
 
     assert task['task_type'] == 'JYGS_REVIEW'
     assert task['total_items'] == 3
+
+
+def test_create_task_accepts_macd_alert_scan_without_market_credentials(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / 'test.db'
+    ensure_sqlite_schema(sqlite_path)
+
+    task = create_task('20260110', '20260110', task_type='MACD_ALERT_SCAN', sqlite_path=sqlite_path)
+
+    assert task['task_type'] == 'MACD_ALERT_SCAN'
+    assert task['start_date'] == '20260110'
+    assert task['end_date'] == '20260110'
+    assert task['total_items'] == 0
     assert task['processed_items'] == 0
 
 

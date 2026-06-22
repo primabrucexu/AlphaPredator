@@ -24,13 +24,15 @@
 - [x] 实现 MCP tools：日报、列表、样本、扫描、跟踪
 - [x] 实现前端“MACD 预警”页面和侧边栏入口
 - [x] 按 SQLite ORM 新规则迁移 MACD 预警及相关后端 SQLite 访问层
+- [x] 将 F06 扫描升级为初始化任务体系后台任务类型 `MACD_ALERT_SCAN`
+- [x] 前端 MACD 预警页支持扫描任务进度轮询、当前股票展示和终止任务
 - [x] 后端目标测试通过
 - [x] 前端 TypeScript 编译通过
 - [ ] 前端 Vite 完整构建和 Playwright 冒烟验证
 
 ### 下一步
 
-前端 `tsc -b` 已通过；`npm.cmd run build` 在 Vite/esbuild 启动子进程时被系统 EPERM 拦截，升级权限又被当前环境额度/审批限制拒绝。下一步可在可执行 Vite 子进程的环境中补跑：
+F06 扫描已接入现有 `task_info` 初始化任务系统，不新增数据库表。前端 `tsc -b` 已通过；`npm.cmd run build` 在 Vite/esbuild 启动子进程时被系统 EPERM 拦截，升级权限又被当前环境额度/审批限制拒绝。下一步可在可执行 Vite 子进程的环境中补跑：
 
 ```powershell
 cd frontend

@@ -2,23 +2,35 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
-def test_scan_macd_alert_api_calls_service(monkeypatch):
+def test_scan_macd_alert_api_creates_background_task(monkeypatch):
     from app.api.routes import macd_alert
 
-    captured = {}
+    created = {}
+    started = []
 
-    def fake_scan(**kwargs):
-        captured.update(kwargs)
+    def fake_create(**kwargs):
+        created.update(kwargs)
         return {
-            'trade_date': '2026-01-10',
-            'total_scanned': 2,
-            'matched_count': 1,
-            'report_generatable': True,
-            'report_generation_hint': 'hint',
-            'results': [{'id': 'alert-1', 'stock_code': '000001'}],
+            'task_id': 'task-1',
+            'task_type': 'MACD_ALERT_SCAN',
+            'start_date': '20260110',
+            'end_date': '20260110',
+            'status': 'PENDING',
+            'total_items': 0,
+            'processed_items': 0,
+            'current_label': '',
+            'error_message': '',
+            'task_start_date': '',
+            'task_end_date': '',
         }
 
-    monkeypatch.setattr(macd_alert, 'scan_macd_alerts', fake_scan)
+    def fake_start(task_id):
+        started.append(task_id)
+        return True
+
+    monkeypatch.setattr(macd_alert, 'create_macd_alert_scan_task', fake_create)
+    monkeypatch.setattr(macd_alert, 'start_task', fake_start)
+    monkeypatch.setattr(macd_alert, 'get_task', lambda task_id: fake_create())
     app = FastAPI()
     app.include_router(macd_alert.router)
     client = TestClient(app)
@@ -33,10 +45,12 @@ def test_scan_macd_alert_api_calls_service(monkeypatch):
         },
     )
 
-    assert response.status_code == 200
-    assert response.json()['matched_count'] == 1
-    assert captured['trade_date'] == '2026-01-10'
-    assert captured['markets'] == ['主板']
+    assert response.status_code == 202
+    assert response.json()['task_id'] == 'task-1'
+    assert response.json()['task_type'] == 'MACD_ALERT_SCAN'
+    assert created['trade_date'] == '2026-01-10'
+    assert created['markets'] == ['主板']
+    assert started == ['task-1']
 
 
 def test_track_macd_alert_api_calls_service(monkeypatch):

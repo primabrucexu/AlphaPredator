@@ -486,7 +486,7 @@ T+1 趋势状态：t1_cross_confirmed / t1_trend_kept / t1_trend_weakened / t1_d
 - 交易日选择器：默认最新有日线数据的交易日。
 - 股票池过滤：默认主板非 ST；后续可扩展为全部 A 股、指定市场、是否排除 ST。
 - 形态过滤：第一版支持“水下金叉临界”和“水上金叉临界”。
-- 扫描按钮：按选择条件生成或刷新预警结果。
+- 扫描按钮：提交后台扫描任务，页面轮询展示进度、当前处理股票、任务状态和终止按钮。
 - 结果表：展示股票、形态、临界价、距离、MACD 值、绿柱缩短天数和文案摘要。
 - 操作：跳转个股详情。
 
@@ -521,17 +521,30 @@ POST /api/macd-alerts/scan
 }
 ```
 
+当前实现已升级为后台任务模式。接口不再同步等待扫描完成，而是创建并启动初始化任务体系中的 `MACD_ALERT_SCAN` 任务。
+
 响应：
 
 ```json
 {
-  "trade_date": "2026-06-05",
-  "total_scanned": 5200,
-  "matched_count": 18,
-  "report_generatable": true,
-  "report_generation_hint": "可按需调用 POST /api/macd-alerts/reports 生成 HTML/PDF 报告。",
-  "results": []
+  "task_id": "uuid",
+  "task_type": "MACD_ALERT_SCAN",
+  "start_date": "20260605",
+  "end_date": "20260605",
+  "status": "RUNNING",
+  "total_items": 5200,
+  "processed_items": 120,
+  "current_label": "600545.SH",
+  "progress_percent": 2.3
 }
+```
+
+进度查询复用现有初始化任务接口：
+
+```text
+GET /api/data-init/tasks/{task_id}
+GET /api/data-init/tasks/{task_id}/items
+POST /api/data-init/tasks/{task_id}/terminate
 ```
 
 ### 跟踪上一交易日预警
@@ -1108,7 +1121,8 @@ list_macd_alert_backtest_samples(alert_result_id, limit, offset)
 
 - 已完成需求口径整理、数据库设计草案和 human DBML 更新核对。
 - DBML 已审批并更新到 `docs/human/data-model/AlphaPredator.dbml`。
-- 尚未编码。
+- 已完成后端核心、SQLite schema、FastAPI、MCP 和前端页面实现。
+- 已将扫描升级为 `MACD_ALERT_SCAN` 后台任务，复用现有 `task_info` 进度体系，不新增数据库表。
 
 ## 已知问题 / 待人工决策
 

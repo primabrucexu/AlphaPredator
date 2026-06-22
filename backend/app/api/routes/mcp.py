@@ -5,12 +5,13 @@ from mcp.types import ToolAnnotations
 
 from app.modules.macd_alert.service import (
     DISCLAIMER,
+    create_macd_alert_scan_task,
     get_macd_daily_brief,
     list_macd_alert_backtest_samples as list_macd_alert_backtest_samples_service,
     list_macd_alert_results as list_macd_alert_results_service,
-    scan_macd_alerts as scan_macd_alerts_service,
     track_macd_alerts as track_macd_alerts_service,
 )
+from app.modules.market_data.initializer import get_task, start_task
 
 
 mcp = FastMCP(
@@ -72,9 +73,16 @@ def list_macd_alert_backtest_samples(alert_result_id: str, limit: int = 20, offs
 
 @mcp.tool()
 def scan_macd_alerts(trade_date: str, green_shrink_days: int = 2) -> dict:
-    """Scan and upsert MACD alert results for a trade date."""
-    result = scan_macd_alerts_service(trade_date=trade_date, green_shrink_days=green_shrink_days)
-    return {'disclaimer': DISCLAIMER, **result}
+    """Create a background MACD alert scan task for a trade date."""
+    task = create_macd_alert_scan_task(trade_date=trade_date, green_shrink_days=green_shrink_days)
+    started = start_task(task['task_id'])
+    current = get_task(task['task_id']) or task
+    return {
+        'disclaimer': DISCLAIMER,
+        'task': current,
+        'started': started,
+        'progress_hint': 'Use get_macd_alert_daily_brief or list_macd_alert_results after the task reaches SUCCESS.',
+    }
 
 
 @mcp.tool()

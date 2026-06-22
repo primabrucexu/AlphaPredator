@@ -3,25 +3,26 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, status
 
 from app.modules.macd_alert.service import (
+    create_macd_alert_scan_task,
     list_macd_alert_backtest_samples,
     list_macd_alert_results,
-    scan_macd_alerts,
     track_macd_alerts,
 )
+from app.modules.market_data.initializer import get_task, start_task
 from app.schemas.macd_alert import (
     MacdAlertScanRequest,
-    MacdAlertScanResponse,
     MacdAlertTrackRequest,
     MacdAlertTrackResponse,
 )
+from app.schemas.data_init import TaskResponse
 
 router = APIRouter()
 
 
-@router.post('/scan', response_model=MacdAlertScanResponse)
-def scan_macd_alert(body: MacdAlertScanRequest) -> MacdAlertScanResponse:
+@router.post('/scan', response_model=TaskResponse, status_code=status.HTTP_202_ACCEPTED)
+def scan_macd_alert(body: MacdAlertScanRequest) -> TaskResponse:
     try:
-        result = scan_macd_alerts(
+        task = create_macd_alert_scan_task(
             trade_date=body.trade_date,
             universe_scope=body.universe_scope,
             markets=body.markets,
@@ -30,7 +31,11 @@ def scan_macd_alert(body: MacdAlertScanRequest) -> MacdAlertScanResponse:
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-    return MacdAlertScanResponse(**result)
+    started = start_task(task['task_id'])
+    if not started:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='已有 MACD 预警扫描任务正在运行')
+    task = get_task(task['task_id']) or task
+    return TaskResponse.from_db_row(task)
 
 
 @router.post('/track', response_model=MacdAlertTrackResponse)

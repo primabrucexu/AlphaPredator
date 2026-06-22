@@ -6,6 +6,7 @@ import pytest
 
 from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_schema
 from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
+from app.modules.market_data.initializer import create_task, get_task
 from app.modules.macd_alert.service import (
     calculate_cross_trigger_price,
     calculate_trend_keep_price,
@@ -163,3 +164,26 @@ def test_track_macd_alerts_updates_trend_status(tmp_path: Path) -> None:
 
     assert row['track_status'] in {'cross_confirmed', 'trend_kept'}
     assert row['tracked_close_price'] == pytest.approx(8.5)
+
+
+def test_scan_macd_alerts_updates_task_progress(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / 'macd-progress.db'
+    duckdb_path = tmp_path / 'macd-progress.duckdb'
+    _seed_stock_list(sqlite_path)
+    _seed_daily_bars(duckdb_path, [10, 9.6, 9.2, 8.8, 8.5, 8.35, 8.3, 8.28, 8.27, 8.27])
+    _seed_daily_bars(duckdb_path, [10, 10.1, 10.2, 10.3, 10.4, 10.5], code='000002.SZ')
+    task = create_task('20260110', '20260110', task_type='MACD_ALERT_SCAN', sqlite_path=sqlite_path)
+
+    scan_macd_alerts(
+        trade_date='2026-01-10',
+        sqlite_path=sqlite_path,
+        duckdb_path=duckdb_path,
+        green_shrink_days=2,
+        task_id=task['task_id'],
+    )
+
+    updated = get_task(task['task_id'], sqlite_path=sqlite_path)
+    assert updated is not None
+    assert updated['total_items'] == 2
+    assert updated['processed_items'] == 2
+    assert updated['current_label'] == '000002.SZ'

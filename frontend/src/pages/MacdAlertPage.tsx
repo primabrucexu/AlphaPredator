@@ -1,17 +1,21 @@
 import {AlertOutlined, ReloadOutlined, SearchOutlined} from '@ant-design/icons';
-import {Alert, Button, Card, Col, Empty, Form, Input, InputNumber, Row, Space, Statistic, Table, Tabs, Tag, Typography, message} from 'antd';
+import {Alert, Button, Card, Col, Empty, Form, Input, InputNumber, Progress, Row, Space, Statistic, Table, Tabs, Tag, Typography, message} from 'antd';
 import type {ColumnsType} from 'antd/es/table';
-import {useMemo, useState} from 'react';
+import {useEffect, useMemo, useState} from 'react';
 import {Link} from 'react-router-dom';
 import {
+  getInitTask,
+  getTaskItems,
   listMacdAlertBacktestSamples,
   listMacdAlertResults,
   scanMacdAlerts,
+  terminateInitTask,
   trackMacdAlerts,
   type MacdAlertBacktestSampleRow,
   type MacdAlertResultRow,
-  type MacdAlertScanResponse,
   type MacdAlertTrackResponse,
+  type TaskItemsResponse,
+  type TaskResponse,
 } from '../lib/api';
 
 interface ScanFormValues {
@@ -58,7 +62,9 @@ export function MacdAlertPage() {
   const [trackForm] = Form.useForm<TrackFormValues>();
   const [loading, setLoading] = useState(false);
   const [tracking, setTracking] = useState(false);
-  const [scanSummary, setScanSummary] = useState<MacdAlertScanResponse | null>(null);
+  const [scanTask, setScanTask] = useState<TaskResponse | null>(null);
+  const [scanTaskItems, setScanTaskItems] = useState<TaskItemsResponse | null>(null);
+  const [scanTradeDate, setScanTradeDate] = useState<string>('');
   const [trackSummary, setTrackSummary] = useState<MacdAlertTrackResponse | null>(null);
   const [rows, setRows] = useState<MacdAlertResultRow[]>([]);
   const [samples, setSamples] = useState<MacdAlertBacktestSampleRow[]>([]);
@@ -69,25 +75,73 @@ export function MacdAlertPage() {
     setRows(resultRows);
   }
 
+  useEffect(() => {
+    if (!scanTask || !['PENDING', 'RUNNING'].includes(scanTask.status)) return undefined;
+
+    let cancelled = false;
+    async function refreshTask() {
+      if (!scanTask) return;
+      try {
+        const [latest, items] = await Promise.all([
+          getInitTask(scanTask.task_id),
+          getTaskItems(scanTask.task_id),
+        ]);
+        if (cancelled) return;
+        setScanTask(latest);
+        setScanTaskItems(items);
+        if (latest.status === 'SUCCESS') {
+          if (scanTradeDate) await refreshResults(scanTradeDate);
+          if (!cancelled) message.success('MACD 扫描任务完成');
+        } else if (latest.status === 'FAILED') {
+          message.error(latest.error_message || 'MACD 扫描任务失败');
+        }
+      } catch (error) {
+        if (!cancelled) {
+          message.error(error instanceof Error ? error.message : '扫描任务状态查询失败');
+        }
+      }
+    }
+
+    refreshTask();
+    const timer = window.setInterval(refreshTask, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [scanTask?.task_id, scanTask?.status, scanTradeDate]);
+
   async function handleScan(values: ScanFormValues) {
     setLoading(true);
     setSamples([]);
     setSelectedAlert(null);
     try {
-      const result = await scanMacdAlerts({
+      const task = await scanMacdAlerts({
         trade_date: values.trade_date,
         universe_scope: 'market',
         markets: ['主板'],
         exclude_st: true,
         green_shrink_days: values.green_shrink_days,
       });
-      setScanSummary(result);
-      setRows(result.results);
-      message.success(`扫描完成，命中 ${result.matched_count} 只`);
+      setScanTask(task);
+      setScanTaskItems(null);
+      setScanTradeDate(values.trade_date);
+      setRows([]);
+      message.success('MACD 扫描任务已提交');
     } catch (error) {
       message.error(error instanceof Error ? error.message : 'MACD 预警扫描失败');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleTerminateScanTask() {
+    if (!scanTask) return;
+    try {
+      const task = await terminateInitTask(scanTask.task_id);
+      setScanTask(task);
+      message.success('已终止扫描任务');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '终止扫描任务失败');
     }
   }
 
@@ -191,6 +245,8 @@ export function MacdAlertPage() {
     {title: '持有天数', dataIndex: 'holding_days', width: 95, render: (value: number | null) => value ?? '-'},
     {title: '状态', dataIndex: 'status', width: 150},
   ];
+  const scanProgress = scanTaskItems?.progress_percent ?? scanTask?.progress_percent ?? 0;
+  const scanRunning = !!scanTask && ['PENDING', 'RUNNING'].includes(scanTask.status);
 
   return (
     <Space direction="vertical" size={16} style={{display: 'flex'}}>
@@ -243,15 +299,44 @@ export function MacdAlertPage() {
         </Col>
       </Row>
 
+      {scanTask ? (
+        <Card
+          title={`扫描任务 ${scanTask.task_id}`}
+          extra={
+            scanRunning ? (
+              <Button danger size="small" onClick={handleTerminateScanTask}>
+                终止
+              </Button>
+            ) : null
+          }
+        >
+          <Space direction="vertical" size={12} style={{display: 'flex'}}>
+            <Space wrap>
+              <Tag color={scanTask.status === 'SUCCESS' ? 'green' : scanTask.status === 'FAILED' ? 'red' : 'blue'}>
+                {scanTask.status}
+              </Tag>
+              <Typography.Text type="secondary">
+                当前处理：{scanTaskItems?.current_label || scanTask.current_label || '-'}
+              </Typography.Text>
+              <Typography.Text type="secondary">
+                {scanTaskItems?.processed_items ?? scanTask.processed_items} / {scanTaskItems?.total_items ?? scanTask.total_items}
+              </Typography.Text>
+            </Space>
+            <Progress percent={scanProgress} status={scanTask.status === 'FAILED' ? 'exception' : undefined} />
+            {scanTask.error_message ? <Alert type="error" showIcon message={scanTask.error_message} /> : null}
+          </Space>
+        </Card>
+      ) : null}
+
       <Row gutter={[16, 16]}>
         <Col xs={12} md={6}>
           <Card>
-            <Statistic title="扫描股票" value={scanSummary?.total_scanned ?? 0} />
+            <Statistic title="扫描股票" value={scanTaskItems?.total_items ?? scanTask?.total_items ?? 0} />
           </Card>
         </Col>
         <Col xs={12} md={6}>
           <Card>
-            <Statistic title="新增预警" value={scanSummary?.matched_count ?? rows.length} />
+            <Statistic title="新增预警" value={rows.length} />
           </Card>
         </Col>
         <Col xs={12} md={6}>
