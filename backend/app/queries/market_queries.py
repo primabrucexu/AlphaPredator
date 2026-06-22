@@ -3,6 +3,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from sqlmodel import Session, func, select
+
+from app.models.sqlite_models import DailyHotInfo, DailyHotPic, StockList
+
 # ---------------------------------------------------------------------------
 # Board-count parser (shared between query helpers and service layer)
 # ---------------------------------------------------------------------------
@@ -44,86 +48,74 @@ def parse_board_count(streak_text: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def get_hot_info_trade_dates(connection: Any, limit: int) -> list[str]:
+def _model_to_dict(row: Any) -> dict[str, Any]:
+    if hasattr(row, 'model_dump'):
+        return row.model_dump()
+    return dict(row)
+
+
+def get_hot_info_trade_dates(session: Session, limit: int) -> list[str]:
     """Return up to *limit* most-recent trade dates that have daily_hot_info records."""
-    rows = connection.execute(
-        '''
-        SELECT DISTINCT trade_date
-        FROM daily_hot_info
-        ORDER BY trade_date DESC LIMIT ?
-        ''',
-        [limit],
-    ).fetchall()
-    return [str(row['trade_date']) for row in reversed(rows)]
+    rows = session.exec(
+        select(DailyHotInfo.trade_date)
+        .distinct()
+        .order_by(DailyHotInfo.trade_date.desc())  # type: ignore[attr-defined]
+        .limit(limit)
+    ).all()
+    return [str(trade_date) for trade_date in reversed(rows)]
 
 
-def get_hot_info_rows_by_date(connection: Any, trade_date: str) -> list[Any]:
+def get_hot_info_rows_by_date(session: Session, trade_date: str) -> list[dict[str, Any]]:
     """Return all daily_hot_info rows for *trade_date*."""
-    return connection.execute(
-        '''
-        SELECT trade_date, stock_code, name, streak_text, hot_theme, limit_up_time
-        FROM daily_hot_info
-        WHERE trade_date = ?
-        ORDER BY limit_up_time ASC, stock_code ASC
-        ''',
-        [trade_date],
-    ).fetchall()
+    rows = session.exec(
+        select(DailyHotInfo)
+        .where(DailyHotInfo.trade_date == trade_date)
+        .order_by(DailyHotInfo.limit_up_time, DailyHotInfo.stock_code)
+    ).all()
+    return [_model_to_dict(row) for row in rows]
 
 
-def get_hot_info_table_rows_by_date(connection: Any, trade_date: str) -> list[Any]:
+def get_hot_info_table_rows_by_date(session: Session, trade_date: str) -> list[dict[str, Any]]:
     """Return table-friendly daily_hot_info rows for *trade_date*."""
-    return connection.execute(
-        '''
-        SELECT trade_date, stock_code, name, limit_up_time, streak_text, hot_theme, reason, short_reason
-        FROM daily_hot_info
-        WHERE trade_date = ?
-        ORDER BY limit_up_time ASC, stock_code ASC
-        ''',
-        [trade_date],
-    ).fetchall()
+    rows = session.exec(
+        select(DailyHotInfo)
+        .where(DailyHotInfo.trade_date == trade_date)
+        .order_by(DailyHotInfo.limit_up_time, DailyHotInfo.stock_code)
+    ).all()
+    return [_model_to_dict(row) for row in rows]
 
 
-def get_latest_hot_info_trade_date(connection: Any) -> str:
+def get_latest_hot_info_trade_date(session: Session) -> str:
     """Return the latest trade_date with any daily_hot_info records."""
-    row = connection.execute(
-        'SELECT MAX(trade_date) AS trade_date FROM daily_hot_info'
-    ).fetchone()
-    return str(row['trade_date'] or '') if row else ''
+    row = session.exec(select(func.max(DailyHotInfo.trade_date))).one()
+    return str(row or '')
 
 
-def get_hot_pic_rows_by_date(connection: Any, trade_date: str) -> list[Any]:
+def get_hot_pic_rows_by_date(session: Session, trade_date: str) -> list[dict[str, Any]]:
     """Return daily_hot_pic rows for *trade_date* ordered by id."""
-    return connection.execute(
-        '''
-        SELECT id, trade_date, summary_image_url, source
-        FROM daily_hot_pic
-        WHERE trade_date = ?
-        ORDER BY id ASC
-        ''',
-        [trade_date],
-    ).fetchall()
+    rows = session.exec(
+        select(DailyHotPic)
+        .where(DailyHotPic.trade_date == trade_date)
+        .order_by(DailyHotPic.id)
+    ).all()
+    return [_model_to_dict(row) for row in rows]
 
 
-def get_limit_up_history_by_stock(connection: Any, stock_code: str, limit: int = 20) -> list[Any]:
+def get_limit_up_history_by_stock(session: Session, stock_code: str, limit: int = 20) -> list[dict[str, Any]]:
     """Return recent limit-up records for a specific stock (desc by trade_date)."""
-    return connection.execute(
-        '''
-        SELECT trade_date, stock_code, name, limit_up_time, streak_text, hot_theme, reason, short_reason
-        FROM daily_hot_info
-        WHERE stock_code = ?
-        ORDER BY trade_date DESC
-        LIMIT ?
-        ''',
-        [stock_code, limit],
-    ).fetchall()
+    rows = session.exec(
+        select(DailyHotInfo)
+        .where(DailyHotInfo.stock_code == stock_code)
+        .order_by(DailyHotInfo.trade_date.desc())  # type: ignore[attr-defined]
+        .limit(limit)
+    ).all()
+    return [_model_to_dict(row) for row in rows]
 
 
-def get_latest_hot_pic_trade_date(connection: Any) -> str:
+def get_latest_hot_pic_trade_date(session: Session) -> str:
     """Return the latest trade_date that has daily_hot_pic records."""
-    row = connection.execute(
-        'SELECT MAX(trade_date) AS trade_date FROM daily_hot_pic'
-    ).fetchone()
-    return str(row['trade_date'] or '') if row else ''
+    row = session.exec(select(func.max(DailyHotPic.trade_date))).one()
+    return str(row or '')
 
 
 # ---------------------------------------------------------------------------
@@ -131,10 +123,10 @@ def get_latest_hot_pic_trade_date(connection: Any) -> str:
 # ---------------------------------------------------------------------------
 
 
-def get_stock_list_active_board_count_rows(connection: Any) -> list[Any]:
-    return connection.execute(
-        '''SELECT market, COUNT(*) AS cnt
-           FROM stock_list
-           WHERE market != ''
-           GROUP BY market'''
-    ).fetchall()
+def get_stock_list_active_board_count_rows(session: Session) -> list[dict[str, Any]]:
+    rows = session.exec(
+        select(StockList.market, func.count())
+        .where(StockList.market != '')
+        .group_by(StockList.market)
+    ).all()
+    return [{'market': market, 'cnt': count} for market, count in rows]

@@ -4,7 +4,10 @@ import logging
 from pathlib import Path
 from typing import Any, cast
 
-from app.db.sqlite import connect_sqlite
+from sqlmodel import func, select
+
+from app.db.session import get_sqlite_session_factory
+from app.models.sqlite_models import StockList
 from app.queries.market_queries import get_stock_list_active_board_count_rows
 
 
@@ -12,8 +15,8 @@ class StockListRepo:
     def __init__(self, sqlite_path: Path | None = None) -> None:
         self._sqlite_path = sqlite_path
 
-    def _connect(self):
-        return connect_sqlite(self._sqlite_path)
+    def _session_factory(self):
+        return get_sqlite_session_factory(self._sqlite_path)
 
     @staticmethod
     def _row_to_dict(row: Any) -> dict[str, Any]:
@@ -33,102 +36,116 @@ class StockListRepo:
                 'replace_all called with empty rows – keeping existing stock_list data'
             )
             return
-        conn = self._connect()
-        try:
-            conn.executemany(
-                '''INSERT OR REPLACE INTO stock_list
-                   (full_code, code, name, is_st, cnspell, market)
-                   VALUES (?, ?, ?, ?, ?, ?)''',
-                rows,
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        session_factory = self._session_factory()
+        with session_factory() as session:
+            for full_code, code, name, is_st, cnspell, market in rows:
+                session.merge(
+                    StockList(
+                        full_code=full_code,
+                        code=code,
+                        name=name,
+                        is_st=bool(is_st),
+                        cnspell=cnspell,
+                        market=market,
+                    )
+                )
+            session.commit()
+
+    @staticmethod
+    def _model_to_dict(row: StockList) -> dict[str, Any]:
+        return {
+            'full_code': row.full_code,
+            'code': row.code,
+            'name': row.name,
+            'is_st': row.is_st,
+            'cnspell': row.cnspell,
+            'market': row.market,
+        }
+
+    @staticmethod
+    def _models_to_dicts(rows: list[StockList]) -> list[dict[str, Any]]:
+        return [StockListRepo._model_to_dict(row) for row in rows]
 
     def get_by_full_code_upper(self, full_code_upper: str) -> dict[str, Any] | None:
-        conn = self._connect()
-        try:
-            row = conn.execute(
-                'SELECT full_code, code, name, is_st, cnspell, market FROM stock_list WHERE UPPER(full_code) = ? LIMIT 1',
-                [full_code_upper],
-            ).fetchone()
-            return self._row_to_dict(row) if row else None
-        finally:
-            conn.close()
+        session_factory = self._session_factory()
+        with session_factory() as session:
+            row = session.exec(
+                select(StockList).where(func.upper(StockList.full_code) == full_code_upper).limit(1)
+            ).first()
+            return self._model_to_dict(row) if row else None
 
     def list_by_code(self, code: str) -> list[dict[str, Any]]:
-        conn = self._connect()
-        try:
-            rows = conn.execute(
-                'SELECT full_code, code, name, is_st, cnspell, market FROM stock_list WHERE code = ?',
-                [code],
-            ).fetchall()
-            return [self._row_to_dict(r) for r in rows]
-        finally:
-            conn.close()
+        session_factory = self._session_factory()
+        with session_factory() as session:
+            rows = session.exec(
+                select(StockList).where(StockList.code == code)
+            ).all()
+            return self._models_to_dicts(list(rows))
 
     def list_by_cnspell_exact(self, cnspell_upper: str) -> list[dict[str, Any]]:
-        conn = self._connect()
-        try:
-            rows = conn.execute(
-                'SELECT full_code, code, name, is_st, cnspell, market FROM stock_list WHERE cnspell = ?',
-                [cnspell_upper],
-            ).fetchall()
-            return [self._row_to_dict(r) for r in rows]
-        finally:
-            conn.close()
+        session_factory = self._session_factory()
+        with session_factory() as session:
+            rows = session.exec(
+                select(StockList).where(StockList.cnspell == cnspell_upper)
+            ).all()
+            return self._models_to_dicts(list(rows))
 
     def list_by_cnspell_prefix(self, cnspell_prefix_upper: str, limit: int = 20) -> list[dict[str, Any]]:
-        conn = self._connect()
-        try:
-            rows = conn.execute(
-                'SELECT full_code, code, name, is_st, cnspell, market FROM stock_list WHERE cnspell LIKE ? LIMIT ?',
-                [cnspell_prefix_upper + '%', limit],
-            ).fetchall()
-            return [self._row_to_dict(r) for r in rows]
-        finally:
-            conn.close()
+        session_factory = self._session_factory()
+        with session_factory() as session:
+            rows = session.exec(
+                select(StockList)
+                .where(StockList.cnspell.like(cnspell_prefix_upper + '%'))  # type: ignore[attr-defined]
+                .limit(limit)
+            ).all()
+            return self._models_to_dicts(list(rows))
 
     def list_for_search(self, query_upper: str, limit: int) -> list[dict[str, Any]]:
-        conn = self._connect()
-        try:
+        session_factory = self._session_factory()
+        with session_factory() as session:
             if query_upper.isdigit():
-                rows = conn.execute(
-                    'SELECT full_code, code, name, is_st, cnspell, market FROM stock_list WHERE code LIKE ? LIMIT ?',
-                    [query_upper + '%', limit],
-                ).fetchall()
+                statement = (
+                    select(StockList)
+                    .where(StockList.code.like(query_upper + '%'))  # type: ignore[attr-defined]
+                    .limit(limit)
+                )
             else:
-                rows = conn.execute(
-                    'SELECT full_code, code, name, is_st, cnspell, market FROM stock_list WHERE cnspell LIKE ? LIMIT ?',
-                    [query_upper + '%', limit],
-                ).fetchall()
-            return [self._row_to_dict(r) for r in rows]
-        finally:
-            conn.close()
+                statement = (
+                    select(StockList)
+                    .where(StockList.cnspell.like(query_upper + '%'))  # type: ignore[attr-defined]
+                    .limit(limit)
+                )
+            rows = session.exec(statement).all()
+            return self._models_to_dicts(list(rows))
 
     def list_code_name_pairs(self) -> list[dict[str, Any]]:
-        conn = self._connect()
-        try:
-            rows = conn.execute('SELECT code, name FROM stock_list').fetchall()
-            return [self._row_to_dict(r) for r in rows]
-        finally:
-            conn.close()
+        session_factory = self._session_factory()
+        with session_factory() as session:
+            rows = session.exec(select(StockList)).all()
+            return [
+                {'code': row.code, 'name': row.name}
+                for row in rows
+            ]
+
+    def list_all_ordered(self) -> list[dict[str, Any]]:
+        session_factory = self._session_factory()
+        with session_factory() as session:
+            rows = session.exec(
+                select(StockList).order_by(StockList.full_code)
+            ).all()
+            return self._models_to_dicts(list(rows))
 
     def count_rows(self) -> int:
-        conn = self._connect()
-        try:
-            row = conn.execute('SELECT COUNT(*) AS cnt FROM stock_list').fetchone()
-            return int(row['cnt'] if row else 0)
-        finally:
-            conn.close()
+        session_factory = self._session_factory()
+        with session_factory() as session:
+            count = session.exec(select(func.count()).select_from(StockList)).one()
+            return int(count)
 
     def has_rows(self) -> bool:
         return self.count_rows() > 0
 
     def get_board_counts(self) -> dict[str, int]:
-        conn = self._connect()
-        try:
-            rows = get_stock_list_active_board_count_rows(conn)
+        session_factory = self._session_factory()
+        with session_factory() as session:
+            rows = get_stock_list_active_board_count_rows(session)
             return {str(row['market']): int(row['cnt']) for row in rows}
-        finally:
-            conn.close()

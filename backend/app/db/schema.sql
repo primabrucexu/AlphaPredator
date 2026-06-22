@@ -262,3 +262,141 @@ CREATE INDEX IF NOT EXISTS idx_stock_linkage_result_trigger
     ON stock_linkage_backtest_result (job_id, trigger_type, trigger_threshold);
 CREATE INDEX IF NOT EXISTS idx_stock_linkage_result_observation
     ON stock_linkage_backtest_result (job_id, observation_type, target_threshold);
+
+-- ── MACD 日线形态预警 ───────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS macd_alert_result
+(
+    id                               TEXT PRIMARY KEY,
+    trade_date                       TEXT    NOT NULL,
+    stock_code                       TEXT    NOT NULL,
+    stock_name                       TEXT    NOT NULL,
+    pattern_key                      TEXT    NOT NULL,
+    pattern_name                     TEXT    NOT NULL,
+    cross_zone                       TEXT    NOT NULL,
+    close_price                      REAL    NOT NULL,
+    next_cross_trigger_price         REAL    NOT NULL,
+    cross_trigger_distance_pct       REAL    NOT NULL,
+    next_limit_up_price              REAL,
+    cross_trigger_reachable          INTEGER NOT NULL DEFAULT 1,
+    cross_trigger_unreachable_reason TEXT,
+    next_trend_keep_price            REAL    NOT NULL,
+    trend_keep_distance_pct          REAL    NOT NULL,
+    macd_dif                         REAL    NOT NULL,
+    macd_dea                         REAL    NOT NULL,
+    macd_hist                        REAL    NOT NULL,
+    green_shrink_days                INTEGER NOT NULL DEFAULT 2,
+    last_limit_up_date               TEXT,
+    last_limit_up_theme              TEXT,
+    last_limit_up_days_ago           INTEGER,
+    theme_heat_window_days           INTEGER NOT NULL DEFAULT 5,
+    theme_recent_limit_up_count      INTEGER NOT NULL DEFAULT 0,
+    theme_recent_rank                INTEGER,
+    theme_heat_level                 TEXT    NOT NULL DEFAULT 'none',
+    next_track_date                  TEXT,
+    track_status                     TEXT    NOT NULL DEFAULT 'pending',
+    tracked_close_price              REAL,
+    tracked_macd_dif                 REAL,
+    tracked_macd_dea                 REAL,
+    tracked_macd_hist                REAL,
+    tracked_at                       TEXT,
+    backtest_lookback_days           INTEGER NOT NULL DEFAULT 720,
+    backtest_sample_count            INTEGER NOT NULL DEFAULT 0,
+    backtest_cross_success_count     INTEGER NOT NULL DEFAULT 0,
+    backtest_cross_success_rate      REAL,
+    backtest_t1_cross_confirmed_count INTEGER NOT NULL DEFAULT 0,
+    backtest_t1_trend_kept_count     INTEGER NOT NULL DEFAULT 0,
+    backtest_t1_trend_weakened_count INTEGER NOT NULL DEFAULT 0,
+    backtest_t1_trend_keep_rate      REAL,
+    backtest_completed_trade_count   INTEGER NOT NULL DEFAULT 0,
+    backtest_profit_trade_count      INTEGER NOT NULL DEFAULT 0,
+    backtest_win_rate                REAL,
+    backtest_avg_return_pct          REAL,
+    backtest_max_return_pct          REAL,
+    backtest_max_loss_pct            REAL,
+    backtest_avg_holding_days        REAL,
+    backtest_confidence_level        TEXT    NOT NULL DEFAULT 'insufficient',
+    score                            REAL    NOT NULL DEFAULT 0,
+    summary                          TEXT    NOT NULL,
+    status                           TEXT    NOT NULL DEFAULT 'active',
+    created_at                       TEXT    NOT NULL,
+    updated_at                       TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_macd_alert_result_date_pattern_zone
+    ON macd_alert_result (trade_date, pattern_key, cross_zone);
+CREATE INDEX IF NOT EXISTS idx_macd_alert_result_stock_date
+    ON macd_alert_result (stock_code, trade_date);
+CREATE INDEX IF NOT EXISTS idx_macd_alert_result_date_score
+    ON macd_alert_result (trade_date, score);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_macd_alert_result_unique
+    ON macd_alert_result (trade_date, stock_code, pattern_key, cross_zone);
+
+CREATE TABLE IF NOT EXISTS macd_alert_backtest_sample
+(
+    id                            TEXT PRIMARY KEY,
+    alert_result_id               TEXT    NOT NULL,
+    stock_code                    TEXT    NOT NULL,
+    stock_name                    TEXT    NOT NULL,
+    alert_date                    TEXT    NOT NULL,
+    alert_close_price             REAL    NOT NULL,
+    next_cross_trigger_price      REAL    NOT NULL,
+    cross_trigger_distance_pct    REAL    NOT NULL,
+    next_trend_keep_price         REAL    NOT NULL,
+    trend_keep_distance_pct       REAL    NOT NULL,
+    alert_macd_dif                REAL    NOT NULL,
+    alert_macd_dea                REAL    NOT NULL,
+    alert_macd_hist               REAL    NOT NULL,
+    alert_cross_zone              TEXT    NOT NULL,
+    last_limit_up_date            TEXT,
+    last_limit_up_theme           TEXT,
+    last_limit_up_days_ago        INTEGER,
+    theme_heat_window_days        INTEGER NOT NULL DEFAULT 5,
+    theme_recent_limit_up_count   INTEGER NOT NULL DEFAULT 0,
+    theme_recent_rank             INTEGER,
+    theme_heat_level              TEXT    NOT NULL DEFAULT 'none',
+    buy_date                      TEXT,
+    buy_price                     REAL,
+    t1_close_price                REAL,
+    t1_track_status               TEXT,
+    t1_macd_dif                   REAL,
+    t1_macd_dea                   REAL,
+    t1_macd_hist                  REAL,
+    cross_date                    TEXT,
+    cross_type                    TEXT,
+    sell_date                     TEXT,
+    sell_price                    REAL,
+    sell_reason                   TEXT,
+    return_pct                    REAL,
+    holding_days                  INTEGER,
+    status                        TEXT    NOT NULL,
+    created_at                    TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_macd_alert_sample_result_date
+    ON macd_alert_backtest_sample (alert_result_id, alert_date);
+CREATE INDEX IF NOT EXISTS idx_macd_alert_sample_result_return
+    ON macd_alert_backtest_sample (alert_result_id, return_pct);
+CREATE INDEX IF NOT EXISTS idx_macd_alert_sample_stock_date
+    ON macd_alert_backtest_sample (stock_code, alert_date);
+
+CREATE TABLE IF NOT EXISTS macd_alert_report
+(
+    id                TEXT PRIMARY KEY,
+    report_type       TEXT NOT NULL,
+    trade_date        TEXT,
+    source_trade_date TEXT,
+    alert_result_id   TEXT,
+    html_file_path    TEXT,
+    pdf_file_path     TEXT,
+    csv_file_path     TEXT,
+    formats_json      TEXT NOT NULL,
+    title             TEXT NOT NULL,
+    summary           TEXT,
+    created_at        TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_macd_alert_report_type_date
+    ON macd_alert_report (report_type, trade_date);
+CREATE INDEX IF NOT EXISTS idx_macd_alert_report_alert_result
+    ON macd_alert_report (alert_result_id);

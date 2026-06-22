@@ -33,7 +33,7 @@ import pandas as pd
 
 from app.core.settings import settings
 from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_parent, ensure_duckdb_schema
-from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
+from app.db.sqlite import ensure_sqlite_schema
 from app.modules.market_data.data_source import _get_mairui_licence, _resolve_stock_universe, \
     _mairui_fetch_history_rows, MairuiHttpStatusError, UnlistedStockSkipError, fetch_5m_history_rows, \
     fetch_daily_bars_by_date, sync_stock_list_to_sqlite
@@ -41,6 +41,7 @@ from app.modules.market_data.jygs_review import check_jygs_auth_available, fetch
 from app.modules.market_data.limit_rules import compute_limit_fields
 from app.modules.market_data.mairui_config import load_mairui_config
 from app.repositories.init_task_repo import InitTaskRepo
+from app.repositories.stock_list_repo import StockListRepo
 
 logger = logging.getLogger(__name__)
 
@@ -94,10 +95,6 @@ def _generate_date_list(start_date: str, end_date: str, *, weekdays_only: bool =
     return result
 
 
-def _connect(sqlite_path: Path | None = None):
-    return connect_sqlite(sqlite_path)
-
-
 def _connect_duckdb(duckdb_path: Path | None = None):
     target = duckdb_path or settings.duckdb_path
     ensure_duckdb_parent(target)
@@ -111,6 +108,10 @@ def _ensure_schema(sqlite_path: Path | None = None) -> None:
 
 def _task_repo(sqlite_path: Path | None = None) -> InitTaskRepo:
     return InitTaskRepo(sqlite_path)
+
+
+def _stock_list_repo(sqlite_path: Path | None = None) -> StockListRepo:
+    return StockListRepo(sqlite_path)
 
 
 def _to_decimal(value: Any, default: str = '0') -> Decimal:
@@ -974,16 +975,9 @@ def _process_one_stock(
     """Fetch and write daily bars for a single stock across a date range."""
     stock_name = ''
     try:
-        conn = _connect(sqlite_path)
-        try:
-            row = conn.execute(
-                'SELECT name FROM stock_list WHERE full_code = ?',
-                [stock_code]
-            ).fetchone()
-            if row:
-                stock_name = row['name'] or ''
-        finally:
-            conn.close()
+        row = _stock_list_repo(sqlite_path).get_by_full_code_upper(stock_code)
+        if row:
+            stock_name = str(row.get('name') or '')
     except Exception:
         pass
 
@@ -1016,16 +1010,9 @@ def _fetch_daily_raw(
     # Load stock universe metadata (name only) for limit-field enrichment.
     name_map: dict[str, str] = {}
     try:
-        conn = _connect(sqlite_path)
-        try:
-            univ_rows = conn.execute(
-                'SELECT full_code, name FROM stock_list'
-            ).fetchall()
-            for r in univ_rows:
-                ts = r['full_code']
-                name_map[ts] = r['name'] or ''
-        finally:
-            conn.close()
+        for row in _stock_list_repo(sqlite_path).list_all_ordered():
+            ts = str(row['full_code'])
+            name_map[ts] = str(row['name'] or '')
     except Exception as _exc:  # noqa: BLE001
         logger.warning(
             '_fetch_daily_raw: could not load stock universe for %s, '

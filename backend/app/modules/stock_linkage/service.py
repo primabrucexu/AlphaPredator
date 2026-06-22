@@ -8,8 +8,19 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from sqlmodel import select
+
 from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_schema
-from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
+from app.db.session import get_sqlite_session_factory
+from app.db.sqlite import ensure_sqlite_schema
+from app.models.sqlite_models import (
+    DailyHotInfo,
+    StockLinkageBacktestJob as StockLinkageBacktestJobRow,
+    StockLinkageBacktestResult,
+    StockLinkageBaselineMetric,
+    StockLinkageTriggerEvent,
+    StockList,
+)
 from app.modules.stock_linkage.constants import (
     A_INTRADAY_THRESHOLDS,
     A_SINGLE_BAR_THRESHOLDS,
@@ -35,6 +46,10 @@ from app.modules.stock_linkage.models import (
 _stock_linkage_lock = threading.Lock()
 
 
+def _session_factory(sqlite_path: Path | None = None):
+    return get_sqlite_session_factory(sqlite_path)
+
+
 def _parse_date(value: str) -> date:
     return datetime.strptime(value, '%Y-%m-%d').date()
 
@@ -58,44 +73,54 @@ def _validate_request(request: StockLinkageBacktestRequest) -> None:
 
 def _list_non_st_full_codes(sqlite_path: Path | None) -> list[str]:
     ensure_sqlite_schema(sqlite_path)
-    conn = connect_sqlite(sqlite_path)
-    try:
-        rows = conn.execute(
-            'SELECT full_code FROM stock_list WHERE COALESCE(is_st, 0) = 0 ORDER BY full_code'
-        ).fetchall()
-        return [str(row['full_code']) for row in rows]
-    finally:
-        conn.close()
+    session_factory = _session_factory(sqlite_path)
+    with session_factory() as session:
+        rows = session.exec(
+            select(StockList)
+            .where(StockList.is_st == False)  # noqa: E712
+            .order_by(StockList.full_code)
+        ).all()
+        return [row.full_code for row in rows]
 
 
 def _select_a_codes(request: StockLinkageBacktestRequest, sqlite_path: Path | None) -> list[str]:
     ensure_sqlite_schema(sqlite_path)
-    conn = connect_sqlite(sqlite_path)
-    try:
+    session_factory = _session_factory(sqlite_path)
+    with session_factory() as session:
         if request.a_select_mode == MANUAL_SINGLE:
-            row = conn.execute(
-                'SELECT full_code FROM stock_list WHERE UPPER(full_code) = ? AND COALESCE(is_st, 0) = 0 LIMIT 1',
-                [str(request.manual_a_full_code).upper()],
-            ).fetchone()
-            return [str(row['full_code'])] if row else []
+            row = session.exec(
+                select(StockList)
+                .where(
+                    StockList.full_code == str(request.manual_a_full_code).upper(),
+                    StockList.is_st == False,  # noqa: E712
+                )
+                .limit(1)
+            ).first()
+            return [row.full_code] if row else []
 
-        rows = conn.execute(
-            '''
-            SELECT sl.full_code, COUNT(*) AS limit_count
-            FROM daily_hot_info dhi
-            JOIN stock_list sl ON sl.code = dhi.stock_code
-            WHERE COALESCE(sl.is_st, 0) = 0
-              AND dhi.trade_date >= date(?, '-1 year')
-              AND dhi.trade_date <= date(?)
-            GROUP BY sl.full_code
-            ORDER BY limit_count DESC, sl.full_code
-            LIMIT ?
-            ''',
-            [request.end_date, request.end_date, int(request.hot_top_n or 20)],
-        ).fetchall()
-        return [str(row['full_code']) for row in rows]
-    finally:
-        conn.close()
+        hot_rows = session.exec(
+            select(DailyHotInfo).where(
+                DailyHotInfo.trade_date >= request.end_date[:4] + '-01-01',
+                DailyHotInfo.trade_date <= request.end_date,
+            )
+        ).all()
+        counts: dict[str, int] = defaultdict(int)
+        stock_by_code = {
+            row.code: row
+            for row in session.exec(
+                select(StockList).where(StockList.is_st == False)  # noqa: E712
+            ).all()
+        }
+        for hot_row in hot_rows:
+            stock = stock_by_code.get(hot_row.stock_code)
+            if stock:
+                counts[stock.full_code] += 1
+        return [
+            full_code
+            for full_code, _count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[
+                : int(request.hot_top_n or 20)
+            ]
+        ]
 
 
 def _load_5m_bars(duckdb_path: Path | None, full_codes: list[str], start_date: str, end_date: str) -> dict[str, dict[str, list[FiveMinuteBar]]]:
@@ -222,48 +247,40 @@ def _confidence(sample_count: int, coverage: float, min_sample_count: int) -> st
     return 'insufficient'
 
 
-def _insert_job(conn: Any, request: StockLinkageBacktestRequest, job_id: str, status: str, error: str = '') -> None:
+def _build_job_row(request: StockLinkageBacktestRequest, job_id: str, status: str, error: str = '') -> StockLinkageBacktestJobRow:
     now = datetime.now().isoformat(sep=' ', timespec='seconds')
-    conn.execute(
-        '''
-        INSERT INTO stock_linkage_backtest_job
-        (id, job_name, a_select_mode, manual_a_full_code, hot_top_n, start_date, end_date,
-         min_sample_count, status, error_message, created_at, updated_at, finished_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''',
-        [
-            job_id,
-            request.job_name,
-            request.a_select_mode,
-            request.manual_a_full_code,
-            request.hot_top_n,
-            request.start_date,
-            request.end_date,
-            request.min_sample_count,
-            status,
-            error,
-            now,
-            now,
-            now if status in {'success', 'failed'} else None,
-        ],
+    return StockLinkageBacktestJobRow(
+        id=job_id,
+        job_name=request.job_name,
+        a_select_mode=request.a_select_mode,
+        manual_a_full_code=request.manual_a_full_code,
+        hot_top_n=request.hot_top_n,
+        start_date=request.start_date,
+        end_date=request.end_date,
+        min_sample_count=request.min_sample_count,
+        status=status,
+        error_message=error,
+        created_at=now,
+        updated_at=now,
+        finished_at=now if status in {'success', 'failed'} else None,
     )
 
 
-def _row_to_job(row: Any) -> StockLinkageBacktestJob:
+def _row_to_job(row: StockLinkageBacktestJobRow) -> StockLinkageBacktestJob:
     return StockLinkageBacktestJob(
-        job_id=str(row[0]),
-        job_name=row[1],
-        a_select_mode=str(row[2]),
-        manual_a_full_code=row[3],
-        hot_top_n=int(row[4]) if row[4] is not None else None,
-        start_date=str(row[5])[:10],
-        end_date=str(row[6])[:10],
-        min_sample_count=int(row[7]),
-        status=str(row[8]),
-        error_message=row[9],
-        created_at=str(row[10]),
-        updated_at=str(row[11]),
-        finished_at=str(row[12]) if row[12] is not None else None,
+        job_id=row.id,
+        job_name=row.job_name,
+        a_select_mode=row.a_select_mode,
+        manual_a_full_code=row.manual_a_full_code,
+        hot_top_n=row.hot_top_n,
+        start_date=row.start_date[:10],
+        end_date=row.end_date[:10],
+        min_sample_count=row.min_sample_count,
+        status=row.status,
+        error_message=row.error_message,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        finished_at=row.finished_at,
     )
 
 
@@ -287,12 +304,10 @@ def create_stock_linkage_backtest_job(
     _validate_request(request)
     ensure_sqlite_schema(sqlite_path)
     job_id = str(uuid.uuid4())
-    conn = connect_sqlite(sqlite_path)
-    try:
-        _insert_job(conn, request, job_id, 'pending')
-        conn.commit()
-    finally:
-        conn.close()
+    session_factory = _session_factory(sqlite_path)
+    with session_factory() as session:
+        session.add(_build_job_row(request, job_id, 'pending'))
+        session.commit()
     job = get_stock_linkage_job(job_id, sqlite_path=sqlite_path)
     assert job is not None
     return job
@@ -303,19 +318,9 @@ def get_stock_linkage_job(
     sqlite_path: Path | None = None,
 ) -> StockLinkageBacktestJob | None:
     ensure_sqlite_schema(sqlite_path)
-    conn = connect_sqlite(sqlite_path)
-    try:
-        row = conn.execute(
-            '''
-            SELECT id, job_name, a_select_mode, manual_a_full_code, hot_top_n, start_date, end_date,
-                   min_sample_count, status, error_message, created_at, updated_at, finished_at
-            FROM stock_linkage_backtest_job
-            WHERE id = ?
-            ''',
-            [job_id],
-        ).fetchone()
-    finally:
-        conn.close()
+    session_factory = _session_factory(sqlite_path)
+    with session_factory() as session:
+        row = session.get(StockLinkageBacktestJobRow, job_id)
     return _row_to_job(row) if row else None
 
 def list_stock_linkage_jobs(
@@ -324,40 +329,35 @@ def list_stock_linkage_jobs(
     sqlite_path: Path | None = None,
 ) -> list[StockLinkageBacktestJob]:
     ensure_sqlite_schema(sqlite_path)
-    conn = connect_sqlite(sqlite_path)
-    try:
-        rows = conn.execute(
-            '''
-            SELECT id, job_name, a_select_mode, manual_a_full_code, hot_top_n, start_date, end_date,
-                   min_sample_count, status, error_message, created_at, updated_at, finished_at
-            FROM stock_linkage_backtest_job
-            ORDER BY created_at DESC
-            LIMIT ?
-            ''',
-            [limit],
-        ).fetchall()
-    finally:
-        conn.close()
+    session_factory = _session_factory(sqlite_path)
+    with session_factory() as session:
+        rows = session.exec(
+            select(StockLinkageBacktestJobRow)
+            .order_by(StockLinkageBacktestJobRow.created_at.desc())  # type: ignore[attr-defined]
+            .limit(limit)
+        ).all()
     return [_row_to_job(row) for row in rows]
 
-def _find_running_stock_linkage_job_id(conn: Any) -> str | None:
-    row = conn.execute(
-        "SELECT id FROM stock_linkage_backtest_job WHERE status = 'running' ORDER BY created_at LIMIT 1"
-    ).fetchone()
-    return str(row[0]) if row else None
+def _find_running_stock_linkage_job_id(session: Any) -> str | None:
+    row = session.exec(
+        select(StockLinkageBacktestJobRow)
+        .where(StockLinkageBacktestJobRow.status == 'running')
+        .order_by(StockLinkageBacktestJobRow.created_at)
+        .limit(1)
+    ).first()
+    return row.id if row else None
 
 
-def _mark_job_status(conn: Any, job_id: str, status: str, error_message: str | None = None) -> None:
+def _mark_job_status(session: Any, job_id: str, status: str, error_message: str | None = None) -> None:
     now = datetime.now().isoformat(sep=' ', timespec='seconds')
     finished_at = now if status in {'success', 'failed'} else None
-    conn.execute(
-        '''
-        UPDATE stock_linkage_backtest_job
-        SET status = ?, error_message = ?, updated_at = ?, finished_at = ?
-        WHERE id = ?
-        ''',
-        [status, error_message, now, finished_at, job_id],
-    )
+    row = session.get(StockLinkageBacktestJobRow, job_id)
+    if row:
+        row.status = status
+        row.error_message = error_message
+        row.updated_at = now
+        row.finished_at = finished_at
+        session.add(row)
 
 
 def start_stock_linkage_backtest_job(
@@ -368,17 +368,15 @@ def start_stock_linkage_backtest_job(
 ) -> bool:
     ensure_sqlite_schema(sqlite_path)
     with _stock_linkage_lock:
-        conn = connect_sqlite(sqlite_path)
-        try:
-            if _find_running_stock_linkage_job_id(conn):
+        session_factory = _session_factory(sqlite_path)
+        with session_factory() as session:
+            if _find_running_stock_linkage_job_id(session):
                 return False
             job = get_stock_linkage_job(job_id, sqlite_path=sqlite_path)
             if job is None or job.status != 'pending':
                 return False
-            _mark_job_status(conn, job_id, 'running')
-            conn.commit()
-        finally:
-            conn.close()
+            _mark_job_status(session, job_id, 'running')
+            session.commit()
 
     thread = threading.Thread(
         target=_run_stock_linkage_job,
@@ -403,19 +401,15 @@ def _run_stock_linkage_job(
             duckdb_path=duckdb_path,
             job_id=job_id,
         )
-        conn = connect_sqlite(sqlite_path)
-        try:
-            _mark_job_status(conn, job_id, 'success')
-            conn.commit()
-        finally:
-            conn.close()
+        session_factory = _session_factory(sqlite_path)
+        with session_factory() as session:
+            _mark_job_status(session, job_id, 'success')
+            session.commit()
     except Exception as exc:  # noqa: BLE001
-        conn = connect_sqlite(sqlite_path)
-        try:
-            _mark_job_status(conn, job_id, 'failed', str(exc)[:1000])
-            conn.commit()
-        finally:
-            conn.close()
+        session_factory = _session_factory(sqlite_path)
+        with session_factory() as session:
+            _mark_job_status(session, job_id, 'failed', str(exc)[:1000])
+            session.commit()
 
 def run_stock_linkage_backtest(
     request: StockLinkageBacktestRequest,
@@ -521,67 +515,76 @@ def run_stock_linkage_backtest(
                             ]
                         )
 
-    conn = connect_sqlite(sqlite_path)
-    try:
-        conn.execute('BEGIN TRANSACTION')
+    session_factory = _session_factory(sqlite_path)
+    with session_factory() as session:
         if job_id is None:
-            _insert_job(conn, request, target_job_id, 'success')
+            session.add(_build_job_row(request, target_job_id, 'success'))
         else:
-            conn.execute('DELETE FROM stock_linkage_trigger_event WHERE job_id = ?', [target_job_id])
-            conn.execute('DELETE FROM stock_linkage_baseline_metric WHERE job_id = ?', [target_job_id])
-            conn.execute('DELETE FROM stock_linkage_backtest_result WHERE job_id = ?', [target_job_id])
+            for row in session.exec(
+                select(StockLinkageTriggerEvent).where(StockLinkageTriggerEvent.job_id == target_job_id)
+            ).all():
+                session.delete(row)
+            for row in session.exec(
+                select(StockLinkageBaselineMetric).where(StockLinkageBaselineMetric.job_id == target_job_id)
+            ).all():
+                session.delete(row)
+            for row in session.exec(
+                select(StockLinkageBacktestResult).where(StockLinkageBacktestResult.job_id == target_job_id)
+            ).all():
+                session.delete(row)
         trigger_rows = [
-                [
-                    str(uuid.uuid4()),
-                    target_job_id,
-                    event.a_full_code,
-                    event.trade_date,
-                    event.bar_time,
-                    event.bar_index,
-                    event.trigger_type,
-                    event.trigger_threshold,
-                    event.trigger_return,
-                ]
+                StockLinkageTriggerEvent(
+                    id=str(uuid.uuid4()),
+                    job_id=target_job_id,
+                    a_full_code=event.a_full_code,
+                    trade_date=event.trade_date,
+                    bar_time=event.bar_time,
+                    bar_index=event.bar_index,
+                    trigger_type=event.trigger_type,
+                    trigger_threshold=event.trigger_threshold,
+                    trigger_return=event.trigger_return,
+                )
                 for event in events
             ]
-        if trigger_rows:
-            conn.executemany(
-                '''
-                INSERT INTO stock_linkage_trigger_event
-                (id, job_id, a_full_code, trade_date, bar_time, bar_index, trigger_type, trigger_threshold, trigger_return)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''',
-                trigger_rows,
+        for trigger_row in trigger_rows:
+            session.add(trigger_row)
+        for (b_code, observation_type, threshold), (sample, hits, probability) in baseline.items():
+            session.add(
+                StockLinkageBaselineMetric(
+                    id=str(uuid.uuid4()),
+                    job_id=target_job_id,
+                    b_full_code=b_code,
+                    observation_type=observation_type,
+                    target_threshold=threshold,
+                    baseline_sample_count=sample,
+                    baseline_hit_count=hits,
+                    baseline_probability=probability,
+                )
             )
-        conn.executemany(
-            '''
-            INSERT INTO stock_linkage_baseline_metric
-            (id, job_id, b_full_code, observation_type, target_threshold, baseline_sample_count,
-             baseline_hit_count, baseline_probability)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''',
-            [
-                [str(uuid.uuid4()), target_job_id, b_code, observation_type, threshold, sample, hits, probability]
-                for (b_code, observation_type, threshold), (sample, hits, probability) in baseline.items()
-            ],
-        )
-        if result_rows:
-            conn.executemany(
-                '''
-                INSERT INTO stock_linkage_backtest_result
-                (id, job_id, a_full_code, b_full_code, trigger_type, trigger_threshold, observation_type,
-                 target_threshold, sample_count, hit_count, condition_probability, baseline_probability,
-                 probability_lift, lift_multiple, trigger_coverage_rate, confidence_level, score, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''',
-                result_rows,
+        for row in result_rows:
+            session.add(
+                StockLinkageBacktestResult(
+                    id=row[0],
+                    job_id=row[1],
+                    a_full_code=row[2],
+                    b_full_code=row[3],
+                    trigger_type=row[4],
+                    trigger_threshold=row[5],
+                    observation_type=row[6],
+                    target_threshold=row[7],
+                    sample_count=row[8],
+                    hit_count=row[9],
+                    condition_probability=row[10],
+                    baseline_probability=row[11],
+                    probability_lift=row[12],
+                    lift_multiple=row[13],
+                    trigger_coverage_rate=row[14],
+                    confidence_level=row[15],
+                    score=row[16],
+                    created_at=row[17],
+                )
             )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+        session.commit()
 
     return StockLinkageBacktestSummary(
         job_id=target_job_id,
@@ -600,40 +603,38 @@ def list_stock_linkage_results(
     sqlite_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     ensure_sqlite_schema(sqlite_path)
-    conn = connect_sqlite(sqlite_path)
-    try:
-        rows = conn.execute(
-            '''
-            SELECT job_id, a_full_code, b_full_code, trigger_type, trigger_threshold,
-                   observation_type, target_threshold, sample_count, hit_count,
-                   condition_probability, baseline_probability, probability_lift,
-                   lift_multiple, trigger_coverage_rate, confidence_level, score
-            FROM stock_linkage_backtest_result
-            WHERE job_id = ?
-            ORDER BY score DESC, probability_lift DESC, condition_probability DESC
-            LIMIT ? OFFSET ?
-            ''',
-            [job_id, limit, offset],
-        ).fetchall()
-    finally:
-        conn.close()
+    session_factory = _session_factory(sqlite_path)
+    with session_factory() as session:
+        rows = session.exec(
+            select(StockLinkageBacktestResult)
+            .where(StockLinkageBacktestResult.job_id == job_id)
+            .order_by(
+                StockLinkageBacktestResult.score.desc(),  # type: ignore[attr-defined]
+                StockLinkageBacktestResult.probability_lift.desc(),  # type: ignore[attr-defined]
+                StockLinkageBacktestResult.condition_probability.desc(),  # type: ignore[attr-defined]
+            )
+            .offset(offset)
+            .limit(limit)
+        ).all()
 
-    keys = [
-        'job_id',
-        'a_full_code',
-        'b_full_code',
-        'trigger_type',
-        'trigger_threshold',
-        'observation_type',
-        'target_threshold',
-        'sample_count',
-        'hit_count',
-        'condition_probability',
-        'baseline_probability',
-        'probability_lift',
-        'lift_multiple',
-        'trigger_coverage_rate',
-        'confidence_level',
-        'score',
+    return [
+        {
+            'job_id': row.job_id,
+            'a_full_code': row.a_full_code,
+            'b_full_code': row.b_full_code,
+            'trigger_type': row.trigger_type,
+            'trigger_threshold': row.trigger_threshold,
+            'observation_type': row.observation_type,
+            'target_threshold': row.target_threshold,
+            'sample_count': row.sample_count,
+            'hit_count': row.hit_count,
+            'condition_probability': row.condition_probability,
+            'baseline_probability': row.baseline_probability,
+            'probability_lift': row.probability_lift,
+            'lift_multiple': row.lift_multiple,
+            'trigger_coverage_rate': row.trigger_coverage_rate,
+            'confidence_level': row.confidence_level,
+            'score': row.score,
+        }
+        for row in rows
     ]
-    return [dict(zip(keys, row, strict=True)) for row in rows]

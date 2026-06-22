@@ -1,0 +1,165 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_schema
+from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
+from app.modules.macd_alert.service import (
+    calculate_cross_trigger_price,
+    calculate_trend_keep_price,
+    scan_macd_alerts,
+    track_macd_alerts,
+)
+from app.modules.macd_alert.indicators import compute_macd_points
+
+
+def _seed_stock_list(sqlite_path: Path) -> None:
+    ensure_sqlite_schema(sqlite_path)
+    conn = connect_sqlite(sqlite_path)
+    try:
+        conn.executemany(
+            """
+            INSERT INTO stock_list (full_code, code, name, is_st, market)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                ('000001.SZ', '000001', '测试一号', 0, '主板'),
+                ('000002.SZ', '000002', '测试二号', 0, '主板'),
+            ],
+        )
+        conn.executemany(
+            """
+            INSERT INTO daily_hot_info
+            (trade_date, limit_up_time, stock_code, name, streak_text, hot_theme, reason, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                ('2026-01-05', '09:30', '000001', '测试一号', '首板', '机器人', '测试原因', 'test'),
+                ('2026-01-06', '09:30', '000002', '测试二号', '首板', '机器人', '测试原因', 'test'),
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _seed_daily_bars(duckdb_path: Path, closes: list[float], *, code: str = '000001.SZ') -> None:
+    ensure_duckdb_schema(duckdb_path)
+    conn = connect_duckdb(duckdb_path)
+    try:
+        rows = []
+        for idx, close in enumerate(closes, start=1):
+            day = f'2026-01-{idx:02d}'
+            rows.append(
+                [
+                    code,
+                    day,
+                    close - 0.2,
+                    close + 0.3,
+                    close - 0.5,
+                    close,
+                    close - 0.1,
+                    0,
+                    0,
+                    1000,
+                    100000,
+                    False,
+                    False,
+                ]
+            )
+        conn.executemany(
+            """
+            INSERT INTO day_level_trade_data
+            (full_code, trade_date, open, high, low, close, pre_close, change, pct_chg,
+             vol, amount, is_up_limit, is_down_limit)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+    finally:
+        conn.close()
+
+
+def test_macd_trigger_price_formula_matches_f06_design() -> None:
+    closes = [10, 9.7, 9.4, 9.1, 8.8, 8.7, 8.65, 8.63]
+    points = compute_macd_points(closes)
+    latest = points[-1]
+
+    cross_price = calculate_cross_trigger_price(latest.ema8, latest.ema17, latest.dea)
+    trend_price = calculate_trend_keep_price(latest.ema8, latest.ema17, latest.dif, latest.dea)
+
+    assert cross_price == pytest.approx(9 * latest.dea - 7 * latest.ema8 + 8 * latest.ema17)
+    assert trend_price == pytest.approx(
+        9 * (latest.dea + 7 / 5 * (latest.dif - latest.dea)) - 7 * latest.ema8 + 8 * latest.ema17
+    )
+
+
+def test_scan_macd_alerts_is_idempotent_and_writes_backtest_summary(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / 'macd-alert.db'
+    duckdb_path = tmp_path / 'macd-alert.duckdb'
+    _seed_stock_list(sqlite_path)
+    _seed_daily_bars(duckdb_path, [10, 9.6, 9.2, 8.8, 8.5, 8.35, 8.3, 8.28, 8.27, 8.27])
+
+    first = scan_macd_alerts(
+        trade_date='2026-01-10',
+        sqlite_path=sqlite_path,
+        duckdb_path=duckdb_path,
+        green_shrink_days=2,
+    )
+    second = scan_macd_alerts(
+        trade_date='2026-01-10',
+        sqlite_path=sqlite_path,
+        duckdb_path=duckdb_path,
+        green_shrink_days=2,
+    )
+
+    assert first['matched_count'] == 1
+    assert second['matched_count'] == 1
+
+    conn = connect_sqlite(sqlite_path)
+    try:
+        alert_rows = conn.execute('SELECT * FROM macd_alert_result').fetchall()
+        sample_rows = conn.execute('SELECT * FROM macd_alert_backtest_sample').fetchall()
+    finally:
+        conn.close()
+
+    assert len(alert_rows) == 1
+    assert alert_rows[0]['stock_code'] == '000001'
+    assert alert_rows[0]['pattern_key'] == 'golden_cross_setup'
+    assert alert_rows[0]['backtest_sample_count'] >= 0
+    assert len(sample_rows) == alert_rows[0]['backtest_sample_count']
+
+
+def test_track_macd_alerts_updates_trend_status(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / 'macd-track.db'
+    duckdb_path = tmp_path / 'macd-track.duckdb'
+    _seed_stock_list(sqlite_path)
+    _seed_daily_bars(duckdb_path, [10, 9.6, 9.2, 8.8, 8.5, 8.35, 8.3, 8.28, 8.27, 8.27, 8.5])
+
+    scan_macd_alerts(
+        trade_date='2026-01-10',
+        sqlite_path=sqlite_path,
+        duckdb_path=duckdb_path,
+        green_shrink_days=2,
+    )
+
+    tracked = track_macd_alerts(
+        trade_date='2026-01-11',
+        source_trade_date='2026-01-10',
+        sqlite_path=sqlite_path,
+        duckdb_path=duckdb_path,
+    )
+
+    assert tracked['tracked_count'] == 1
+    assert tracked['cross_confirmed_count'] + tracked['trend_kept_count'] >= 1
+
+    conn = connect_sqlite(sqlite_path)
+    try:
+        row = conn.execute('SELECT track_status, tracked_close_price FROM macd_alert_result').fetchone()
+    finally:
+        conn.close()
+
+    assert row['track_status'] in {'cross_confirmed', 'trend_kept'}
+    assert row['tracked_close_price'] == pytest.approx(8.5)

@@ -4,14 +4,14 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.routing import Mount
 
-from app.api.routes.mcp import get_alpha_predator_info, mcp
+from app.api.routes.mcp import get_alpha_predator_info, get_macd_alert_daily_brief, mcp
 
 
 def test_alpha_predator_probe_tool_returns_basic_status() -> None:
     assert get_alpha_predator_info() == {
         'name': 'AlphaPredator',
         'mcp_status': 'ok',
-        'capabilities_stage': 'F05a-basic-mcp',
+        'capabilities_stage': 'F06-macd-alert',
     }
 
 
@@ -23,12 +23,36 @@ async def test_probe_tool_is_discoverable_and_callable_through_mcp() -> None:
         tools = await client.list_tools()
         result = await client.call_tool('get_alpha_predator_info')
 
-    assert [tool.name for tool in tools] == ['get_alpha_predator_info']
+    tool_names = [tool.name for tool in tools]
+    assert 'get_alpha_predator_info' in tool_names
+    assert 'get_macd_alert_daily_brief' in tool_names
     assert result.data == {
         'name': 'AlphaPredator',
         'mcp_status': 'ok',
-        'capabilities_stage': 'F05a-basic-mcp',
+        'capabilities_stage': 'F06-macd-alert',
     }
+
+
+def test_macd_daily_brief_tool_includes_disclaimer(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.api.routes.mcp as mcp_route
+
+    monkeypatch.setattr(
+        mcp_route,
+        'get_macd_daily_brief',
+        lambda **kwargs: {
+            'trade_date': '2026-01-10',
+            'latest_trade_date': '2026-01-10',
+            'is_data_fresh': True,
+            'new_alert_count': 1,
+            'tracking': {'tracked_count': 0},
+            'highlights': [],
+        },
+    )
+
+    result = get_macd_alert_daily_brief('2026-01-10', limit=10)
+
+    assert result['disclaimer'] == '以下为技术形态观察结果，不构成买卖建议。'
+    assert result['new_alert_count'] == 1
 
 
 def test_main_app_mounts_mcp_under_api_mcp() -> None:

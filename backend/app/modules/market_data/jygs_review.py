@@ -18,9 +18,12 @@ from PIL import Image
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 from rapidocr import RapidOCR
+from sqlmodel import select
 
 from app.core.settings import settings
-from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
+from app.db.session import get_sqlite_session_factory
+from app.db.sqlite import ensure_sqlite_schema
+from app.models.sqlite_models import DailyHotInfo, DailyHotPic, StockList
 from app.modules.jygs.auth import get_session
 from app.modules.jygs.auth_file import load_credentials_from_file, save_credentials_to_file, update_auth_check_status
 from app.modules.jygs.playwright_browser import launch_installed_browser
@@ -50,10 +53,9 @@ def _normalize_stock_code(raw_code: Any) -> str:
     return digits[-6:] if digits else ''
 
 
-def _connect(sqlite_path: Path | None = None) -> Any:
-    """Helper to get SQLite connection."""
+def _session_factory(sqlite_path: Path | None = None):
     target = sqlite_path or settings.sqlite_path
-    return connect_sqlite(target)
+    return get_sqlite_session_factory(target)
 
 
 def _post_json(path: str, payload: dict[str, Any], *, cookie: str = '', timeout: float = 20.0) -> dict[str, Any]:
@@ -272,21 +274,32 @@ def sync_hot_review_by_date(trade_date: str, sqlite_path: Path | None = None) ->
     summary_image_urls = _extract_diagram_urls(diagram_payload)
     theme_map, stock_rows_by_code = _extract_theme_stock_map(field_payload)
 
-    # Write to daily_hot_pic table (復盤圖片)
-    connection = _connect(target)
-    try:
+    session_factory = _session_factory(target)
+    with session_factory() as session:
+        # Write to daily_hot_pic table (復盤圖片)
         for idx, url in enumerate(summary_image_urls):
-            connection.execute(
-                'DELETE FROM daily_hot_pic WHERE trade_date = ? AND summary_image_url = ?',
-                [trade_date, url],
-            )
-            connection.execute(
-                'INSERT INTO daily_hot_pic (trade_date, summary_image_url, source) VALUES (?, ?, ?)',
-                [trade_date, url, 'jygs'],
+            existing_pic = session.exec(
+                select(DailyHotPic).where(
+                    DailyHotPic.trade_date == trade_date,
+                    DailyHotPic.summary_image_url == url,
+                )
+            ).first()
+            if existing_pic:
+                session.delete(existing_pic)
+            session.add(
+                DailyHotPic(
+                    trade_date=trade_date,
+                    summary_image_url=url,
+                    source='jygs',
+                )
             )
 
         # Write to daily_hot_info table (涨停解析)
-        connection.execute('DELETE FROM daily_hot_info WHERE trade_date = ?', [trade_date])
+        existing_infos = session.exec(
+            select(DailyHotInfo).where(DailyHotInfo.trade_date == trade_date)
+        ).all()
+        for info in existing_infos:
+            session.delete(info)
         for code, stock in stock_rows_by_code.items():
             article = stock.get('article') or {}
             action_info = article.get('action_info') or {}
@@ -297,43 +310,36 @@ def sync_hot_review_by_date(trade_date: str, sqlite_path: Path | None = None) ->
             limit_up_time = str(action_info.get('time') or '').strip()
             hot_theme = '、'.join(sorted(theme_map.get(code, set())))
 
-            connection.execute(
-                '''
-                INSERT INTO daily_hot_info (trade_date, limit_up_time, stock_code, name, streak_text, hot_theme, reason,
-                                            source, short_reason)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''',
-                [
-                    trade_date,
-                    limit_up_time,
-                    code,
-                    stock_name,
-                    streak_text,
-                    hot_theme,
-                    reason_raw,
-                    'jygs',
-                    '',
-                ],
+            session.add(
+                DailyHotInfo(
+                    trade_date=trade_date,
+                    limit_up_time=limit_up_time,
+                    stock_code=code,
+                    name=stock_name,
+                    streak_text=streak_text,
+                    hot_theme=hot_theme,
+                    reason=reason_raw,
+                    source='jygs',
+                    short_reason='',
+                )
             )
 
         # name 仍为空时从 stock_list 保底（field 某些 category 不返回 list，导致 stock_data_map 无此股）
-        connection.execute(
-            '''
-            UPDATE daily_hot_info
-            SET name = (
-                SELECT sl.name FROM stock_list sl
-                WHERE sl.code = daily_hot_info.stock_code
-                LIMIT 1
+        empty_name_infos = session.exec(
+            select(DailyHotInfo).where(
+                DailyHotInfo.trade_date == trade_date,
+                DailyHotInfo.name == '',
             )
-            WHERE trade_date = ? AND name = ''
-              AND stock_code IN (SELECT code FROM stock_list)
-            ''',
-            [trade_date],
-        )
+        ).all()
+        for info in empty_name_infos:
+            stock = session.exec(
+                select(StockList).where(StockList.code == info.stock_code).limit(1)
+            ).first()
+            if stock:
+                info.name = stock.name
+                session.add(info)
 
-        connection.commit()
-    finally:
-        connection.close()
+        session.commit()
 
     logger.info(
         'JYGS sync done. trade_date=%s images=%d stocks=%d',
@@ -578,14 +584,14 @@ def _process_hot_review_ocr(trade_date: str, sqlite_path: Path | None = None) ->
     target = sqlite_path or settings.sqlite_path
     logger.info('OCR processing start. trade_date=%s', trade_date)
 
-    connection = _connect(target)
-    try:
-        # Fetch all images for this trade_date
-        cursor = connection.execute(
-            'SELECT summary_image_url FROM daily_hot_pic WHERE trade_date = ? ORDER BY summary_image_url',
-            [trade_date]
+    session_factory = _session_factory(target)
+    with session_factory() as session:
+        pics = session.exec(
+            select(DailyHotPic)
+            .where(DailyHotPic.trade_date == trade_date)
+            .order_by(DailyHotPic.summary_image_url)
         )
-        image_urls = [row[0] for row in cursor.fetchall()]
+        image_urls = [pic.summary_image_url for pic in pics]
 
         if not image_urls:
             logger.info('No images to process for %s', trade_date)
@@ -610,19 +616,22 @@ def _process_hot_review_ocr(trade_date: str, sqlite_path: Path | None = None) ->
         # 按股票代码逐行更新 short_reason（涨停时间由 /action/field API 提供，不在此处更新）
         updated = 0
         for stock_code, summary in merged.items():
-            rows_updated = connection.execute(
-                'UPDATE daily_hot_info SET short_reason = ? WHERE trade_date = ? AND stock_code = ?',
-                [summary, trade_date, stock_code],
-            ).rowcount
-            updated += rows_updated
+            infos = session.exec(
+                select(DailyHotInfo).where(
+                    DailyHotInfo.trade_date == trade_date,
+                    DailyHotInfo.stock_code == stock_code,
+                )
+            ).all()
+            for info in infos:
+                info.short_reason = summary
+                session.add(info)
+                updated += 1
 
-        connection.commit()
+        session.commit()
         logger.info(
             'OCR done. trade_date=%s images=%d ocr_success=%d stocks_updated=%d',
             trade_date, len(image_urls), ocr_success_count, updated,
         )
-    finally:
-        connection.close()
 
 
     return {

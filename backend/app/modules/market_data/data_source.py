@@ -498,23 +498,13 @@ def load_stock_list(market_filters: list[str] | None = None) -> pd.DataFrame:
 def load_stock_list_from_sqlite(
         market_filters: list[str] | None = None,
         *,
-        sqlite_path: Any = None,
+    sqlite_path: Any = None,
 ) -> pd.DataFrame:
     repo = StockListRepo(sqlite_path)
-    conn = repo._connect()
-    try:
-        rows = conn.execute(
-            '''
-            SELECT full_code, code, name, is_st, cnspell, market
-            FROM stock_list
-            ORDER BY full_code
-            '''
-        ).fetchall()
-    finally:
-        conn.close()
+    rows = repo.list_all_ordered()
 
     df = pd.DataFrame(
-        [dict(row) for row in rows],
+        rows,
         columns=['full_code', 'code', 'name', 'is_st', 'cnspell', 'market'],
     )
     if df.empty:

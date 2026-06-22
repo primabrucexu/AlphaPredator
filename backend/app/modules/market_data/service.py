@@ -6,7 +6,7 @@ from typing import Any
 
 from app.core.settings import settings
 from app.db.duckdb_storage import connect_duckdb
-from app.db.sqlite import connect_sqlite
+from app.db.session import get_sqlite_session_factory
 from app.modules.market_data.data_source import _to_full_code
 from app.queries.market_queries import (
     get_hot_info_rows_by_date,
@@ -63,6 +63,9 @@ class MarketDataService:
         self._duckdb_path = duckdb_path or settings.duckdb_path
         self._stock_list_repo = StockListRepo(self._sqlite_path)
         self._metadata_repo = MarketMetadataRepo(self._sqlite_path)
+
+    def _session_factory(self):
+        return get_sqlite_session_factory(self._sqlite_path)
 
     def get_market_overview(self) -> MarketOverviewResponse:
         payload = (
@@ -149,19 +152,17 @@ class MarketDataService:
             return HotSectorHistoryResponse()
 
         target_days = max(1, min(days, 60))
-        connection = connect_sqlite(self._sqlite_path)
-        try:
-            trade_dates = get_hot_info_trade_dates(connection, target_days)
+        session_factory = self._session_factory()
+        with session_factory() as session:
+            trade_dates = get_hot_info_trade_dates(session, target_days)
             if not trade_dates:
                 return HotSectorHistoryResponse()
 
             days_payload: list[HotSectorHistoryDay] = []
             for trade_date in trade_dates:
-                rows = get_hot_info_rows_by_date(connection, trade_date)
+                rows = get_hot_info_rows_by_date(session, trade_date)
                 sectors = self._build_hot_sector_history_sectors(rows, exclude_st=exclude_st)
                 days_payload.append(HotSectorHistoryDay(trade_date=trade_date, sectors=sectors))
-        finally:
-            connection.close()
 
         return HotSectorHistoryResponse(trade_dates=trade_dates, days=days_payload)
 
@@ -175,16 +176,16 @@ class MarketDataService:
             return LimitUpStreaksResponse(trade_date=trade_date or '', streaks=[])
 
         target_min_boards = max(1, min(min_boards, 20))
-        connection = connect_sqlite(self._sqlite_path)
-        try:
+        session_factory = self._session_factory()
+        with session_factory() as session:
             target_trade_date = trade_date
             if not target_trade_date:
-                target_trade_date = get_latest_hot_info_trade_date(connection)
+                target_trade_date = get_latest_hot_info_trade_date(session)
 
             if not target_trade_date:
                 return LimitUpStreaksResponse(trade_date='', streaks=[])
 
-            rows = get_hot_info_rows_by_date(connection, target_trade_date)
+            rows = get_hot_info_rows_by_date(session, target_trade_date)
             streak_rows: list[dict[str, Any]] = []
             for row in rows:
                 stock_name = str(row['name'] or '')
@@ -209,8 +210,6 @@ class MarketDataService:
             streak_rows.sort(key=lambda item: (-item['board_count'], item['limit_up_time'], item['stock_code']))
 
             streaks = [LimitUpStreakItem(**row) for row in streak_rows]
-        finally:
-            connection.close()
 
         return LimitUpStreaksResponse(trade_date=target_trade_date, streaks=streaks)
 
@@ -218,16 +217,16 @@ class MarketDataService:
         if not self._sqlite_path.exists():
             return HotReviewImagesResponse(trade_date=trade_date or '', images=[])
 
-        connection = connect_sqlite(self._sqlite_path)
-        try:
+        session_factory = self._session_factory()
+        with session_factory() as session:
             target_trade_date = trade_date
             if not target_trade_date:
-                target_trade_date = get_latest_hot_pic_trade_date(connection)
+                target_trade_date = get_latest_hot_pic_trade_date(session)
 
             if not target_trade_date:
                 return HotReviewImagesResponse(trade_date='', images=[])
 
-            rows = get_hot_pic_rows_by_date(connection, target_trade_date)
+            rows = get_hot_pic_rows_by_date(session, target_trade_date)
             images = [
                 HotReviewImageItem(
                     url=str(row['summary_image_url'] or ''),
@@ -236,8 +235,6 @@ class MarketDataService:
                 for row in rows
                 if str(row['summary_image_url'] or '').strip()
             ]
-        finally:
-            connection.close()
 
         return HotReviewImagesResponse(trade_date=target_trade_date, images=images)
 
@@ -245,13 +242,13 @@ class MarketDataService:
         if not self._sqlite_path.exists():
             return HotReviewTableResponse(trade_date=trade_date or '', rows=[])
 
-        connection = connect_sqlite(self._sqlite_path)
-        try:
-            target_trade_date = trade_date or get_latest_hot_info_trade_date(connection)
+        session_factory = self._session_factory()
+        with session_factory() as session:
+            target_trade_date = trade_date or get_latest_hot_info_trade_date(session)
             if not target_trade_date:
                 return HotReviewTableResponse(trade_date='', rows=[])
 
-            db_rows = get_hot_info_table_rows_by_date(connection, target_trade_date)
+            db_rows = get_hot_info_table_rows_by_date(session, target_trade_date)
             table_rows: list[HotReviewTableRow] = []
             for row in db_rows:
                 stock_name = str(row['name'] or '').strip()
@@ -272,8 +269,6 @@ class MarketDataService:
                         short_reason=str(row['short_reason'] or ''),
                     )
                 )
-        finally:
-            connection.close()
 
         return HotReviewTableResponse(trade_date=target_trade_date, rows=table_rows)
 
@@ -291,9 +286,9 @@ class MarketDataService:
         if normalized_code.isdigit():
             normalized_code = normalized_code.zfill(6)
 
-        connection = connect_sqlite(self._sqlite_path)
-        try:
-            db_rows = get_limit_up_history_by_stock(connection, normalized_code, limit=limit)
+        session_factory = self._session_factory()
+        with session_factory() as session:
+            db_rows = get_limit_up_history_by_stock(session, normalized_code, limit=limit)
             rows: list[StockLimitUpHistoryRow] = []
             for row in db_rows:
                 rows.append(
@@ -306,8 +301,6 @@ class MarketDataService:
                         short_reason=str(row['short_reason'] or ''),
                     )
                 )
-        finally:
-            connection.close()
 
         return StockLimitUpHistoryResponse(stock_code=normalized_code, rows=rows)
 
@@ -326,10 +319,10 @@ class MarketDataService:
             return HotSectorAggregatedResponse(windows=windows, sectors=[])
 
         max_days = max(windows)
-        connection = connect_sqlite(self._sqlite_path)
-        try:
+        session_factory = self._session_factory()
+        with session_factory() as session:
             # 获取最近 max_days 个交易日（有数据的）
-            trade_dates = get_hot_info_trade_dates(connection, max_days)
+            trade_dates = get_hot_info_trade_dates(session, max_days)
             if not trade_dates:
                 return HotSectorAggregatedResponse(windows=windows, sectors=[])
 
@@ -337,7 +330,7 @@ class MarketDataService:
             # sector_stocks_by_date[trade_date][sector] = {stock_code, ...}
             dated_rows: list[tuple[str, str, str]] = []  # (trade_date, sector, stock_code)
             for trade_date in trade_dates:
-                rows = get_hot_info_rows_by_date(connection, trade_date)
+                rows = get_hot_info_rows_by_date(session, trade_date)
                 for row in rows:
                     if exclude_st and self._is_st_row(row):
                         continue
@@ -352,8 +345,6 @@ class MarketDataService:
                         sector = sector.strip()
                         if sector:
                             dated_rows.append((trade_date, sector, stock_code))
-        finally:
-            connection.close()
 
         # 按各窗口聚合去重
         # trade_dates 已是升序，取最后 W 个日期作为窗口
@@ -686,11 +677,9 @@ class MarketDataService:
         if not self._sqlite_path.exists():
             return []
 
-        connection = connect_sqlite(self._sqlite_path)
-        try:
-            rows = get_hot_info_rows_by_date(connection, trade_date)
-        finally:
-            connection.close()
+        session_factory = self._session_factory()
+        with session_factory() as session:
+            rows = get_hot_info_rows_by_date(session, trade_date)
 
         return [
             {

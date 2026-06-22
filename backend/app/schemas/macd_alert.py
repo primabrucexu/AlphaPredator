@@ -1,0 +1,52 @@
+from __future__ import annotations
+
+from datetime import datetime
+
+from pydantic import BaseModel, Field, field_validator
+
+
+class MacdAlertScanRequest(BaseModel):
+    trade_date: str = Field(..., description='扫描交易日 YYYY-MM-DD')
+    universe_scope: str = Field('market', description='股票池范围，第一版仅支持 market')
+    markets: list[str] = Field(default_factory=lambda: ['主板'], description='市场板块')
+    exclude_st: bool = Field(True, description='是否排除 ST')
+    green_shrink_days: int = Field(2, ge=1, le=10, description='连续绿柱缩短天数')
+
+    @field_validator('trade_date')
+    @classmethod
+    def validate_trade_date(cls, value: str) -> str:
+        datetime.strptime(value, '%Y-%m-%d')
+        return value
+
+
+class MacdAlertTrackRequest(BaseModel):
+    trade_date: str = Field(..., description='跟踪交易日 YYYY-MM-DD')
+    source_trade_date: str = Field(..., description='来源预警交易日 YYYY-MM-DD')
+
+    @field_validator('trade_date', 'source_trade_date')
+    @classmethod
+    def validate_trade_date(cls, value: str) -> str:
+        datetime.strptime(value, '%Y-%m-%d')
+        return value
+
+
+class MacdAlertScanResponse(BaseModel):
+    trade_date: str
+    total_scanned: int
+    matched_count: int
+    report_generatable: bool
+    report_generation_hint: str
+    results: list[dict]
+
+
+class MacdAlertTrackResponse(BaseModel):
+    trade_date: str
+    source_trade_date: str
+    tracked_count: int
+    cross_confirmed_count: int
+    trend_kept_count: int
+    trend_weakened_count: int
+    data_missing_count: int
+    report_generatable: bool
+    report_generation_hint: str
+    results: list[dict]
