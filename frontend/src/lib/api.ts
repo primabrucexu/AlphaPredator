@@ -348,6 +348,90 @@ export interface StockLinkageBacktestResultRow {
   score: number;
 }
 
+export interface MacdAlertScanRequest {
+  trade_date: string;
+  universe_scope?: 'market';
+  markets?: string[];
+  exclude_st?: boolean;
+  green_shrink_days?: number;
+}
+
+export interface MacdAlertResultRow {
+  id: string;
+  trade_date: string;
+  stock_code: string;
+  stock_name: string;
+  pattern_key: string;
+  pattern_name: string;
+  cross_zone: 'underwater' | 'above_zero' | 'mixed';
+  close_price: number;
+  next_cross_trigger_price: number;
+  cross_trigger_distance_pct: number;
+  next_limit_up_price: number | null;
+  cross_trigger_reachable: number | boolean;
+  cross_trigger_unreachable_reason: string | null;
+  next_trend_keep_price: number;
+  trend_keep_distance_pct: number;
+  macd_dif: number;
+  macd_dea: number;
+  macd_hist: number;
+  green_shrink_days: number;
+  last_limit_up_date: string | null;
+  last_limit_up_theme: string | null;
+  last_limit_up_days_ago: number | null;
+  theme_recent_limit_up_count: number;
+  theme_recent_rank: number | null;
+  theme_heat_level: string;
+  track_status: string;
+  tracked_close_price: number | null;
+  backtest_sample_count: number;
+  backtest_cross_success_rate: number | null;
+  backtest_win_rate: number | null;
+  backtest_avg_return_pct: number | null;
+  backtest_confidence_level: string;
+  score: number;
+  summary: string;
+}
+
+export interface MacdAlertScanResponse {
+  trade_date: string;
+  total_scanned: number;
+  matched_count: number;
+  report_generatable: boolean;
+  report_generation_hint: string;
+  results: MacdAlertResultRow[];
+}
+
+export interface MacdAlertTrackResponse {
+  trade_date: string;
+  source_trade_date: string;
+  tracked_count: number;
+  cross_confirmed_count: number;
+  trend_kept_count: number;
+  trend_weakened_count: number;
+  data_missing_count: number;
+  report_generatable: boolean;
+  report_generation_hint: string;
+  results: Record<string, unknown>[];
+}
+
+export interface MacdAlertBacktestSampleRow {
+  id: string;
+  alert_result_id: string;
+  stock_code: string;
+  stock_name: string;
+  alert_date: string;
+  alert_close_price: number;
+  t1_track_status: string | null;
+  cross_date: string | null;
+  cross_type: string | null;
+  sell_date: string | null;
+  sell_reason: string | null;
+  return_pct: number | null;
+  holding_days: number | null;
+  status: string;
+}
+
 // ---------------------------------------------------------------------------
 // HTTP helpers
 // ---------------------------------------------------------------------------
@@ -643,6 +727,41 @@ export function getStockLinkageBacktestResults(
 ): Promise<StockLinkageBacktestResultRow[]> {
   return fetchJson<StockLinkageBacktestResultRow[]>(
     `/api/stock-linkage/backtests/${encodeURIComponent(jobId)}/results?limit=${limit}`,
+  );
+}
+
+export function scanMacdAlerts(request: MacdAlertScanRequest): Promise<MacdAlertScanResponse> {
+  return postJson<MacdAlertScanResponse>('/api/macd-alerts/scan', request);
+}
+
+export function trackMacdAlerts(tradeDate: string, sourceTradeDate: string): Promise<MacdAlertTrackResponse> {
+  return postJson<MacdAlertTrackResponse>('/api/macd-alerts/track', {
+    trade_date: tradeDate,
+    source_trade_date: sourceTradeDate,
+  });
+}
+
+export function listMacdAlertResults(params: {
+  trade_date: string;
+  cross_zone?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<MacdAlertResultRow[]> {
+  const query = new URLSearchParams({
+    trade_date: params.trade_date,
+    limit: String(params.limit ?? 100),
+    offset: String(params.offset ?? 0),
+  });
+  if (params.cross_zone) query.set('cross_zone', params.cross_zone);
+  return fetchJson<MacdAlertResultRow[]>(`/api/macd-alerts/results?${query.toString()}`);
+}
+
+export function listMacdAlertBacktestSamples(
+  alertId: string,
+  limit: number = 50,
+): Promise<MacdAlertBacktestSampleRow[]> {
+  return fetchJson<MacdAlertBacktestSampleRow[]>(
+    `/api/macd-alerts/results/${encodeURIComponent(alertId)}/backtest-samples?limit=${limit}`,
   );
 }
 

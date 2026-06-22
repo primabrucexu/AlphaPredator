@@ -6,6 +6,7 @@ import {HistoryPage} from '../pages/HistoryPage';
 import {HomeSearchPage} from '../pages/HomeSearchPage';
 import {InitializePage} from '../pages/InitializePage';
 import {MarketOverviewPage} from '../pages/MarketOverviewPage';
+import {MacdAlertPage} from '../pages/MacdAlertPage';
 import {SentimentOverviewPage} from '../pages/SentimentOverviewPage';
 import {StockLinkagePage} from '../pages/StockLinkagePage';
 import {StockDetailPage} from '../pages/StockDetailPage';
@@ -26,6 +27,7 @@ export const router = createBrowserRouter([
       { path: 'initialize', element: <InitializePage /> },
       { path: 'trade-review', element: <TradeReviewPage /> },
       { path: 'stock-linkage', element: <StockLinkagePage /> },
+      { path: 'macd-alerts', element: <MacdAlertPage /> },
     ],
   },
 ]);

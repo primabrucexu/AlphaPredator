@@ -3,6 +3,7 @@ import {
     CalendarOutlined,
     DatabaseOutlined,
     FireOutlined,
+    LineChartOutlined,
     HomeOutlined,
     RadarChartOutlined,
     StockOutlined,
@@ -21,6 +22,7 @@ const menuItems = [
     {key: '/sentiment', icon: <FireOutlined/>, label: '短线情绪'},
   { key: '/results', icon: <RadarChartOutlined />, label: 'AI 选股结果' },
   { key: '/stock-linkage', icon: <StockOutlined />, label: '联动套利' },
+  { key: '/macd-alerts', icon: <LineChartOutlined />, label: 'MACD 预警' },
   { key: '/trade-review', icon: <CalendarOutlined />, label: '交易复盘' },
   { key: '/initialize', icon: <SettingOutlined />, label: '数据初始化' },
 ];
