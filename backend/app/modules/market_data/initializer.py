@@ -37,7 +37,7 @@ from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_parent, ensure_d
 from app.db.sqlite import ensure_sqlite_schema
 from app.modules.market_data.data_source import _get_mairui_licence, _resolve_stock_universe, \
     _mairui_fetch_history_rows, MairuiHttpStatusError, UnlistedStockSkipError, fetch_5m_history_rows, \
-    fetch_daily_bars_by_date, sync_stock_list_to_sqlite
+    fetch_daily_bars_by_date, get_last_market_data_rate_wait, sync_stock_list_to_sqlite
 from app.modules.market_data.jygs_review import check_jygs_auth_available, fetch_and_parse_jygs_review_for_date
 from app.modules.market_data.limit_rules import compute_limit_fields
 from app.modules.market_data.mairui_config import load_mairui_config
@@ -59,6 +59,7 @@ class _StockFetchResult:
     raw_rows: list[dict[str, Any]]
     fetch_elapsed: float
     error: str = ''
+    rate_wait: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,7 @@ class _Stock5mFetchResult:
     raw_rows: list[dict[str, Any]]
     fetch_elapsed: float
     error: str = ''
+    rate_wait: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +138,25 @@ def _derive_fetch_concurrency(rate_limit_per_minute: int) -> int:
     if rate <= 0:
         raise ValueError('rate_limit_per_minute must be greater than 0')
     return max(1, min(16, math.ceil((rate / 60.0) * 2)))
+
+
+def _adaptive_fetch_window(
+    *,
+    fetch_elapsed: float,
+    rate_wait: float,
+    rate_limit_per_minute: int,
+    max_concurrency: int,
+) -> int:
+    if max_concurrency <= 1:
+        return 1
+    rate = int(rate_limit_per_minute)
+    if rate <= 0:
+        raise ValueError('rate_limit_per_minute must be greater than 0')
+
+    request_interval = 60.0 / float(rate)
+    network_elapsed = max(0.0, float(fetch_elapsed) - float(rate_wait))
+    target = math.ceil(network_elapsed / request_interval)
+    return max(1, min(max_concurrency, target))
 
 
 # ---------------------------------------------------------------------------
@@ -520,7 +541,15 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
             try:
                 if task_type == 'MARKET_DATA':
                     for idx, fetch_result in enumerate(
-                        _iter_market_data_results(task_id, stock_items, start_date, end_date, sqlite_path, concurrency)
+                        _iter_market_data_results(
+                            task_id,
+                            stock_items,
+                            start_date,
+                            end_date,
+                            sqlite_path,
+                            concurrency,
+                            mairui_config.rate_limit_per_minute,
+                        )
                     ):
                         if fetch_result.stock_code == '':
                             logger.info(
@@ -546,7 +575,15 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
                             logger.warning('Task %s: continue after stock failure %s', task_id, fetch_result.stock_code)
                 else:
                     for idx, fetch_result in enumerate(
-                        _iter_market_data_5m_results(task_id, stock_items, start_date, end_date, sqlite_path, concurrency)
+                        _iter_market_data_5m_results(
+                            task_id,
+                            stock_items,
+                            start_date,
+                            end_date,
+                            sqlite_path,
+                            concurrency,
+                            mairui_config.rate_limit_per_minute,
+                        )
                     ):
                         if fetch_result.stock_code == '':
                             logger.info(
@@ -683,7 +720,14 @@ def _fetch_one_stock_result(
         raw_rows = _mairui_fetch_history_rows(stock_code, start_date, end_date)
     except UnlistedStockSkipError as exc:
         logger.info('Task %s: skip %s: %s', task_id, stock_code, exc)
-        return _StockFetchResult(stock_code, stock_name, True, [], time.monotonic() - t0)
+        return _StockFetchResult(
+            stock_code,
+            stock_name,
+            True,
+            [],
+            time.monotonic() - t0,
+            rate_wait=get_last_market_data_rate_wait(),
+        )
     except MairuiHttpStatusError:
         logger.exception('Task %s: fatal Mairui HTTP error while fetching %s', task_id, stock_code)
         raise
@@ -696,6 +740,7 @@ def _fetch_one_stock_result(
             [],
             time.monotonic() - t0,
             f'Fetch failed for {stock_code}: {exc}',
+            rate_wait=get_last_market_data_rate_wait(),
         )
 
     fetch_elapsed = time.monotonic() - t0
@@ -703,7 +748,14 @@ def _fetch_one_stock_result(
         'Task %s: fetched %s — %d rows in %.1fs',
         task_id, stock_code, len(raw_rows), fetch_elapsed,
     )
-    return _StockFetchResult(stock_code, stock_name, True, raw_rows, fetch_elapsed)
+    return _StockFetchResult(
+        stock_code,
+        stock_name,
+        True,
+        raw_rows,
+        fetch_elapsed,
+        rate_wait=get_last_market_data_rate_wait(),
+    )
 
 
 def _iter_market_data_results(
@@ -713,6 +765,7 @@ def _iter_market_data_results(
     end_date: str,
     sqlite_path: Path | None,
     concurrency: int,
+    rate_limit_per_minute: int,
 ):
     if concurrency <= 1:
         for stock_code, stock_name in stock_items:
@@ -725,6 +778,7 @@ def _iter_market_data_results(
     with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix='market-fetch') as executor:
         pending: set[Future[_StockFetchResult]] = set()
         next_index = 0
+        current_window = 1
 
         def submit_next() -> None:
             nonlocal next_index
@@ -736,8 +790,11 @@ def _iter_market_data_results(
             )
             next_index += 1
 
-        while next_index < len(stock_items) and len(pending) < concurrency:
-            submit_next()
+        def fill_pending() -> None:
+            while next_index < len(stock_items) and len(pending) < current_window:
+                submit_next()
+
+        fill_pending()
 
         while pending:
             if _is_task_terminated(task_id, sqlite_path):
@@ -749,12 +806,19 @@ def _iter_market_data_results(
             done, pending = wait(pending, return_when=FIRST_COMPLETED)
             for future in done:
                 try:
-                    yield future.result()
+                    fetch_result = future.result()
+                    yield fetch_result
+                    current_window = _adaptive_fetch_window(
+                        fetch_elapsed=fetch_result.fetch_elapsed,
+                        rate_wait=fetch_result.rate_wait,
+                        rate_limit_per_minute=rate_limit_per_minute,
+                        max_concurrency=concurrency,
+                    )
                 except MairuiHttpStatusError:
                     for pending_future in pending:
                         pending_future.cancel()
                     raise
-                submit_next()
+                fill_pending()
 
 
 def _fetch_one_stock_5m_result(
@@ -769,7 +833,13 @@ def _fetch_one_stock_5m_result(
         raw_rows = fetch_5m_history_rows(stock_code, start_date, end_date)
     except UnlistedStockSkipError as exc:
         logger.info('Task %s: skip 5m %s: %s', task_id, stock_code, exc)
-        return _Stock5mFetchResult(stock_code, True, [], time.monotonic() - t0)
+        return _Stock5mFetchResult(
+            stock_code,
+            True,
+            [],
+            time.monotonic() - t0,
+            rate_wait=get_last_market_data_rate_wait(),
+        )
     except MairuiHttpStatusError:
         logger.exception('Task %s: fatal Mairui HTTP error while fetching 5m %s', task_id, stock_code)
         raise
@@ -781,6 +851,7 @@ def _fetch_one_stock_5m_result(
             [],
             time.monotonic() - t0,
             f'5m fetch failed for {stock_code}: {exc}',
+            rate_wait=get_last_market_data_rate_wait(),
         )
 
     fetch_elapsed = time.monotonic() - t0
@@ -788,7 +859,13 @@ def _fetch_one_stock_5m_result(
         'Task %s: fetched 5m %s — %d rows in %.1fs',
         task_id, stock_code, len(raw_rows), fetch_elapsed,
     )
-    return _Stock5mFetchResult(stock_code, True, raw_rows, fetch_elapsed)
+    return _Stock5mFetchResult(
+        stock_code,
+        True,
+        raw_rows,
+        fetch_elapsed,
+        rate_wait=get_last_market_data_rate_wait(),
+    )
 
 
 def _iter_market_data_5m_results(
@@ -798,6 +875,7 @@ def _iter_market_data_5m_results(
     end_date: str,
     sqlite_path: Path | None,
     concurrency: int,
+    rate_limit_per_minute: int,
 ):
     if concurrency <= 1:
         for stock_code, _stock_name in stock_items:
@@ -810,6 +888,7 @@ def _iter_market_data_5m_results(
     with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix='market-5m-fetch') as executor:
         pending: set[Future[_Stock5mFetchResult]] = set()
         next_index = 0
+        current_window = 1
 
         def submit_next() -> None:
             nonlocal next_index
@@ -819,8 +898,11 @@ def _iter_market_data_5m_results(
             pending.add(executor.submit(_fetch_one_stock_5m_result, task_id, stock_code, start_date, end_date))
             next_index += 1
 
-        while next_index < len(stock_items) and len(pending) < concurrency:
-            submit_next()
+        def fill_pending() -> None:
+            while next_index < len(stock_items) and len(pending) < current_window:
+                submit_next()
+
+        fill_pending()
 
         while pending:
             if _is_task_terminated(task_id, sqlite_path):
@@ -832,12 +914,19 @@ def _iter_market_data_5m_results(
             done, pending = wait(pending, return_when=FIRST_COMPLETED)
             for future in done:
                 try:
-                    yield future.result()
+                    fetch_result = future.result()
+                    yield fetch_result
+                    current_window = _adaptive_fetch_window(
+                        fetch_elapsed=fetch_result.fetch_elapsed,
+                        rate_wait=fetch_result.rate_wait,
+                        rate_limit_per_minute=rate_limit_per_minute,
+                        max_concurrency=concurrency,
+                    )
                 except MairuiHttpStatusError:
                     for pending_future in pending:
                         pending_future.cancel()
                     raise
-                submit_next()
+                fill_pending()
 
 
 def _write_one_stock_5m_result(

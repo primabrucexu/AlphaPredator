@@ -4,7 +4,7 @@ Mairui data source adapter.
 Fetches A-share market data via Mairui and converts it into
 the internal batch format used by import_market_data_batch().
 
-Rate limiting: token bucket controlled by the Mairui JSON config.
+Rate limiting: paced request limiter controlled by the Mairui JSON config.
 Stock universe: fetched from Mairui remote API.
 """
 
@@ -48,52 +48,48 @@ class MairuiHttpStatusError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# Rate limiter (token bucket, thread-safe)
+# Rate limiter (paced, thread-safe)
 # ---------------------------------------------------------------------------
 
 
 class _TokenBucket:
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._tokens: float | None = None
-        self._updated_at: float | None = None
+        self._next_available_at: float | None = None
 
     def acquire(self) -> float:
-        """Wait until one request token is available and return total wait seconds."""
+        """Wait until the next paced request slot is available and return wait seconds."""
         rate_per_minute = load_mairui_config().rate_limit_per_minute
         if rate_per_minute <= 0:
             raise ValueError('rate_limit_per_minute must be greater than 0')
 
-        capacity = float(rate_per_minute)
-        refill_per_second = capacity / 60.0
-        total_wait = 0.0
+        interval_seconds = 60.0 / float(rate_per_minute)
 
         with self._lock:
-            while True:
-                now = time.monotonic()
-                if self._tokens is None or self._updated_at is None:
-                    self._tokens = capacity
-                    self._updated_at = now
-                else:
-                    elapsed = max(0.0, now - self._updated_at)
-                    self._tokens = min(capacity, self._tokens + elapsed * refill_per_second)
-                    self._updated_at = now
+            now = time.monotonic()
+            if self._next_available_at is None or now >= self._next_available_at:
+                self._next_available_at = now + interval_seconds
+                return 0.0
 
-                if self._tokens >= 1.0:
-                    self._tokens -= 1.0
-                    return total_wait
+            wait = self._next_available_at - now
+            self._next_available_at += interval_seconds
 
-                missing_tokens = 1.0 - self._tokens
-                wait = missing_tokens / refill_per_second
-                total_wait += wait
-                time.sleep(wait)
+        time.sleep(wait)
+        return wait
 
 
 _market_data_token_bucket = _TokenBucket()
+_market_data_rate_state = threading.local()
+
+
+def get_last_market_data_rate_wait() -> float:
+    return float(getattr(_market_data_rate_state, 'last_rate_wait', 0.0) or 0.0)
 
 
 def _acquire_market_data_token() -> float:
-    return _market_data_token_bucket.acquire()
+    rate_wait = _market_data_token_bucket.acquire()
+    _market_data_rate_state.last_rate_wait = rate_wait
+    return rate_wait
 
 
 def _rate_limited_call(func: Any, **kwargs: Any) -> Any:

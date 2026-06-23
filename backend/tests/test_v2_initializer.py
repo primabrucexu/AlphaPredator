@@ -17,6 +17,7 @@ from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
 from app.modules.market_data.data_source import MairuiHttpStatusError, _to_full_code, load_stock_list
 from app.modules.market_data.initializer import (
     _atomic_write_day,
+    _adaptive_fetch_window,
     _derive_fetch_concurrency,
     _generate_date_list,
     _idle_status,
@@ -351,6 +352,33 @@ def test_derive_fetch_concurrency_from_rate_limit_per_minute() -> None:
     assert _derive_fetch_concurrency(60) == 2
     assert _derive_fetch_concurrency(300) == 10
     assert _derive_fetch_concurrency(1200) == 16
+
+
+def test_adaptive_fetch_window_uses_network_time_and_can_reduce_after_rate_wait() -> None:
+    assert _adaptive_fetch_window(
+        fetch_elapsed=0.4,
+        rate_wait=0.0,
+        rate_limit_per_minute=300,
+        max_concurrency=16,
+    ) == 2
+    assert _adaptive_fetch_window(
+        fetch_elapsed=0.8,
+        rate_wait=0.4,
+        rate_limit_per_minute=300,
+        max_concurrency=16,
+    ) == 2
+    assert _adaptive_fetch_window(
+        fetch_elapsed=2.0,
+        rate_wait=0.0,
+        rate_limit_per_minute=300,
+        max_concurrency=16,
+    ) == 10
+    assert _adaptive_fetch_window(
+        fetch_elapsed=0.05,
+        rate_wait=0.0,
+        rate_limit_per_minute=300,
+        max_concurrency=16,
+    ) == 1
 
 
 def test_retry_task_restarts_failed_task(tmp_path: Path) -> None:

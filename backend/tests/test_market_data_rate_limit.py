@@ -13,7 +13,7 @@ def _config(rate_limit_per_minute: int):
     return type('Config', (), {'rate_limit_per_minute': rate_limit_per_minute})()
 
 
-def test_token_bucket_uses_settings_rate_without_300_cap() -> None:
+def test_token_bucket_paces_requests_without_minute_burst() -> None:
     bucket = data_source._TokenBucket()
     now = {'value': 100.0}
     sleeps: list[float] = []
@@ -30,12 +30,12 @@ def test_token_bucket_uses_settings_rate_without_300_cap() -> None:
         patch('app.modules.market_data.data_source.time.monotonic', side_effect=fake_monotonic),
         patch('app.modules.market_data.data_source.time.sleep', side_effect=fake_sleep),
     ):
-        for _ in range(1000):
-            assert bucket.acquire() == 0.0
         waited = bucket.acquire()
+        second_waited = bucket.acquire()
 
+    assert waited == 0.0
     assert sleeps == [pytest.approx(0.06)]
-    assert waited == pytest.approx(0.06)
+    assert second_waited == pytest.approx(0.06)
 
 
 def test_token_bucket_rejects_non_positive_settings_rate() -> None:
