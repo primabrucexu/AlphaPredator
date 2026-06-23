@@ -493,12 +493,10 @@ export function getMairuiLicenceConfig(): Promise<MairuiLicenceConfigResponse> {
 export function saveMairuiLicence(
     licence: string,
     rateLimitPerMinute: number,
-    fetchConcurrency: number,
 ): Promise<MairuiLicenceConfigResponse> {
     return postJson<MairuiLicenceConfigResponse>('/api/data-init/licence', {
         licence,
         rate_limit_per_minute: rateLimitPerMinute,
-        fetch_concurrency: fetchConcurrency,
     });
 }
 

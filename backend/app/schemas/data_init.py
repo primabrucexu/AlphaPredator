@@ -44,7 +44,7 @@ class MairuiLicenceConfigResponse(BaseModel):
 class SaveMairuiLicenceRequest(BaseModel):
     licence: str = Field('', description='麦蕊 licence 原文；留空时保留现有配置')
     rate_limit_per_minute: int = Field(..., ge=1, description='麦蕊请求速率限制（次/分钟）')
-    fetch_concurrency: int = Field(..., ge=1, description='行情数据并发拉取数量')
+    fetch_concurrency: int | None = Field(None, ge=1, description='兼容旧前端字段；新任务并发由请求速率自动推导')
 
 
 

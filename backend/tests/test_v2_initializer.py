@@ -17,6 +17,7 @@ from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
 from app.modules.market_data.data_source import MairuiHttpStatusError, _to_full_code, load_stock_list
 from app.modules.market_data.initializer import (
     _atomic_write_day,
+    _derive_fetch_concurrency,
     _generate_date_list,
     _idle_status,
     _write_duckdb_day,
@@ -345,6 +346,13 @@ def test_start_task_returns_false_when_already_running(tmp_path: Path) -> None:
     assert started is False
 
 
+def test_derive_fetch_concurrency_from_rate_limit_per_minute() -> None:
+    assert _derive_fetch_concurrency(30) == 1
+    assert _derive_fetch_concurrency(60) == 2
+    assert _derive_fetch_concurrency(300) == 10
+    assert _derive_fetch_concurrency(1200) == 16
+
+
 def test_retry_task_restarts_failed_task(tmp_path: Path) -> None:
     sqlite_path = tmp_path / 'test.db'
     duckdb_path = tmp_path / 'test.duckdb'
@@ -656,7 +664,7 @@ def test_task_stops_on_mairui_http_status_error(tmp_path: Path) -> None:
             fp=None,
         ))
 
-    config = type('Config', (), {'fetch_concurrency': 1})()
+    config = type('Config', (), {'rate_limit_per_minute': 30})()
 
     with (
         _patch_licence(),
@@ -716,7 +724,7 @@ def test_market_data_task_reuses_one_duckdb_connection(tmp_path: Path) -> None:
         task = create_task('20240102', '20240102', sqlite_path=sqlite_path)
 
     fake_conn = _FakeDuckdbConnection()
-    config = type('Config', (), {'fetch_concurrency': 1})()
+    config = type('Config', (), {'rate_limit_per_minute': 30})()
 
     with (
         _patch_licence(),
@@ -756,7 +764,7 @@ def test_market_data_task_stops_on_duckdb_write_failure(tmp_path: Path) -> None:
         return _mock_mairui_fetch_history_rows(stock_code, start_date, end_date)
 
     fake_conn = _FakeDuckdbConnection(fail_on_executemany=True)
-    config = type('Config', (), {'fetch_concurrency': 1})()
+    config = type('Config', (), {'rate_limit_per_minute': 30})()
 
     with (
         _patch_licence(),

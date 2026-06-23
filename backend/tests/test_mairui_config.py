@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from app.modules.market_data import mairui_config
+from app.schemas.data_init import SaveMairuiLicenceRequest
 
 
 def test_save_and_load_mairui_json_config(tmp_path) -> None:
@@ -71,3 +72,13 @@ def test_mairui_config_rejects_invalid_rate_or_concurrency(tmp_path) -> None:
                 rate_limit_per_minute=1000,
                 fetch_concurrency=0,
             )
+
+
+def test_save_mairui_request_allows_omitting_fetch_concurrency() -> None:
+    request = SaveMairuiLicenceRequest(
+        licence='LICENCE',
+        rate_limit_per_minute=1200,
+    )
+
+    assert request.rate_limit_per_minute == 1200
+    assert request.fetch_concurrency is None

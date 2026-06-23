@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
+import math
 import logging
 import threading
 import time
@@ -127,6 +128,14 @@ def _to_decimal(value: Any, default: str = '0') -> Decimal:
         return Decimal(text)
     except (InvalidOperation, ValueError, TypeError):
         return Decimal(default)
+
+
+def _derive_fetch_concurrency(rate_limit_per_minute: int) -> int:
+    """Derive stock fetch concurrency from the global per-minute request limit."""
+    rate = int(rate_limit_per_minute)
+    if rate <= 0:
+        raise ValueError('rate_limit_per_minute must be greater than 0')
+    return max(1, min(16, math.ceil((rate / 60.0) * 2)))
 
 
 # ---------------------------------------------------------------------------
@@ -497,12 +506,14 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
             # Keep total_items as full universe size for stable resume progress.
             _task_repo(sqlite_path).set_total_items(task_id, len(all_stocks_df))
 
-            concurrency = load_mairui_config().fetch_concurrency
+            mairui_config = load_mairui_config()
+            concurrency = _derive_fetch_concurrency(mairui_config.rate_limit_per_minute)
             logger.info(
-                'Task %s: %s fetch concurrency=%d',
+                'Task %s: %s fetch concurrency=%d rate_limit=%d/min',
                 task_id,
                 task_type,
                 concurrency,
+                mairui_config.rate_limit_per_minute,
             )
 
             duckdb_conn = _connect_duckdb(duckdb_path)

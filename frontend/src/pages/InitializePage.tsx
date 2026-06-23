@@ -128,8 +128,7 @@ export function InitializePage() {
 
   const [mairuiConfig, setMairuiConfig] = useState<MairuiLicenceConfigResponse | null>(null);
   const [mairuiLicenceInput, setMairuiLicenceInput] = useState('');
-  const [mairuiRateLimitInput, setMairuiRateLimitInput] = useState(1000);
-  const [mairuiFetchConcurrencyInput, setMairuiFetchConcurrencyInput] = useState(4);
+  const [mairuiRateLimitInput, setMairuiRateLimitInput] = useState(300);
   const [mairuiSaveLoading, setMairuiSaveLoading] = useState(false);
   const [mairuiMessage, setMairuiMessage] = useState<string | null>(null);
 
@@ -177,7 +176,6 @@ export function InitializePage() {
           setJygsStatus(jygs);
           setMairuiConfig(mairui);
           setMairuiRateLimitInput(mairui.rate_limit_per_minute);
-          setMairuiFetchConcurrencyInput(mairui.fetch_concurrency);
       })
       .catch(() => {});
   }, []);
@@ -344,10 +342,9 @@ export function InitializePage() {
     setMairuiMessage(null);
     setMairuiSaveLoading(true);
     try {
-      const config = await saveMairuiLicence(value, mairuiRateLimitInput, mairuiFetchConcurrencyInput);
+      const config = await saveMairuiLicence(value, mairuiRateLimitInput);
       setMairuiConfig(config);
       setMairuiRateLimitInput(config.rate_limit_per_minute);
-      setMairuiFetchConcurrencyInput(config.fetch_concurrency);
       setMairuiLicenceInput('');
       setMairuiMessage('麦蕊数据源配置已保存');
       const overview = await getInitV2Overview();
@@ -638,17 +635,7 @@ export function InitializePage() {
                   style={{width: '100%'}}
               />
             </Col>
-            <Col xs={24} sm={12} lg={4}>
-              <Typography.Text type="secondary">并发拉取数</Typography.Text>
-              <InputNumber
-                  min={1}
-                  precision={0}
-                  value={mairuiFetchConcurrencyInput}
-                  onChange={(value) => setMairuiFetchConcurrencyInput(Number(value || 1))}
-                  style={{width: '100%'}}
-              />
-            </Col>
-            <Col xs={24} lg={3}>
+            <Col xs={24} lg={7}>
               <Button
                   type="primary"
                   loading={mairuiSaveLoading}
@@ -661,7 +648,7 @@ export function InitializePage() {
           </Row>
 
           <Typography.Text type="secondary" style={{fontSize: 12}}>
-            保存后将写入后端 JSON 配置文件，并用于后续麦蕊行情接口请求和初始化任务并发拉取。
+            保存后将写入后端 JSON 配置文件。请求速率用于全局麦蕊接口限速，初始化任务并发数由后端自动推导。
           </Typography.Text>
         </Space>
       </Card>

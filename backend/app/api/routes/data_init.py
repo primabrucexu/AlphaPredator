@@ -90,7 +90,7 @@ def save_mairui_licence(body: SaveMairuiLicenceRequest) -> MairuiLicenceConfigRe
     config = save_mairui_config(
         licence=licence,
         rate_limit_per_minute=body.rate_limit_per_minute,
-        fetch_concurrency=body.fetch_concurrency,
+        fetch_concurrency=body.fetch_concurrency or current_config.fetch_concurrency,
     )
 
     return MairuiLicenceConfigResponse(

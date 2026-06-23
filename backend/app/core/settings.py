@@ -33,7 +33,7 @@ class Settings:
     mairui_base_url: str = 'https://api.mairuiapi.com'
     mairui_config_path: Path = DATA_DIR / 'config' / 'mairui.json'
     jygs_config_path: Path = DATA_DIR / 'config' / 'jygs_auth.json'
-    market_data_rate_limit: int = 1000
+    market_data_rate_limit: int = 300
     mairui_fetch_concurrency: int = 4
     # 韭研公社配置
     jygs_site_url: str = 'https://www.jiuyangongshe.com'
