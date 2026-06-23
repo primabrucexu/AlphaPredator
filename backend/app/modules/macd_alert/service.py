@@ -25,6 +25,12 @@ PATTERN_NAME = '金叉临界'
 DISCLAIMER = '以下为技术形态观察结果，不构成买卖建议。'
 MACD_ALERT_SCAN_TASK_TYPE = 'MACD_ALERT_SCAN'
 
+_pending_green_shrink_days: dict[str, int] = {}
+
+
+def _get_green_shrink_days(task_id: str, default: int = 2) -> int:
+    return _pending_green_shrink_days.pop(task_id, default)
+
 
 def _session_factory(sqlite_path: Path | None = None):
     return get_sqlite_session_factory(sqlite_path)
@@ -228,9 +234,15 @@ def _find_candidate_on_date(
     return None
 
 
-def _last_limit_up_info(sqlite_path: Path | None, stock_code: str, trade_date: str) -> dict[str, Any]:
-    session_factory = _session_factory(sqlite_path)
-    with session_factory() as session:
+def _last_limit_up_info(sqlite_path: Path | None, stock_code: str, trade_date: str, _session: Any = None) -> dict[str, Any]:
+    if _session is not None:
+        session = _session
+        needs_close = False
+    else:
+        session_factory = _session_factory(sqlite_path)
+        session = session_factory()
+        needs_close = True
+    try:
         row = session.exec(
             select(DailyHotInfo)
             .where(
@@ -259,13 +271,22 @@ def _last_limit_up_info(sqlite_path: Path | None, stock_code: str, trade_date: s
             'last_limit_up_theme': row.hot_theme,
             'last_limit_up_days_ago': len(days),
         }
+    finally:
+        if needs_close:
+            session.close()
 
 
-def _theme_heat(sqlite_path: Path | None, theme: str | None, trade_date: str, window_days: int = 5) -> dict[str, Any]:
+def _theme_heat(sqlite_path: Path | None, theme: str | None, trade_date: str, window_days: int = 5, _session: Any = None) -> dict[str, Any]:
     if not theme:
         return {'theme_recent_limit_up_count': 0, 'theme_recent_rank': None, 'theme_heat_level': 'none'}
-    session_factory = _session_factory(sqlite_path)
-    with session_factory() as session:
+    if _session is not None:
+        session = _session
+        needs_close = False
+    else:
+        session_factory = _session_factory(sqlite_path)
+        session = session_factory()
+        needs_close = True
+    try:
         days = list(session.exec(
             select(DailyHotInfo.trade_date)
             .distinct()
@@ -281,6 +302,9 @@ def _theme_heat(sqlite_path: Path | None, theme: str | None, trade_date: str, wi
                 DailyHotInfo.hot_theme != '',
             )
         ).all()
+    finally:
+        if needs_close:
+            session.close()
     theme_stocks: dict[str, set[str]] = {}
     for row in rows:
         theme_stocks.setdefault(row.hot_theme, set()).add(row.stock_code)
@@ -313,6 +337,7 @@ def _build_sample(
     idx: int,
     candidate: AlertCandidate,
     sqlite_path: Path | None,
+    _session: Any = None,
 ) -> dict[str, Any]:
     buy_idx = idx + 1
     if buy_idx >= len(bars):
@@ -364,8 +389,8 @@ def _build_sample(
             if sell_price is not None:
                 return_pct = sell_price / buy_bar.open - 1
                 holding_days = bars.index(next(bar for bar in bars if bar.trade_date == sell_date)) - buy_idx + 1
-    last_limit = _last_limit_up_info(sqlite_path, stock['code'], candidate.trade_date)
-    heat = _theme_heat(sqlite_path, last_limit['last_limit_up_theme'], candidate.trade_date)
+    last_limit = _last_limit_up_info(sqlite_path, stock['code'], candidate.trade_date, _session)
+    heat = _theme_heat(sqlite_path, last_limit['last_limit_up_theme'], candidate.trade_date, _session=_session)
     created_at = _now()
     return {
         'id': str(uuid.uuid4()),
@@ -482,8 +507,8 @@ def _upsert_alert(session: Any, candidate: AlertCandidate, stock: dict[str, str]
     ).first()
     alert_id = existing.id if existing else str(uuid.uuid4())
     created_at = existing.created_at if existing else now
-    last_limit = _last_limit_up_info(sqlite_path, stock['code'], candidate.trade_date)
-    heat = _theme_heat(sqlite_path, last_limit['last_limit_up_theme'], candidate.trade_date)
+    last_limit = _last_limit_up_info(sqlite_path, stock['code'], candidate.trade_date, session)
+    heat = _theme_heat(sqlite_path, last_limit['last_limit_up_theme'], candidate.trade_date, _session=session)
     row = MacdAlertResult(
         id=alert_id,
         trade_date=candidate.trade_date,
@@ -611,12 +636,12 @@ def create_macd_alert_scan_task(
         raise ValueError('第一版后台扫描仅支持默认主板股票池')
     if exclude_st is not True:
         raise ValueError('第一版后台扫描默认排除 ST')
-    if green_shrink_days != 2:
-        raise ValueError('第一版后台扫描暂只支持连续 2 天绿柱缩短')
     from app.modules.market_data.initializer import create_task
 
     day = trade_date.replace('-', '')
-    return create_task(day, day, task_type=MACD_ALERT_SCAN_TASK_TYPE, sqlite_path=sqlite_path)
+    task = create_task(day, day, task_type=MACD_ALERT_SCAN_TASK_TYPE, sqlite_path=sqlite_path)
+    _pending_green_shrink_days[task['task_id']] = green_shrink_days
+    return task
 
 
 def _load_alert_rows(sqlite_path: Path | None, source_trade_date: str) -> list[Any]:

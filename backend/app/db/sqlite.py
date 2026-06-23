@@ -1,6 +1,7 @@
 import sqlite3
 from pathlib import Path
 
+from sqlalchemy import event
 from sqlmodel import create_engine
 
 from app.core.settings import settings
@@ -16,7 +17,7 @@ def ensure_sqlite_parent(sqlite_path: Path | None = None) -> Path:
 
 def connect_sqlite(sqlite_path: Path | None = None) -> sqlite3.Connection:
     target_path = ensure_sqlite_parent(sqlite_path)
-    connection = sqlite3.connect(target_path)
+    connection = sqlite3.connect(str(target_path), timeout=30)
     connection.row_factory = sqlite3.Row
     return connection
 
@@ -105,4 +106,42 @@ def ensure_sqlite_schema(sqlite_path: Path | None = None) -> None:
 
 def get_sqlite_engine(sqlite_path: Path | None = None):
     target_path = ensure_sqlite_parent(sqlite_path)
-    return create_engine(f'sqlite:///{target_path}', echo=False)
+    engine = create_engine(
+        f'sqlite:///{target_path}',
+        echo=False,
+        connect_args={'check_same_thread': False, 'timeout': 30},
+    )
+
+    @event.listens_for(engine, 'connect')
+    def _set_pragmas(dbapi_connection, connection_record):  # noqa: ARG001
+        cursor = dbapi_connection.cursor()
+        cursor.execute('PRAGMA journal_mode=WAL')
+        cursor.execute('PRAGMA synchronous=NORMAL')
+        cursor.close()
+
+    return engine
+
+
+def raw_update_task_status(
+    sqlite_path: Path | None,
+    task_id: str,
+    status: str,
+    error_message: str,
+) -> bool:
+    """直接用 sqlite3 更新任务状态，用作 ORM session 失败时的兜底。
+
+    返回 True 表示更新成功。
+    """
+    conn = connect_sqlite(sqlite_path)
+    try:
+        from datetime import datetime
+        conn.execute(
+            "UPDATE task_info SET status=?, error_message=?, task_end_date=? WHERE task_id=?",
+            (status, error_message[:500], datetime.now().strftime('%Y-%m-%d %H:%M:%S'), task_id),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        return False
+    finally:
+        conn.close()

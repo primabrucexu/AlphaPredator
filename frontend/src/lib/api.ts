@@ -523,6 +523,10 @@ export function getInitTask(taskId: string): Promise<TaskResponse> {
   return fetchJson<TaskResponse>(`/api/data-init/tasks/${taskId}`);
 }
 
+export function listInitTasks(limit: number = 100): Promise<TaskResponse[]> {
+  return fetchJson<TaskResponse[]>(`/api/data-init/tasks?limit=${limit}`);
+}
+
 export function getLatestInitTaskByType(taskType: TaskType): Promise<TaskResponse | null> {
   return fetchJson<TaskResponse | null>(`/api/data-init/tasks/latest?task_type=${encodeURIComponent(taskType)}`);
 }

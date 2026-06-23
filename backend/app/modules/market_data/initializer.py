@@ -34,7 +34,7 @@ import pandas as pd
 
 from app.core.settings import settings
 from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_parent, ensure_duckdb_schema
-from app.db.sqlite import ensure_sqlite_schema
+from app.db.sqlite import ensure_sqlite_schema, raw_update_task_status
 from app.modules.market_data.data_source import _get_mairui_licence, _resolve_stock_universe, \
     _mairui_fetch_history_rows, MairuiHttpStatusError, UnlistedStockSkipError, fetch_5m_history_rows, \
     fetch_daily_bars_by_date, get_last_market_data_rate_wait, sync_stock_list_to_sqlite
@@ -664,12 +664,14 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
             logger.info('Task %s: completed %d stocks', task_id, total_stocks)
 
         elif task_type == 'MACD_ALERT_SCAN':
-            from app.modules.macd_alert.service import scan_macd_alerts
+            from app.modules.macd_alert.service import _get_green_shrink_days, scan_macd_alerts
 
             trade_date = datetime.strptime(str(task['start_date']), '%Y%m%d').strftime('%Y-%m-%d')
-            logger.info('Task %s: started for MACD_ALERT_SCAN on %s', task_id, trade_date)
+            green_shrink_days = _get_green_shrink_days(task_id)
+            logger.info('Task %s: started for MACD_ALERT_SCAN on %s, green_shrink_days=%d', task_id, trade_date, green_shrink_days)
             scan_macd_alerts(
                 trade_date=trade_date,
+                green_shrink_days=green_shrink_days,
                 sqlite_path=sqlite_path,
                 duckdb_path=duckdb_path,
                 task_id=task_id,
@@ -749,7 +751,13 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
 
     except Exception as exc:
         logger.exception('Task %s: unexpected error: %s', task_id, exc)
-        _task_repo(sqlite_path).mark_task_failed(task_id, _now_iso(), str(exc))
+        try:
+            _task_repo(sqlite_path).mark_task_failed(task_id, _now_iso(), str(exc))
+        except Exception as fallback_exc:
+            logger.critical('Task %s: mark_task_failed also failed: %s', task_id, fallback_exc)
+            ok = raw_update_task_status(sqlite_path, task_id, 'FAILED', str(exc))
+            if not ok:
+                logger.critical('Task %s: raw_update_task_status also failed', task_id)
 
 
 # ---------------------------------------------------------------------------

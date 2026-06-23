@@ -1,11 +1,12 @@
-import {AlertOutlined, ReloadOutlined, SearchOutlined} from '@ant-design/icons';
-import {Alert, Button, Card, Col, Empty, Form, Input, InputNumber, Progress, Row, Space, Statistic, Table, Tabs, Tag, Typography, message} from 'antd';
+import {AlertOutlined, DownloadOutlined, HistoryOutlined, ReloadOutlined, SearchOutlined} from '@ant-design/icons';
+import {Alert, Badge, Button, Card, Col, Empty, Form, Input, InputNumber, List, Progress, Row, Space, Statistic, Table, Tabs, Tag, Tooltip, Typography, message} from 'antd';
 import type {ColumnsType} from 'antd/es/table';
 import {useEffect, useMemo, useState} from 'react';
 import {Link} from 'react-router-dom';
 import {
   getInitTask,
   getTaskItems,
+  listInitTasks,
   listMacdAlertBacktestSamples,
   listMacdAlertResults,
   scanMacdAlerts,
@@ -49,12 +50,34 @@ const trackColor: Record<string, string> = {
   data_missing: 'default',
 };
 
+const statusColor: Record<string, string> = {
+  PENDING: 'blue',
+  RUNNING: 'processing',
+  SUCCESS: 'green',
+  FAILED: 'red',
+  TERMINATED: 'default',
+};
+
+const statusLabel: Record<string, string> = {
+  PENDING: '等待中',
+  RUNNING: '运行中',
+  SUCCESS: '成功',
+  FAILED: '失败',
+  TERMINATED: '已终止',
+};
+
 function fmtPrice(value: number | null | undefined): string {
   return value == null ? '-' : value.toFixed(2);
 }
 
 function fmtPct(value: number | null | undefined): string {
   return value == null ? '-' : `${(value * 100).toFixed(2)}%`;
+}
+
+function taskDate(task: TaskResponse): string {
+  const d = task.start_date;
+  if (d.length === 8) return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+  return d;
 }
 
 export function MacdAlertPage() {
@@ -69,11 +92,50 @@ export function MacdAlertPage() {
   const [rows, setRows] = useState<MacdAlertResultRow[]>([]);
   const [samples, setSamples] = useState<MacdAlertBacktestSampleRow[]>([]);
   const [selectedAlert, setSelectedAlert] = useState<MacdAlertResultRow | null>(null);
+  const [taskHistory, setTaskHistory] = useState<TaskResponse[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [activeTradeDate, setActiveTradeDate] = useState<string>('');
+  const [activeTab, setActiveTab] = useState<string>('alerts');
+  const [greenShrinkDays, setGreenShrinkDays] = useState<number>(0);
+  const [exporting, setExporting] = useState(false);
+
+  async function refreshTaskHistory() {
+    setHistoryLoading(true);
+    try {
+      const all = await listInitTasks(100);
+      const macdTasks = all.filter(t => t.task_type === 'MACD_ALERT_SCAN');
+      setTaskHistory(macdTasks);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '任务历史加载失败');
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
 
   async function refreshResults(tradeDate: string) {
-    const resultRows = await listMacdAlertResults({trade_date: tradeDate, limit: 100});
+    const resultRows = await listMacdAlertResults({trade_date: tradeDate, limit: 2000});
     setRows(resultRows);
+    if (resultRows.length > 0) {
+      setGreenShrinkDays(resultRows[0].green_shrink_days);
+    }
   }
+
+  useEffect(() => {
+    async function init() {
+      await refreshTaskHistory();
+    }
+    init();
+  }, []);
+
+  useEffect(() => {
+    if (taskHistory.length > 0 && !activeTaskId) {
+      const latest = taskHistory.find(t => t.status === 'SUCCESS');
+      if (latest) {
+        handleSelectTask(latest);
+      }
+    }
+  }, [taskHistory]);
 
   useEffect(() => {
     if (!scanTask || !['PENDING', 'RUNNING'].includes(scanTask.status)) return undefined;
@@ -90,9 +152,15 @@ export function MacdAlertPage() {
         setScanTask(latest);
         setScanTaskItems(items);
         if (latest.status === 'SUCCESS') {
-          if (scanTradeDate) await refreshResults(scanTradeDate);
+          if (scanTradeDate) {
+            await refreshResults(scanTradeDate);
+            setActiveTradeDate(scanTradeDate);
+            setActiveTaskId(scanTask.task_id);
+          }
+          await refreshTaskHistory();
           if (!cancelled) message.success('MACD 扫描任务完成');
         } else if (latest.status === 'FAILED') {
+          await refreshTaskHistory();
           message.error(latest.error_message || 'MACD 扫描任务失败');
         }
       } catch (error) {
@@ -145,17 +213,52 @@ export function MacdAlertPage() {
     }
   }
 
+  async function handleSelectTask(task: TaskResponse) {
+    const tradeDate = taskDate(task);
+    setActiveTaskId(task.task_id);
+    setActiveTradeDate(tradeDate);
+    setRows([]);
+    setSamples([]);
+    setSelectedAlert(null);
+    await refreshResults(tradeDate);
+  }
+
   async function handleTrack(values: TrackFormValues) {
     setTracking(true);
     try {
       const result = await trackMacdAlerts(values.trade_date, values.source_trade_date);
       setTrackSummary(result);
       await refreshResults(values.source_trade_date);
+      setActiveTradeDate(values.source_trade_date);
       message.success(`跟踪完成，处理 ${result.tracked_count} 只`);
     } catch (error) {
       message.error(error instanceof Error ? error.message : 'MACD 跟踪失败');
     } finally {
       setTracking(false);
+    }
+  }
+
+  async function handleExport() {
+    if (!activeTradeDate) return;
+    setExporting(true);
+    try {
+      const resp = await fetch(`/api/macd-alerts/results/export?trade_date=${encodeURIComponent(activeTradeDate)}`);
+      if (!resp.ok) {
+        const detail = await resp.text();
+        throw new Error(detail || '导出失败');
+      }
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `macd-alert-${activeTradeDate}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      message.success('CSV 导出完成');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'CSV 导出失败');
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -165,6 +268,7 @@ export function MacdAlertPage() {
     try {
       const sampleRows = await listMacdAlertBacktestSamples(row.id, 100);
       setSamples(sampleRows);
+      setActiveTab('samples');
     } catch (error) {
       message.error(error instanceof Error ? error.message : '历史样本加载失败');
     }
@@ -177,15 +281,17 @@ export function MacdAlertPage() {
         fixed: 'left',
         width: 150,
         render: (_, row) => <Link to={`/stocks/${row.stock_code}`}>{row.stock_name || row.stock_code}</Link>,
+        sorter: (a, b) => (a.stock_name || a.stock_code).localeCompare(b.stock_name || b.stock_code, 'zh'),
       },
-      {title: '代码', dataIndex: 'stock_code', width: 90},
+      {title: '代码', dataIndex: 'stock_code', width: 90, sorter: (a, b) => a.stock_code.localeCompare(b.stock_code)},
       {
         title: '类型',
         dataIndex: 'cross_zone',
         width: 90,
         render: (value: string) => <Tag color={value === 'underwater' ? 'blue' : 'green'}>{zoneText[value] ?? value}</Tag>,
+        sorter: (a, b) => a.cross_zone.localeCompare(b.cross_zone),
       },
-      {title: '收盘价', dataIndex: 'close_price', width: 90, render: fmtPrice},
+      {title: '收盘价', dataIndex: 'close_price', width: 90, render: fmtPrice, sorter: (a, b) => a.close_price - b.close_price},
       {
         title: '金叉价',
         width: 120,
@@ -197,9 +303,9 @@ export function MacdAlertPage() {
         ),
         sorter: (a, b) => a.cross_trigger_distance_pct - b.cross_trigger_distance_pct,
       },
-      {title: '金叉距离', dataIndex: 'cross_trigger_distance_pct', width: 105, render: fmtPct},
-      {title: '维持价', dataIndex: 'next_trend_keep_price', width: 95, render: fmtPrice},
-      {title: '维持距离', dataIndex: 'trend_keep_distance_pct', width: 105, render: fmtPct},
+      {title: '金叉距离', dataIndex: 'cross_trigger_distance_pct', width: 105, render: fmtPct, sorter: (a, b) => a.cross_trigger_distance_pct - b.cross_trigger_distance_pct},
+      {title: '维持价', dataIndex: 'next_trend_keep_price', width: 95, render: fmtPrice, sorter: (a, b) => a.next_trend_keep_price - b.next_trend_keep_price},
+      {title: '维持距离', dataIndex: 'trend_keep_distance_pct', width: 105, render: fmtPct, sorter: (a, b) => a.trend_keep_distance_pct - b.trend_keep_distance_pct},
       {
         title: '题材',
         width: 150,
@@ -209,17 +315,19 @@ export function MacdAlertPage() {
             <Tag color={heatColor[row.theme_heat_level] ?? 'default'}>{row.theme_heat_level}</Tag>
           </Space>
         ) : '近120日无题材',
+        sorter: (a, b) => (a.last_limit_up_theme || '').localeCompare(b.last_limit_up_theme || '', 'zh'),
       },
       {
         title: '跟踪',
         dataIndex: 'track_status',
         width: 120,
         render: (value: string) => <Tag color={trackColor[value] ?? 'default'}>{value}</Tag>,
+        sorter: (a, b) => a.track_status.localeCompare(b.track_status),
       },
-      {title: '样本', dataIndex: 'backtest_sample_count', width: 80},
-      {title: '金叉率', dataIndex: 'backtest_cross_success_rate', width: 95, render: fmtPct},
-      {title: '胜率', dataIndex: 'backtest_win_rate', width: 95, render: fmtPct},
-      {title: '均收益', dataIndex: 'backtest_avg_return_pct', width: 95, render: fmtPct},
+      {title: '样本', dataIndex: 'backtest_sample_count', width: 80, sorter: (a, b) => a.backtest_sample_count - b.backtest_sample_count},
+      {title: '金叉率', dataIndex: 'backtest_cross_success_rate', width: 95, render: fmtPct, sorter: (a, b) => (a.backtest_cross_success_rate ?? 0) - (b.backtest_cross_success_rate ?? 0)},
+      {title: '胜率', dataIndex: 'backtest_win_rate', width: 95, render: fmtPct, sorter: (a, b) => (a.backtest_win_rate ?? 0) - (b.backtest_win_rate ?? 0)},
+      {title: '均收益', dataIndex: 'backtest_avg_return_pct', width: 95, render: fmtPct, sorter: (a, b) => (a.backtest_avg_return_pct ?? 0) - (b.backtest_avg_return_pct ?? 0)},
       {
         title: '操作',
         fixed: 'right',
@@ -235,15 +343,15 @@ export function MacdAlertPage() {
   );
 
   const sampleColumns: ColumnsType<MacdAlertBacktestSampleRow> = [
-    {title: '预警日', dataIndex: 'alert_date', width: 110},
-    {title: 'T+1 状态', dataIndex: 't1_track_status', width: 150, render: (value: string | null) => value ?? '-'},
-    {title: '金叉日', dataIndex: 'cross_date', width: 110, render: (value: string | null) => value ?? '-'},
-    {title: '金叉类型', dataIndex: 'cross_type', width: 110, render: (value: string | null) => value ?? '-'},
-    {title: '卖出日', dataIndex: 'sell_date', width: 110, render: (value: string | null) => value ?? '-'},
-    {title: '卖出原因', dataIndex: 'sell_reason', width: 110, render: (value: string | null) => value ?? '-'},
-    {title: '收益率', dataIndex: 'return_pct', width: 100, render: fmtPct},
-    {title: '持有天数', dataIndex: 'holding_days', width: 95, render: (value: number | null) => value ?? '-'},
-    {title: '状态', dataIndex: 'status', width: 150},
+    {title: '预警日', dataIndex: 'alert_date', width: 110, sorter: (a, b) => a.alert_date.localeCompare(b.alert_date)},
+    {title: 'T+1 状态', dataIndex: 't1_track_status', width: 150, render: (value: string | null) => value ?? '-', sorter: (a, b) => (a.t1_track_status || '').localeCompare(b.t1_track_status || '')},
+    {title: '金叉日', dataIndex: 'cross_date', width: 110, render: (value: string | null) => value ?? '-', sorter: (a, b) => (a.cross_date || '').localeCompare(b.cross_date || '')},
+    {title: '金叉类型', dataIndex: 'cross_type', width: 110, render: (value: string | null) => value ?? '-', sorter: (a, b) => (a.cross_type || '').localeCompare(b.cross_type || '')},
+    {title: '卖出日', dataIndex: 'sell_date', width: 110, render: (value: string | null) => value ?? '-', sorter: (a, b) => (a.sell_date || '').localeCompare(b.sell_date || '')},
+    {title: '卖出原因', dataIndex: 'sell_reason', width: 110, render: (value: string | null) => value ?? '-', sorter: (a, b) => (a.sell_reason || '').localeCompare(b.sell_reason || '')},
+    {title: '收益率', dataIndex: 'return_pct', width: 100, render: fmtPct, sorter: (a, b) => (a.return_pct ?? 0) - (b.return_pct ?? 0)},
+    {title: '持有天数', dataIndex: 'holding_days', width: 95, render: (value: number | null) => value ?? '-', sorter: (a, b) => (a.holding_days ?? 0) - (b.holding_days ?? 0)},
+    {title: '状态', dataIndex: 'status', width: 150, sorter: (a, b) => a.status.localeCompare(b.status)},
   ];
   const scanProgress = scanTaskItems?.progress_percent ?? scanTask?.progress_percent ?? 0;
   const scanRunning = !!scanTask && ['PENDING', 'RUNNING'].includes(scanTask.status);
@@ -351,52 +459,119 @@ export function MacdAlertPage() {
         </Col>
       </Row>
 
-      <Tabs
-        items={[
-          {
-            key: 'alerts',
-            label: '今日预警与跟踪',
-            children: (
-              <Card bodyStyle={{padding: 0}}>
-                <Table<MacdAlertResultRow>
-                  rowKey="id"
-                  columns={alertColumns}
-                  dataSource={rows}
-                  loading={loading || tracking}
-                  scroll={{x: 1600}}
-                  pagination={{pageSize: 20, showSizeChanger: true}}
-                  expandable={{
-                    expandedRowRender: (row) => (
-                      <Typography.Paragraph style={{margin: 0}}>{row.summary}</Typography.Paragraph>
-                    ),
+      <Row gutter={[16, 16]}>
+        <Col xs={24} md={6}>
+          <Card
+            title={<><HistoryOutlined /> 扫描历史</>}
+            size="small"
+            bodyStyle={{padding: 0, maxHeight: '60vh', overflow: 'auto'}}
+            extra={
+              <Button type="link" size="small" loading={historyLoading} onClick={refreshTaskHistory}>
+                刷新
+              </Button>
+            }
+          >
+            <List
+              loading={historyLoading}
+              dataSource={taskHistory}
+              locale={{emptyText: <Empty description="暂无扫描记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />}}
+              renderItem={(task) => (
+                <List.Item
+                  onClick={() => handleSelectTask(task)}
+                  style={{
+                    cursor: 'pointer',
+                    padding: '8px 16px',
+                    backgroundColor: activeTaskId === task.task_id ? '#e6f4ff' : undefined,
+                    borderLeft: activeTaskId === task.task_id ? '3px solid #1677ff' : '3px solid transparent',
                   }}
-                  locale={{emptyText: <Empty description="暂无 MACD 预警结果" />}}
-                />
-              </Card>
-            ),
-          },
-          {
-            key: 'samples',
-            label: '历史样本明细',
-            children: (
-              <Card
-                title={selectedAlert ? `${selectedAlert.stock_code} ${selectedAlert.stock_name} 历史同类样本` : '历史同类样本'}
-                extra={selectedAlert ? <Tag>{selectedAlert.backtest_confidence_level}</Tag> : null}
-                bodyStyle={{padding: 0}}
-              >
-                <Table<MacdAlertBacktestSampleRow>
-                  rowKey="id"
-                  columns={sampleColumns}
-                  dataSource={samples}
-                  scroll={{x: 1000}}
-                  pagination={{pageSize: 20}}
-                  locale={{emptyText: <Empty description="请先在预警列表中选择一条结果" />}}
-                />
-              </Card>
-            ),
-          },
-        ]}
-      />
+                >
+                  <List.Item.Meta
+                    title={
+                      <Space size={4}>
+                        <span>{taskDate(task)}</span>
+                        <Badge status={statusColor[task.status] as any} text={statusLabel[task.status] || task.status} />
+                      </Space>
+                    }
+                    description={
+                      <Space size={8}>
+                        <Typography.Text type="secondary" style={{fontSize: 12}}>
+                          {task.task_start_date?.slice(0, 16) || '-'}
+                        </Typography.Text>
+                        {activeTaskId === task.task_id && rows.length > 0 ? (
+                          <Typography.Text type="secondary" style={{fontSize: 12}}>
+                            绿柱≥{greenShrinkDays || 2}天 · {rows.length}条
+                          </Typography.Text>
+                        ) : null}
+                      </Space>
+                    }
+                  />
+                </List.Item>
+              )}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} md={18}>
+          <Tabs
+            activeKey={activeTab}
+            onChange={setActiveTab}
+            items={[
+              {
+                key: 'alerts',
+                label: activeTradeDate
+                  ? `${activeTradeDate} 预警结果（绿柱缩短≥${greenShrinkDays || 2}天，共 ${rows.length} 条）`
+                  : '预警结果',
+                children: (
+                  <Card
+                    bodyStyle={{padding: 0}}
+                    extra={
+                      rows.length > 0 ? (
+                        <Button icon={<DownloadOutlined />} loading={exporting} onClick={handleExport}>
+                          导出CSV
+                        </Button>
+                      ) : null
+                    }
+                  >
+                    <Table<MacdAlertResultRow>
+                      rowKey="id"
+                      columns={alertColumns}
+                      dataSource={rows}
+                      loading={loading || tracking}
+                      scroll={{x: 1600}}
+                      pagination={{pageSize: 20, showSizeChanger: true}}
+                      expandable={{
+                        expandedRowRender: (row) => (
+                          <Typography.Paragraph style={{margin: 0}}>{row.summary}</Typography.Paragraph>
+                        ),
+                      }}
+                      locale={{emptyText: <Empty description={activeTradeDate ? `${activeTradeDate} 暂无预警结果` : '请从左侧选择扫描记录'} />}}
+                    />
+                  </Card>
+                ),
+              },
+              {
+                key: 'samples',
+                label: '历史样本明细',
+                children: (
+                  <Card
+                    title={selectedAlert ? `${selectedAlert.stock_code} ${selectedAlert.stock_name} 历史同类样本` : '历史同类样本'}
+                    extra={selectedAlert ? <Tag>{selectedAlert.backtest_confidence_level}</Tag> : null}
+                    bodyStyle={{padding: 0}}
+                  >
+                    <Table<MacdAlertBacktestSampleRow>
+                      rowKey="id"
+                      columns={sampleColumns}
+                      dataSource={samples}
+                      scroll={{x: 1000}}
+                      pagination={{pageSize: 20}}
+                      locale={{emptyText: <Empty description="请先在预警列表中选择一条结果" />}}
+                    />
+                  </Card>
+                ),
+              },
+            ]}
+          />
+        </Col>
+      </Row>
 
       <Alert
         type="info"
