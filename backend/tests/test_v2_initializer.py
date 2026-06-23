@@ -22,6 +22,7 @@ from app.modules.market_data.initializer import (
     _generate_date_list,
     _idle_status,
     _write_duckdb_day,
+    _write_duckdb_stock_bulk,
     create_task,
     get_overview,
     get_task,
@@ -405,7 +406,7 @@ def test_retry_task_restarts_failed_task(tmp_path: Path) -> None:
     universe_patcher.start()
     fail_fetch.start()
     try:
-        started = start_task(task_id, sqlite_path=sqlite_path)
+        started = start_task(task_id, sqlite_path=sqlite_path, duckdb_path=duckdb_path)
         assert started is True
         for _ in range(30):
             time.sleep(0.2)
@@ -632,6 +633,7 @@ def test_5m_task_run_succeeds(tmp_path: Path) -> None:
 
 def test_task_fails_on_fetch_error(tmp_path: Path) -> None:
     sqlite_path = tmp_path / 'test.db'
+    duckdb_path = tmp_path / 'test.duckdb'
 
     with _patch_licence():
         task = create_task('20240102', '20240102', sqlite_path=sqlite_path)
@@ -654,7 +656,7 @@ def test_task_fails_on_fetch_error(tmp_path: Path) -> None:
     universe_patcher.start()
     fetch_patcher.start()
     try:
-        start_task(task_id, sqlite_path=sqlite_path)
+        start_task(task_id, sqlite_path=sqlite_path, duckdb_path=duckdb_path)
 
         for _ in range(30):
             time.sleep(0.2)
@@ -675,6 +677,7 @@ def test_task_fails_on_fetch_error(tmp_path: Path) -> None:
 
 def test_task_stops_on_mairui_http_status_error(tmp_path: Path) -> None:
     sqlite_path = tmp_path / 'test.db'
+    duckdb_path = tmp_path / 'test.duckdb'
 
     with _patch_licence():
         task = create_task('20240102', '20240102', sqlite_path=sqlite_path)
@@ -701,7 +704,7 @@ def test_task_stops_on_mairui_http_status_error(tmp_path: Path) -> None:
         patch('app.modules.market_data.initializer._mairui_fetch_history_rows', side_effect=fail_on_first_stock),
         patch('app.modules.market_data.initializer.load_mairui_config', return_value=config),
     ):
-        start_task(task_id, sqlite_path=sqlite_path)
+        start_task(task_id, sqlite_path=sqlite_path, duckdb_path=duckdb_path)
 
         for _ in range(30):
             time.sleep(0.2)
@@ -728,6 +731,9 @@ class _FakeDuckdbConnection:
     def execute(self, sql: str, params: Any = None):  # noqa: ANN001
         self.execute_calls.append(sql)
         return self
+
+    def fetchone(self) -> tuple[None]:
+        return (None,)
 
     def executemany(self, sql: str, rows: Any):  # noqa: ANN001
         self.executemany_calls += 1
@@ -777,6 +783,67 @@ def test_market_data_task_reuses_one_duckdb_connection(tmp_path: Path) -> None:
     assert connect_duckdb_mock.call_count == 1
     assert fake_conn.executemany_calls == 2
     assert fake_conn.close_calls == 1
+
+
+def test_market_data_task_fetches_daily_rows_after_existing_stock_latest_date(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / 'test.db'
+    duckdb_path = tmp_path / 'test.duckdb'
+    ensure_duckdb_schema(duckdb_path)
+    _write_duckdb_stock_bulk(
+        '000001.SZ',
+        '20240101',
+        '20240102',
+        MOCK_STOCK_DATA['000001.SZ'][:2],
+        duckdb_path,
+    )
+
+    with _patch_licence():
+        task = create_task('20240101', '20240103', sqlite_path=sqlite_path)
+
+    fetch_calls: list[tuple[str, str, str]] = []
+
+    def fetch_rows(stock_code: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
+        fetch_calls.append((stock_code, start_date, end_date))
+        return _mock_mairui_fetch_history_rows(stock_code, start_date, end_date)
+
+    config = type('Config', (), {'rate_limit_per_minute': 30})()
+
+    with (
+        _patch_licence(),
+        patch('app.modules.market_data.initializer.sync_stock_list_to_sqlite'),
+        patch('app.modules.market_data.initializer._resolve_stock_universe', side_effect=_mock_resolve_stock_universe),
+        patch('app.modules.market_data.initializer._mairui_fetch_history_rows', side_effect=fetch_rows),
+        patch('app.modules.market_data.initializer.load_mairui_config', return_value=config),
+        patch('app.modules.market_data.initializer._export_parquet'),
+    ):
+        start_task(task['task_id'], sqlite_path=sqlite_path, duckdb_path=duckdb_path)
+
+        for _ in range(30):
+            time.sleep(0.2)
+            t = get_task(task['task_id'], sqlite_path=sqlite_path)
+            if t and t['status'] in ('SUCCESS', 'FAILED'):
+                break
+
+    t = get_task(task['task_id'], sqlite_path=sqlite_path)
+    assert t is not None
+    assert t['status'] == 'SUCCESS'
+    assert ('000001.SZ', '20240103', '20240103') in fetch_calls
+    assert ('000001.SZ', '20240101', '20240103') not in fetch_calls
+
+
+def test_write_duckdb_stock_bulk_inserts_without_deleting_existing_daily_rows() -> None:
+    fake_conn = _FakeDuckdbConnection()
+
+    _write_duckdb_stock_bulk(
+        '000001.SZ',
+        '20240103',
+        '20240103',
+        [MOCK_STOCK_DATA['000001.SZ'][2]],
+        duckdb_conn=fake_conn,
+    )
+
+    assert not any('DELETE FROM day_level_trade_data' in sql for sql in fake_conn.execute_calls)
+    assert fake_conn.executemany_calls == 1
 
 
 def test_market_data_task_stops_on_duckdb_write_failure(tmp_path: Path) -> None:

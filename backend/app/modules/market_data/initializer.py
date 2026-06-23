@@ -72,6 +72,14 @@ class _Stock5mFetchResult:
     rate_wait: float = 0.0
 
 
+@dataclass(frozen=True)
+class _StockFetchRequest:
+    stock_code: str
+    stock_name: str
+    fetch_start_date: str | None
+    fetch_end_date: str
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -157,6 +165,37 @@ def _adaptive_fetch_window(
     network_elapsed = max(0.0, float(fetch_elapsed) - float(rate_wait))
     target = math.ceil(network_elapsed / request_interval)
     return max(1, min(max_concurrency, target))
+
+
+def _next_yyyymmdd(date_str: str) -> str:
+    return (datetime.strptime(date_str, '%Y%m%d') + timedelta(days=1)).strftime('%Y%m%d')
+
+
+def _normalize_duckdb_date_yyyymmdd(value: Any) -> str:
+    if hasattr(value, 'strftime'):
+        return value.strftime('%Y%m%d')
+    return str(value)[:10].replace('-', '')
+
+
+def _resolve_daily_fetch_start_date(
+    stock_code: str,
+    requested_start_date: str,
+    requested_end_date: str,
+    duckdb_conn: Any,
+) -> str | None:
+    row = duckdb_conn.execute(
+        'SELECT MAX(trade_date) FROM day_level_trade_data WHERE full_code = ?',
+        [stock_code],
+    ).fetchone()
+    latest_value = row[0] if row else None
+    if latest_value is None:
+        return requested_start_date
+
+    latest_date = _normalize_duckdb_date_yyyymmdd(latest_value)
+    fetch_start = max(requested_start_date, _next_yyyymmdd(latest_date))
+    if fetch_start > requested_end_date:
+        return None
+    return fetch_start
 
 
 # ---------------------------------------------------------------------------
@@ -540,12 +579,24 @@ def _run_task(task_id: str, sqlite_path: Path | None, duckdb_path: Path | None =
             duckdb_conn = _connect_duckdb(duckdb_path)
             try:
                 if task_type == 'MARKET_DATA':
+                    daily_stock_items = [
+                        _StockFetchRequest(
+                            stock_code=stock_code,
+                            stock_name=stock_name,
+                            fetch_start_date=_resolve_daily_fetch_start_date(
+                                stock_code,
+                                start_date,
+                                end_date,
+                                duckdb_conn,
+                            ),
+                            fetch_end_date=end_date,
+                        )
+                        for stock_code, stock_name in stock_items
+                    ]
                     for idx, fetch_result in enumerate(
                         _iter_market_data_results(
                             task_id,
-                            stock_items,
-                            start_date,
-                            end_date,
+                            daily_stock_items,
                             sqlite_path,
                             concurrency,
                             mairui_config.rate_limit_per_minute,
@@ -760,19 +811,26 @@ def _fetch_one_stock_result(
 
 def _iter_market_data_results(
     task_id: str,
-    stock_items: list[tuple[str, str]],
-    start_date: str,
-    end_date: str,
+    stock_items: list[_StockFetchRequest],
     sqlite_path: Path | None,
     concurrency: int,
     rate_limit_per_minute: int,
 ):
     if concurrency <= 1:
-        for stock_code, stock_name in stock_items:
+        for item in stock_items:
             if _is_task_terminated(task_id, sqlite_path):
                 yield _StockFetchResult('', '', True, [], 0.0)
                 return
-            yield _fetch_one_stock_result(task_id, stock_code, stock_name, start_date, end_date)
+            if item.fetch_start_date is None:
+                yield _StockFetchResult(item.stock_code, item.stock_name, True, [], 0.0)
+            else:
+                yield _fetch_one_stock_result(
+                    task_id,
+                    item.stock_code,
+                    item.stock_name,
+                    item.fetch_start_date,
+                    item.fetch_end_date,
+                )
         return
 
     with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix='market-fetch') as executor:
@@ -784,10 +842,30 @@ def _iter_market_data_results(
             nonlocal next_index
             if next_index >= len(stock_items):
                 return
-            stock_code, stock_name = stock_items[next_index]
-            pending.add(
-                executor.submit(_fetch_one_stock_result, task_id, stock_code, stock_name, start_date, end_date)
-            )
+            item = stock_items[next_index]
+            if item.fetch_start_date is None:
+                pending.add(
+                    executor.submit(
+                        lambda stock_code=item.stock_code, stock_name=item.stock_name: _StockFetchResult(
+                            stock_code,
+                            stock_name,
+                            True,
+                            [],
+                            0.0,
+                        )
+                    )
+                )
+            else:
+                pending.add(
+                    executor.submit(
+                        _fetch_one_stock_result,
+                        task_id,
+                        item.stock_code,
+                        item.stock_name,
+                        item.fetch_start_date,
+                        item.fetch_end_date,
+                    )
+                )
             next_index += 1
 
         def fill_pending() -> None:
@@ -1201,20 +1279,17 @@ def _write_duckdb_stock_bulk(
     *,
     duckdb_conn: Any | None = None,
 ) -> None:
-    """Write all rows for a single stock across its full date range in one transaction.
+    """Append rows for a single stock across its missing date range in one transaction.
 
     Much faster than calling _write_duckdb_day per date: one connection open, one
-    BEGIN/COMMIT, one DELETE (by full_code + date range), one executemany for all rows.
+    BEGIN/COMMIT, one executemany for all rows.
 
-    *start_date* / *end_date*: YYYYMMDD strings used to bound the DELETE.
+    *start_date* / *end_date*: YYYYMMDD strings used for logging.
     """
     if not rows:
         return
 
     # Convert YYYYMMDD → YYYY-MM-DD for DuckDB storage format
-    start_date_str = f'{start_date[:4]}-{start_date[4:6]}-{start_date[6:8]}'
-    end_date_str = f'{end_date[:4]}-{end_date[4:6]}-{end_date[6:8]}'
-
     duckdb_rows = [
         (
             str(r.get('full_code') or ''),
@@ -1238,11 +1313,6 @@ def _write_duckdb_stock_bulk(
     conn = duckdb_conn or _connect_duckdb(duckdb_path)
     try:
         conn.execute('BEGIN TRANSACTION')
-        # Delete all existing rows for this stock within the date range (idempotent)
-        conn.execute(
-            'DELETE FROM day_level_trade_data WHERE full_code = ? AND trade_date BETWEEN ? AND ?',
-            [stock_code, start_date_str, end_date_str],
-        )
         conn.executemany(
             'INSERT INTO day_level_trade_data ('
             'full_code, trade_date, open, high, low, close, '
