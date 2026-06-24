@@ -129,8 +129,8 @@ def _upsert_duckdb(
                     r.get('pct_chg', 0.0),
                     r.get('vol', 0.0),
                     r.get('amount', 0.0),
-                    bool(r.get('is_up_limit', False)),
-                    bool(r.get('is_down_limit', False)),
+                    False,
+                    False,
                 )
                 for r in today_bars
             ],

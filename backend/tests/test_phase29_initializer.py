@@ -26,7 +26,7 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
-from app.db.duckdb_storage import ensure_duckdb_parent, ensure_duckdb_schema
+from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_parent, ensure_duckdb_schema
 from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
 from app.modules.market_data.data_source import _market_board_from_code, _to_full_code, load_stock_list, \
     sync_stock_list_to_sqlite
@@ -156,6 +156,46 @@ def test_run_daily_update_succeeds(tmp_path: Path) -> None:
     finally:
         conn.close()
     assert stock_list_count == 0
+
+
+def test_run_daily_update_skips_limit_flags_for_forward_adjusted_daily_data(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / 'alphapredator.db'
+    duckdb_path = tmp_path / 'alphapredator.duckdb'
+    daily_bars_parquet_path = tmp_path / 'parquet' / 'stock_daily_bars.parquet'
+    market_snapshot_path = tmp_path / 'parquet' / 'market_snapshot.json'
+    bars = [
+        {
+            **MOCK_BARS[0],
+            'is_up_limit': True,
+            'is_down_limit': True,
+        }
+    ]
+
+    ensure_sqlite_schema(sqlite_path)
+    ensure_duckdb_parent(duckdb_path, daily_bars_parquet_path.parent)
+    ensure_duckdb_schema(duckdb_path)
+
+    with (
+        patch('app.modules.market_data.updater.sync_stock_list_to_sqlite'),
+        patch('app.modules.market_data.updater.fetch_spot_snapshot', side_effect=_mock_fetch_spot_snapshot),
+        patch('app.modules.market_data.updater.fetch_stock_pool', side_effect=_mock_fetch_stock_pool),
+        patch('app.modules.market_data.updater.fetch_daily_bars_by_date', return_value=bars),
+    ):
+        run_daily_update(
+            sqlite_path=sqlite_path,
+            duckdb_path=duckdb_path,
+            daily_bars_parquet_path=daily_bars_parquet_path,
+            market_snapshot_path=market_snapshot_path,
+        )
+
+    conn = connect_duckdb(duckdb_path)
+    saved = conn.execute(
+        "SELECT is_up_limit, is_down_limit FROM day_level_trade_data "
+        "WHERE full_code = '000001.SZ'"
+    ).fetchone()
+    conn.close()
+
+    assert saved == (False, False)
 
 
 # ---------------------------------------------------------------------------

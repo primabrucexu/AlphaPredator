@@ -39,7 +39,6 @@ from app.modules.market_data.data_source import _get_mairui_licence, _resolve_st
     _mairui_fetch_history_rows, MairuiHttpStatusError, UnlistedStockSkipError, fetch_5m_history_rows, \
     fetch_daily_bars_by_date, get_last_market_data_rate_wait, sync_stock_list_to_sqlite
 from app.modules.market_data.jygs_review import check_jygs_auth_available, fetch_and_parse_jygs_review_for_date
-from app.modules.market_data.limit_rules import compute_limit_fields
 from app.modules.market_data.mairui_config import load_mairui_config
 from app.repositories.init_task_repo import InitTaskRepo
 from app.repositories.stock_list_repo import StockListRepo
@@ -1093,11 +1092,9 @@ def _write_one_stock_result(
         _task_repo(sqlite_path).increment_processed_items(task_id)
         return True, ''
 
-    # Enrich rows with limit fields
-    t1 = time.monotonic()
+    # Normalize rows; limit flags are skipped because daily prices are forward-adjusted.
     updated_at = _now_iso()
     enriched_rows: list[dict[str, Any]] = []
-    name_map = {stock_code: stock_name}
 
     for row in raw_rows:
         try:
@@ -1106,16 +1103,6 @@ def _write_one_stock_result(
                 continue
             pre_close = _to_decimal(row.get('pre_close'))
             close = _to_decimal(row.get('close'))
-            trade_date_yyyymmdd = str(row['trade_date']).replace('-', '')  # Convert to YYYYMMDD if needed
-
-            limit_fields = compute_limit_fields(
-                full_code=full_code,
-                trade_date=trade_date_yyyymmdd,
-                pre_close=pre_close,
-                close=close,
-                stock_name=name_map.get(full_code, stock_name),
-                list_date=None,
-            )
 
             enriched_row = {
                 'trade_date': row['trade_date'],  # Use normalized trade date
@@ -1130,10 +1117,9 @@ def _write_one_stock_result(
                 'vol': _to_decimal(row.get('vol')),
                 'amount': _to_decimal(row.get('amount')),
                 'updated_at': updated_at,
+                'is_limit_up': False,
+                'is_limit_down': False,
             }
-            # Add limit fields (with defaults if missing)
-            for k, v in limit_fields.items():
-                enriched_row[k] = v
 
             enriched_rows.append(enriched_row)
         except (ValueError, TypeError) as e:
@@ -1194,8 +1180,8 @@ def _fetch_daily_raw(
 ) -> list[dict[str, Any]]:
     """Fetch full-market daily quote for *date_str* (YYYYMMDD) via the configured data source.
 
-    Routes through the unified multi-source contract in data_source.py, then enriches
-    rows with accurate limit-up/down fields via compute_limit_fields().
+    Routes through the unified multi-source contract in data_source.py, then normalizes
+    rows for DuckDB. Limit-up/down fields are skipped for forward-adjusted daily data.
     Returns rows ready for _write_duckdb_day() with amount already in 亿元.
     """
     # Convert YYYYMMDD → YYYY-MM-DD for the unified data source interface
@@ -1209,19 +1195,6 @@ def _fetch_daily_raw(
         raise
     logger.info('_fetch_daily_raw raw rows received. trade_date=%s rows=%d', date_str, len(raw_rows))
 
-    # Load stock universe metadata (name only) for limit-field enrichment.
-    name_map: dict[str, str] = {}
-    try:
-        for row in _stock_list_repo(sqlite_path).list_all_ordered():
-            ts = str(row['full_code'])
-            name_map[ts] = str(row['name'] or '')
-    except Exception as _exc:  # noqa: BLE001
-        logger.warning(
-            '_fetch_daily_raw: could not load stock universe for %s, '
-            'limit-field enrichment will be partial: %s',
-            date_str, _exc,
-        )
-
     updated_at = _now_iso()
     rows: list[dict[str, Any]] = []
     for row in raw_rows:
@@ -1231,16 +1204,6 @@ def _fetch_daily_raw(
                 continue
             pre_close = _to_decimal(row.get('pre_close'))
             close = _to_decimal(row.get('close'))
-            stock_name = name_map.get(full_code, '')
-
-            limit_fields = compute_limit_fields(
-                full_code=full_code,
-                trade_date=date_str,
-                pre_close=pre_close,
-                close=close,
-                stock_name=stock_name,
-                list_date=None,
-            )
 
             rows.append({
                 'trade_date': date_str,
@@ -1256,7 +1219,8 @@ def _fetch_daily_raw(
                 # amount is already in 亿元 from fetch_daily_bars_by_date contract
                 'amount': _to_decimal(row.get('amount')),
                 'updated_at': updated_at,
-                **limit_fields,
+                'is_limit_up': False,
+                'is_limit_down': False,
             })
         except (ValueError, TypeError):
             continue
@@ -1312,8 +1276,8 @@ def _write_duckdb_stock_bulk(
             _to_decimal(r.get('pct_chg')),
             _to_decimal(r.get('vol')),
             _to_decimal(r.get('amount')),
-            bool(r.get('is_limit_up', False)),
-            bool(r.get('is_limit_down', False)),
+            False,
+            False,
         )
         for r in rows
     ]
@@ -1451,7 +1415,7 @@ def _write_duckdb_day(
     - open, high, low, close, pre_close, change, pct_chg from source row
     - vol stored as Decimal (lots)
     - amount in 亿元 (already converted upstream by data_source contract)
-    - is_up_limit / is_down_limit from compute_limit_fields output
+    - is_up_limit / is_down_limit are skipped for forward-adjusted daily data
 
     Deletes existing rows for the date before inserting (idempotent).
     """
@@ -1470,8 +1434,8 @@ def _write_duckdb_day(
             _to_decimal(r.get('pct_chg')),
             _to_decimal(r.get('vol')),
             _to_decimal(r.get('amount')),  # 亿元 (already converted)
-            bool(r.get('is_limit_up', False)),  # is_up_limit
-            bool(r.get('is_limit_down', False)),  # is_down_limit
+            False,  # is_up_limit: skipped for forward-adjusted daily data
+            False,  # is_down_limit: skipped for forward-adjusted daily data
         )
         for r in rows
     ]

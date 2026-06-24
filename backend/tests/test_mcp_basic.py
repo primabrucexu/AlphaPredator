@@ -26,6 +26,7 @@ async def test_probe_tool_is_discoverable_and_callable_through_mcp() -> None:
     tool_names = [tool.name for tool in tools]
     assert 'get_alpha_predator_info' in tool_names
     assert 'get_macd_alert_daily_brief' in tool_names
+    assert 'start_market_data_incremental_update' in tool_names
     assert result.data == {
         'name': 'AlphaPredator',
         'mcp_status': 'ok',
@@ -53,6 +54,56 @@ def test_macd_daily_brief_tool_includes_disclaimer(monkeypatch: pytest.MonkeyPat
 
     assert result['disclaimer'] == '以下为技术形态观察结果，不构成买卖建议。'
     assert result['new_alert_count'] == 1
+
+
+def test_market_data_incremental_update_tool_creates_task_from_latest_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.api.routes.mcp as mcp_route
+
+    created: dict[str, str] = {}
+
+    monkeypatch.setattr(
+        mcp_route,
+        'get_overview',
+        lambda: {
+            'latest_market_data_task': {
+                'task_id': 'previous',
+                'end_date': '20240331',
+            },
+        },
+    )
+
+    def fake_create_task(start_date: str, end_date: str, *, mode: str, task_type: str) -> dict:
+        created.update(
+            start_date=start_date,
+            end_date=end_date,
+            mode=mode,
+            task_type=task_type,
+        )
+        return {'task_id': 'new-task', 'start_date': start_date, 'end_date': end_date, 'status': 'PENDING'}
+
+    monkeypatch.setattr(mcp_route, 'create_task', fake_create_task)
+    monkeypatch.setattr(mcp_route, 'start_task', lambda task_id: task_id == 'new-task')
+    monkeypatch.setattr(
+        mcp_route,
+        'get_task',
+        lambda task_id: {'task_id': task_id, 'start_date': '20240401', 'end_date': '20240403', 'status': 'RUNNING'},
+    )
+
+    result = mcp_route.start_market_data_incremental_update(target_end_date='20240403')
+
+    assert created == {
+        'start_date': '20240401',
+        'end_date': '20240403',
+        'mode': 'INCREMENTAL_SYNC',
+        'task_type': 'MARKET_DATA',
+    }
+    assert result['started'] is True
+    assert result['task_id'] == 'new-task'
+    assert result['start_date'] == '20240401'
+    assert result['end_date'] == '20240403'
+    assert result['status'] == 'RUNNING'
 
 
 def test_main_app_mounts_mcp_under_api_mcp() -> None:

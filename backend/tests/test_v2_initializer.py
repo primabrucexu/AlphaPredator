@@ -264,6 +264,30 @@ def test_write_duckdb_day_direct(tmp_path: Path) -> None:
     assert rows[1][1] == '2024-01-02'
 
 
+def test_write_duckdb_day_skips_limit_flags_for_forward_adjusted_daily_data(tmp_path: Path) -> None:
+    """日线改为前复权后，DuckDB 暂不保存基于复权价推导的涨跌停字段。"""
+    duckdb_path = tmp_path / 'test.duckdb'
+    ensure_duckdb_schema(duckdb_path)
+    rows = [
+        {
+            **MOCK_DAILY_ROWS[0],
+            'is_limit_up': True,
+            'is_limit_down': True,
+        }
+    ]
+
+    _write_duckdb_day('20240102', rows, duckdb_path)
+
+    conn = connect_duckdb(duckdb_path)
+    saved = conn.execute(
+        "SELECT is_up_limit, is_down_limit FROM day_level_trade_data "
+        "WHERE full_code = '000001.SZ' AND trade_date = '2024-01-02'"
+    ).fetchone()
+    conn.close()
+
+    assert saved == (False, False)
+
+
 def test_write_duckdb_day_idempotent(tmp_path: Path) -> None:
     """Writing the same day twice should result in 2 rows, not 4."""
     duckdb_path = tmp_path / 'test.duckdb'
@@ -280,7 +304,7 @@ def test_write_duckdb_day_idempotent(tmp_path: Path) -> None:
     assert count == 2
 
 
-def test_atomic_write_day_persists_limit_fields(tmp_path: Path) -> None:
+def test_atomic_write_day_persists_daily_bar(tmp_path: Path) -> None:
     sqlite_path = tmp_path / 'test.db'
     duckdb_path = tmp_path / 'test.duckdb'
     ensure_sqlite_schema(sqlite_path)
@@ -688,7 +712,7 @@ def test_task_stops_on_mairui_http_status_error(tmp_path: Path) -> None:
     def fail_on_first_stock(stock_code: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
         calls.append(stock_code)
         raise MairuiHttpStatusError(HTTPError(
-            url='https://api.mairui.club/hsstock/history/000001.SZ/d/n/mock',
+            url='https://api.mairui.club/hsstock/history/000001.SZ/d/f/mock',
             code=503,
             msg='Service Unavailable',
             hdrs=None,
@@ -844,6 +868,29 @@ def test_write_duckdb_stock_bulk_inserts_without_deleting_existing_daily_rows() 
 
     assert not any('DELETE FROM day_level_trade_data' in sql for sql in fake_conn.execute_calls)
     assert fake_conn.executemany_calls == 1
+
+
+def test_write_duckdb_stock_bulk_skips_limit_flags_for_forward_adjusted_daily_data(tmp_path: Path) -> None:
+    duckdb_path = tmp_path / 'test.duckdb'
+    ensure_duckdb_schema(duckdb_path)
+    rows = [
+        {
+            **MOCK_STOCK_DATA['000001.SZ'][0],
+            'is_limit_up': True,
+            'is_limit_down': True,
+        }
+    ]
+
+    _write_duckdb_stock_bulk('000001.SZ', '20240101', '20240101', rows, duckdb_path)
+
+    conn = connect_duckdb(duckdb_path)
+    saved = conn.execute(
+        "SELECT is_up_limit, is_down_limit FROM day_level_trade_data "
+        "WHERE full_code = '000001.SZ' AND trade_date = '2024-01-01'"
+    ).fetchone()
+    conn.close()
+
+    assert saved == (False, False)
 
 
 def test_market_data_task_stops_on_duckdb_write_failure(tmp_path: Path) -> None:

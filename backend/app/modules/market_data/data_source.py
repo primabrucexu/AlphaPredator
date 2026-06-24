@@ -371,7 +371,7 @@ def _mairui_fetch_history_rows(stock_code: str, start_date: str, end_date: str) 
     market_code = _normalize_market_code(stock_code)
 
     payload = _mairui_get_json(
-        f'hsstock/history/{market_code}/d/n/{licence}',
+        f'hsstock/history/{market_code}/d/f/{licence}',
         params={'st': start_date.replace('-', ''), 'et': end_date.replace('-', '')},
     )
     if not isinstance(payload, list):

@@ -70,7 +70,7 @@ def test_fetch_daily_history_skips_when_mairui_reports_data_missing():
             raise AssertionError('expected UnlistedStockSkipError')
 
     get_json.assert_called_once_with(
-        'hsstock/history/001389.SZ/d/n/LICENCE',
+        'hsstock/history/001389.SZ/d/f/LICENCE',
         params={'st': '20260601', 'et': '20260614'},
     )
 

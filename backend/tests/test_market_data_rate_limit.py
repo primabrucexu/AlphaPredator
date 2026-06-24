@@ -126,7 +126,7 @@ def test_rate_limited_http_get_logs_redacted_timing(caplog: pytest.LogCaptureFix
 
 def test_rate_limited_http_get_logs_http_status_with_body(caplog: pytest.LogCaptureFixture) -> None:
     error = HTTPError(
-        url='https://api.mairui.club/hsstock/history/000001.SZ/d/n/secret-licence',
+        url='https://api.mairui.club/hsstock/history/000001.SZ/d/f/secret-licence',
         code=503,
         msg='Service Unavailable',
         hdrs=None,
@@ -143,7 +143,7 @@ def test_rate_limited_http_get_logs_http_status_with_body(caplog: pytest.LogCapt
     ):
         with pytest.raises(HTTPError):
             data_source._rate_limited_http_get(
-                'https://api.mairui.club/hsstock/history/000001.SZ/d/n/secret-licence'
+                'https://api.mairui.club/hsstock/history/000001.SZ/d/f/secret-licence'
             )
 
     messages = '\n'.join(record.getMessage() for record in caplog.records)
@@ -156,7 +156,7 @@ def test_rate_limited_http_get_logs_http_status_with_body(caplog: pytest.LogCapt
 
 def test_mairui_get_json_wraps_http_error_as_fatal() -> None:
     error = HTTPError(
-        url='https://api.mairui.club/hsstock/history/000001.SZ/d/n/secret-licence',
+        url='https://api.mairui.club/hsstock/history/000001.SZ/d/f/secret-licence',
         code=503,
         msg='Service Unavailable',
         hdrs=None,
@@ -165,4 +165,4 @@ def test_mairui_get_json_wraps_http_error_as_fatal() -> None:
 
     with patch('app.modules.market_data.data_source._rate_limited_http_get', side_effect=error):
         with pytest.raises(data_source.MairuiHttpStatusError, match='503'):
-            data_source._mairui_get_json('hsstock/history/000001.SZ/d/n/secret-licence')
+            data_source._mairui_get_json('hsstock/history/000001.SZ/d/f/secret-licence')
