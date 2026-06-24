@@ -1123,6 +1123,7 @@ list_macd_alert_backtest_samples(alert_result_id, limit, offset)
 - DBML 已审批并更新到 `docs/human/data-model/AlphaPredator.dbml`。
 - 已完成后端核心、SQLite schema、FastAPI、MCP 和前端页面实现。
 - 已将扫描升级为 `MACD_ALERT_SCAN` 后台任务，复用现有 `task_info` 进度体系，不新增数据库表。
+- 已新增个股 MACD 即时验证入口：按股票代码和截止日复用批量预警规则计算截止日触发状态、最近触发、历史样本和汇总指标；该能力不落库、不新增数据库表，仅用于核验计算口径。
 
 ## 已知问题 / 待人工决策
 

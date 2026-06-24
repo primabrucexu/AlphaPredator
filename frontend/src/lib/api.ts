@@ -422,14 +422,87 @@ export interface MacdAlertBacktestSampleRow {
   stock_name: string;
   alert_date: string;
   alert_close_price: number;
+  next_cross_trigger_price: number;
+  cross_trigger_distance_pct: number;
+  next_trend_keep_price: number;
+  trend_keep_distance_pct: number;
+  alert_cross_zone: 'underwater' | 'above_zero' | 'mixed';
+  buy_date: string | null;
+  buy_price: number | null;
+  t1_close_price: number | null;
   t1_track_status: string | null;
   cross_date: string | null;
   cross_type: string | null;
   sell_date: string | null;
+  sell_price: number | null;
   sell_reason: string | null;
   return_pct: number | null;
   holding_days: number | null;
   status: string;
+}
+
+export interface MacdStockValidateRequest {
+  stock_code: string;
+  end_date: string;
+  lookback_days?: number;
+  green_shrink_days?: number;
+  cross_zone?: 'all' | 'underwater' | 'above_zero' | 'mixed';
+}
+
+export interface MacdStockValidateCandidate {
+  stock_code: string;
+  stock_name: string;
+  full_code: string;
+  trade_date: string;
+  close_price: number;
+  cross_zone: 'underwater' | 'above_zero' | 'mixed';
+  next_cross_trigger_price: number;
+  cross_trigger_distance_pct: number;
+  next_limit_up_price: number | null;
+  cross_trigger_reachable: boolean;
+  cross_trigger_unreachable_reason: string | null;
+  next_trend_keep_price: number;
+  trend_keep_distance_pct: number;
+  macd_dif: number;
+  macd_dea: number;
+  macd_hist: number;
+  green_shrink_days: number;
+  score: number;
+  summary: string;
+}
+
+export interface MacdStockValidateSummary {
+  backtest_sample_count: number;
+  backtest_cross_success_count: number;
+  backtest_cross_success_rate: number | null;
+  backtest_t1_cross_confirmed_count: number;
+  backtest_t1_trend_kept_count: number;
+  backtest_t1_trend_weakened_count: number;
+  backtest_t1_trend_keep_rate: number | null;
+  backtest_completed_trade_count: number;
+  backtest_profit_trade_count: number;
+  backtest_win_rate: number | null;
+  backtest_avg_return_pct: number | null;
+  backtest_max_return_pct: number | null;
+  backtest_max_loss_pct: number | null;
+  backtest_avg_holding_days: number | null;
+  backtest_confidence_level: string;
+}
+
+export interface MacdStockValidateResponse {
+  stock_code: string;
+  stock_name: string;
+  full_code: string;
+  end_date: string;
+  lookback_days: number;
+  green_shrink_days: number;
+  cross_zone: 'all' | 'underwater' | 'above_zero' | 'mixed';
+  triggered_on_end_date: boolean;
+  latest_candidate: MacdStockValidateCandidate | null;
+  end_date_candidate: MacdStockValidateCandidate | null;
+  summary: MacdStockValidateSummary;
+  samples: MacdAlertBacktestSampleRow[];
+  disclaimer: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -765,6 +838,12 @@ export function listMacdAlertBacktestSamples(
   return fetchJson<MacdAlertBacktestSampleRow[]>(
     `/api/macd-alerts/results/${encodeURIComponent(alertId)}/backtest-samples?limit=${limit}`,
   );
+}
+
+export function validateStockMacdAlert(
+  request: MacdStockValidateRequest,
+): Promise<MacdStockValidateResponse> {
+  return postJson<MacdStockValidateResponse>('/api/macd-alerts/stock-validate', request);
 }
 
 // ---------------------------------------------------------------------------

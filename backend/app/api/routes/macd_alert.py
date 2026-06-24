@@ -11,10 +11,12 @@ from app.modules.macd_alert.service import (
     list_macd_alert_backtest_samples,
     list_macd_alert_results,
     track_macd_alerts,
+    validate_stock_macd_alert,
 )
 from app.modules.market_data.initializer import get_task, start_task
 from app.schemas.macd_alert import (
     MacdAlertScanRequest,
+    MacdStockValidateRequest,
     MacdAlertTrackRequest,
     MacdAlertTrackResponse,
 )
@@ -46,6 +48,20 @@ def scan_macd_alert(body: MacdAlertScanRequest) -> TaskResponse:
 def track_macd_alert(body: MacdAlertTrackRequest) -> MacdAlertTrackResponse:
     result = track_macd_alerts(trade_date=body.trade_date, source_trade_date=body.source_trade_date)
     return MacdAlertTrackResponse(**result)
+
+
+@router.post('/stock-validate', response_model=dict)
+def validate_stock_macd_alert_route(body: MacdStockValidateRequest) -> dict:
+    try:
+        return validate_stock_macd_alert(
+            stock_code=body.stock_code,
+            end_date=body.end_date,
+            lookback_days=body.lookback_days,
+            green_shrink_days=body.green_shrink_days,
+            cross_zone=body.cross_zone,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
 
 @router.get('/results', response_model=list[dict])

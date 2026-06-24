@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
 import pytest
@@ -12,8 +13,15 @@ from app.modules.macd_alert.service import (
     calculate_trend_keep_price,
     scan_macd_alerts,
     track_macd_alerts,
+    validate_stock_macd_alert,
 )
 from app.modules.macd_alert.indicators import compute_macd_points
+
+
+def _workspace_tmp_dir(name: str) -> Path:
+    path = Path('tmp') / f'{name}-{uuid.uuid4().hex}'
+    path.mkdir(parents=True, exist_ok=False)
+    return path
 
 
 def _seed_stock_list(sqlite_path: Path) -> None:
@@ -97,7 +105,8 @@ def test_macd_trigger_price_formula_matches_f06_design() -> None:
     )
 
 
-def test_scan_macd_alerts_is_idempotent_and_writes_backtest_summary(tmp_path: Path) -> None:
+def test_scan_macd_alerts_is_idempotent_and_writes_backtest_summary() -> None:
+    tmp_path = _workspace_tmp_dir('macd-alert-service')
     sqlite_path = tmp_path / 'macd-alert.db'
     duckdb_path = tmp_path / 'macd-alert.duckdb'
     _seed_stock_list(sqlite_path)
@@ -133,7 +142,8 @@ def test_scan_macd_alerts_is_idempotent_and_writes_backtest_summary(tmp_path: Pa
     assert len(sample_rows) == alert_rows[0]['backtest_sample_count']
 
 
-def test_track_macd_alerts_updates_trend_status(tmp_path: Path) -> None:
+def test_track_macd_alerts_updates_trend_status() -> None:
+    tmp_path = _workspace_tmp_dir('macd-track')
     sqlite_path = tmp_path / 'macd-track.db'
     duckdb_path = tmp_path / 'macd-track.duckdb'
     _seed_stock_list(sqlite_path)
@@ -166,7 +176,8 @@ def test_track_macd_alerts_updates_trend_status(tmp_path: Path) -> None:
     assert row['tracked_close_price'] == pytest.approx(8.5)
 
 
-def test_scan_macd_alerts_updates_task_progress(tmp_path: Path) -> None:
+def test_scan_macd_alerts_updates_task_progress() -> None:
+    tmp_path = _workspace_tmp_dir('macd-progress')
     sqlite_path = tmp_path / 'macd-progress.db'
     duckdb_path = tmp_path / 'macd-progress.duckdb'
     _seed_stock_list(sqlite_path)
@@ -187,3 +198,39 @@ def test_scan_macd_alerts_updates_task_progress(tmp_path: Path) -> None:
     assert updated['total_items'] == 2
     assert updated['processed_items'] == 2
     assert updated['current_label'] == '000002.SZ'
+
+
+def test_validate_stock_macd_alert_returns_ephemeral_samples() -> None:
+    tmp_path = _workspace_tmp_dir('macd-validate')
+    sqlite_path = tmp_path / 'macd-validate.db'
+    duckdb_path = tmp_path / 'macd-validate.duckdb'
+    _seed_stock_list(sqlite_path)
+    _seed_daily_bars(duckdb_path, [10, 9.6, 9.2, 8.8, 8.5, 8.35, 8.3, 8.28, 8.27, 8.27, 8.5])
+
+    result = validate_stock_macd_alert(
+        stock_code='000001',
+        end_date='2026-01-10',
+        sqlite_path=sqlite_path,
+        duckdb_path=duckdb_path,
+        green_shrink_days=2,
+        lookback_days=720,
+    )
+
+    assert result['stock_code'] == '000001'
+    assert result['stock_name'] == '测试一号'
+    assert result['end_date'] == '2026-01-10'
+    assert result['triggered_on_end_date'] is True
+    assert result['latest_candidate']['trade_date'] == '2026-01-10'
+    assert result['latest_candidate']['cross_zone'] in {'underwater', 'above_zero'}
+    assert result['summary']['backtest_sample_count'] >= 0
+    assert len(result['samples']) == result['summary']['backtest_sample_count']
+
+    conn = connect_sqlite(sqlite_path)
+    try:
+        alert_count = conn.execute('SELECT COUNT(*) FROM macd_alert_result').fetchone()[0]
+        sample_count = conn.execute('SELECT COUNT(*) FROM macd_alert_backtest_sample').fetchone()[0]
+    finally:
+        conn.close()
+
+    assert alert_count == 0
+    assert sample_count == 0

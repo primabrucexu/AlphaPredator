@@ -473,15 +473,106 @@ def _build_backtest_samples(
     current_zone: str,
     green_shrink_days: int,
     sqlite_path: Path | None,
+    lookback_days: int = 720,
 ) -> list[dict[str, Any]]:
     points = compute_macd_points([bar.close for bar in bars])
     samples: list[dict[str, Any]] = []
-    start_idx = max(0, current_idx - 720)
+    start_idx = max(0, current_idx - lookback_days)
     for idx in range(start_idx, current_idx):
         candidate = _make_candidate(stock, bars, idx, points, green_shrink_days)
         if candidate and candidate.cross_zone == current_zone:
             samples.append(_build_sample(alert_id, stock, bars, points, idx, candidate, sqlite_path))
     return samples
+
+
+def _candidate_to_dict(candidate: AlertCandidate) -> dict[str, Any]:
+    return {
+        'stock_code': candidate.stock_code,
+        'stock_name': candidate.stock_name,
+        'full_code': candidate.full_code,
+        'trade_date': candidate.trade_date,
+        'close_price': candidate.close_price,
+        'cross_zone': candidate.cross_zone,
+        'next_cross_trigger_price': candidate.next_cross_trigger_price,
+        'cross_trigger_distance_pct': candidate.cross_trigger_distance_pct,
+        'next_limit_up_price': candidate.next_limit_up_price,
+        'cross_trigger_reachable': candidate.cross_trigger_reachable,
+        'cross_trigger_unreachable_reason': candidate.cross_trigger_unreachable_reason,
+        'next_trend_keep_price': candidate.next_trend_keep_price,
+        'trend_keep_distance_pct': candidate.trend_keep_distance_pct,
+        'macd_dif': candidate.macd.dif,
+        'macd_dea': candidate.macd.dea,
+        'macd_hist': candidate.macd.hist,
+        'green_shrink_days': candidate.green_shrink_days,
+        'score': candidate.score,
+        'summary': candidate.summary,
+    }
+
+
+def _load_stock(sqlite_path: Path | None, stock_code: str) -> dict[str, str]:
+    ensure_sqlite_schema(sqlite_path)
+    session_factory = _session_factory(sqlite_path)
+    with session_factory() as session:
+        row = session.exec(select(StockList).where(StockList.code == stock_code)).first()
+        if row is None:
+            raise ValueError(f'未找到股票代码：{stock_code}')
+        return {'full_code': row.full_code, 'code': row.code, 'name': row.name}
+
+
+def validate_stock_macd_alert(
+    *,
+    stock_code: str,
+    end_date: str,
+    lookback_days: int = 720,
+    green_shrink_days: int = 2,
+    cross_zone: str = 'all',
+    sqlite_path: Path | None = None,
+    duckdb_path: Path | None = None,
+) -> dict[str, Any]:
+    if cross_zone not in {'all', 'underwater', 'above_zero', 'mixed'}:
+        raise ValueError('cross_zone 仅支持 all/underwater/above_zero/mixed')
+    stock = _load_stock(sqlite_path, stock_code)
+    bars = _load_daily_bars(duckdb_path, [stock['full_code']], end_date).get(stock['full_code'], [])
+    if not bars:
+        raise ValueError(f'{stock_code} 在 {end_date} 前没有日线数据')
+    current_idx = next((idx for idx, bar in enumerate(bars) if bar.trade_date == end_date), None)
+    if current_idx is None:
+        raise ValueError(f'{stock_code} 缺少 {end_date} 日线数据')
+
+    points = compute_macd_points([bar.close for bar in bars])
+    end_candidate = _make_candidate(stock, bars, current_idx, points, green_shrink_days)
+    triggered_on_end_date = end_candidate is not None and (
+        cross_zone == 'all' or end_candidate.cross_zone == cross_zone
+    )
+
+    start_idx = max(0, current_idx - lookback_days)
+    matched: list[tuple[int, AlertCandidate]] = []
+    for idx in range(start_idx, current_idx + 1):
+        candidate = _make_candidate(stock, bars, idx, points, green_shrink_days)
+        if candidate and (cross_zone == 'all' or candidate.cross_zone == cross_zone):
+            matched.append((idx, candidate))
+
+    latest_candidate = matched[-1][1] if matched else None
+    samples = [
+        _build_sample('', stock, bars, points, idx, candidate, sqlite_path)
+        for idx, candidate in matched
+        if idx < current_idx
+    ]
+    return {
+        'stock_code': stock['code'],
+        'stock_name': stock['name'],
+        'full_code': stock['full_code'],
+        'end_date': end_date,
+        'lookback_days': lookback_days,
+        'green_shrink_days': green_shrink_days,
+        'cross_zone': cross_zone,
+        'triggered_on_end_date': triggered_on_end_date,
+        'latest_candidate': _candidate_to_dict(latest_candidate) if latest_candidate else None,
+        'end_date_candidate': _candidate_to_dict(end_candidate) if end_candidate else None,
+        'summary': _summarize_samples(samples),
+        'samples': samples,
+        'disclaimer': DISCLAIMER,
+    }
 
 
 def _sample_from_dict(sample: dict[str, Any]) -> MacdAlertBacktestSample:
