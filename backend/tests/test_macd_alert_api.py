@@ -174,3 +174,39 @@ def test_validate_stock_macd_alert_api_normalizes_stock_code(monkeypatch):
 
     assert response.status_code == 200
     assert called['stock_code'] == '600545'
+
+
+def test_validate_stock_macd_alert_api_does_not_schema_reject_stock_query(monkeypatch):
+    from app.api.routes import macd_alert
+
+    called = {}
+
+    def fake_validate(**kwargs):
+        called.update(kwargs)
+        return {
+            'stock_code': kwargs['stock_code'],
+            'stock_name': '卓郎智能',
+            'end_date': kwargs['end_date'],
+            'lookback_days': kwargs['lookback_days'],
+            'green_shrink_days': kwargs['green_shrink_days'],
+            'triggered_on_end_date': False,
+            'latest_candidate': None,
+            'summary': {'backtest_sample_count': 0},
+            'samples': [],
+        }
+
+    monkeypatch.setattr(macd_alert, 'validate_stock_macd_alert', fake_validate)
+    app = FastAPI()
+    app.include_router(macd_alert.router)
+    client = TestClient(app)
+
+    response = client.post(
+        '/stock-validate',
+        json={
+            'stock_code': '卓郎智能',
+            'end_date': '2026-01-10',
+        },
+    )
+
+    assert response.status_code == 200
+    assert called['stock_code'] == '卓郎智能'

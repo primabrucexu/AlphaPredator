@@ -9,6 +9,7 @@ import {
   listInitTasks,
   listMacdAlertBacktestSamples,
   listMacdAlertResults,
+  resolveStockInput,
   scanMacdAlerts,
   terminateInitTask,
   trackMacdAlerts,
@@ -357,8 +358,14 @@ export function MacdAlertPage() {
   async function handleStockValidate(values: StockValidateFormValues) {
     setStockValidating(true);
     try {
+      const stockInput = values.stock_code.trim();
+      const resolved = await resolveStockInput(stockInput);
+      if (resolved.status !== 'ok' || !resolved.stock_code) {
+        const candidates = resolved.candidates?.map(item => `${item.stock_code} ${item.stock_name}`).join('、');
+        throw new Error(resolved.message || (candidates ? `匹配到多只股票：${candidates}` : '请选择明确的股票'));
+      }
       const result = await validateStockMacdAlert({
-        stock_code: values.stock_code.trim(),
+        stock_code: resolved.stock_code,
         end_date: values.end_date,
         lookback_days: values.lookback_days,
         green_shrink_days: values.green_shrink_days,

@@ -537,7 +537,8 @@ def validate_stock_macd_alert(
         raise ValueError(f'{stock_code} 在 {end_date} 前没有日线数据')
     current_idx = next((idx for idx, bar in enumerate(bars) if bar.trade_date == end_date), None)
     if current_idx is None:
-        raise ValueError(f'{stock_code} 缺少 {end_date} 日线数据')
+        current_idx = len(bars) - 1
+    effective_end_date = bars[current_idx].trade_date
 
     points = compute_macd_points([bar.close for bar in bars])
     end_candidate = _make_candidate(stock, bars, current_idx, points, green_shrink_days)
@@ -562,7 +563,7 @@ def validate_stock_macd_alert(
         'stock_code': stock['code'],
         'stock_name': stock['name'],
         'full_code': stock['full_code'],
-        'end_date': end_date,
+        'end_date': effective_end_date,
         'lookback_days': lookback_days,
         'green_shrink_days': green_shrink_days,
         'cross_zone': cross_zone,

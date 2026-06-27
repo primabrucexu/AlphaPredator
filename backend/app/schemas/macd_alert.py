@@ -31,7 +31,7 @@ class MacdAlertTrackRequest(BaseModel):
 
 
 class MacdStockValidateRequest(BaseModel):
-    stock_code: str = Field(..., min_length=6, max_length=6, description='6位股票代码')
+    stock_code: str = Field(..., min_length=1, description='股票代码或用户输入的股票查询')
     end_date: str = Field(..., description='验证截止交易日 YYYY-MM-DD')
     lookback_days: int = Field(720, ge=30, le=3000, description='回看交易日数量')
     green_shrink_days: int = Field(2, ge=1, le=10, description='连续绿柱缩短天数')

@@ -234,3 +234,22 @@ def test_validate_stock_macd_alert_returns_ephemeral_samples() -> None:
 
     assert alert_count == 0
     assert sample_count == 0
+
+
+def test_validate_stock_macd_alert_uses_latest_bar_before_non_trading_end_date() -> None:
+    tmp_path = _workspace_tmp_dir('macd-validate-non-trading')
+    sqlite_path = tmp_path / 'macd-validate.db'
+    duckdb_path = tmp_path / 'macd-validate.duckdb'
+    _seed_stock_list(sqlite_path)
+    _seed_daily_bars(duckdb_path, [10, 9.6, 9.2, 8.8, 8.5, 8.35, 8.3, 8.28, 8.27, 8.27, 8.5])
+
+    result = validate_stock_macd_alert(
+        stock_code='000001',
+        end_date='2026-01-12',
+        sqlite_path=sqlite_path,
+        duckdb_path=duckdb_path,
+        green_shrink_days=2,
+        lookback_days=720,
+    )
+
+    assert result['end_date'] == '2026-01-11'
