@@ -298,6 +298,12 @@ export function InitializePage() {
   const handleOneClickIncrementalUpdate = async () => {
     setError(null);
     setUpdateLoading(true);
+    setBatchTasks(null);
+    batchTaskIdsRef.current = null;
+    if (batchPollRef.current) {
+      clearInterval(batchPollRef.current);
+      batchPollRef.current = null;
+    }
     try {
       const latestMarketTask = initOverview?.latest_market_data_task;
       if (!latestMarketTask) {
@@ -321,9 +327,15 @@ export function InitializePage() {
       setStartDate(nextStartDate);
       setEndDate(targetEndDate);
       setShowDays(false);
-      const task = await createInitTask(nextStartDate, targetEndDate, 'INCREMENTAL_SYNC', 'MARKET_DATA');
+      const result = await createBatchInitTasks(nextStartDate, targetEndDate, 'INCREMENTAL_SYNC');
+      setBatchTasks(result);
       setProgressTaskType('MARKET_DATA');
-      setCurrentTask(task);
+      setCurrentTask(result.market_data_task);
+      batchTaskIdsRef.current = {
+        stock: result.stock_list_task.task_id,
+        market: result.market_data_task.task_id,
+        jygs: result.jygs_review_task.task_id,
+      };
     } catch (e) {
       setError(e instanceof Error ? e.message : '一键增量更新失败');
     } finally {
@@ -559,14 +571,14 @@ export function InitializePage() {
                 {latestMarketTask
                   ? oneClickStartDate > oneClickEndDate
                     ? '行情已同步到今天'
-                    : `将补齐：${oneClickStartDate} — ${oneClickEndDate}`
+                    : `将同步股票列表，并补齐行情与热点复盘：${oneClickStartDate} — ${oneClickEndDate}`
                   : '需先完成一次行情同步'}
               </Typography.Text>
               <Button
                 type="primary"
                 icon={<SyncOutlined />}
                 loading={updateLoading}
-                disabled={isRunning || !initOverview?.market_data_configured || !latestMarketTask}
+                disabled={isRunning || !initOverview?.market_data_configured || !jygsStatus?.valid || !latestMarketTask}
                 onClick={handleOneClickIncrementalUpdate}
               >
                 一键增量更新

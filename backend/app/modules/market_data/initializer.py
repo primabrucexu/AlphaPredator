@@ -1530,6 +1530,7 @@ def _detect_incremental_start(duckdb_path: Path | None = None) -> str | None:
 def create_batch_tasks(
         start_date: str,
         end_date: str,
+        market_mode: str = 'FULL_SYNC',
         sqlite_path: Path | None = None,
         duckdb_path: Path | None = None,
 ) -> dict[str, Any]:
@@ -1548,7 +1549,13 @@ def create_batch_tasks(
     today = datetime.now().strftime('%Y%m%d')
 
     stock_task = create_task(today, today, task_type='STOCK_LIST_SYNC', sqlite_path=sqlite_path)
-    market_task = create_task(start_date, end_date, task_type='MARKET_DATA', sqlite_path=sqlite_path)
+    market_task = create_task(
+        start_date,
+        end_date,
+        mode=market_mode,
+        task_type='MARKET_DATA',
+        sqlite_path=sqlite_path,
+    )
     jygs_task = create_task(start_date, end_date, task_type='JYGS_REVIEW', sqlite_path=sqlite_path)
 
     coordinator = threading.Thread(

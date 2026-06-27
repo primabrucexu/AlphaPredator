@@ -171,7 +171,7 @@ def create_batch_init_tasks(body: BatchTaskRequest) -> BatchTaskResponse:
             detail='start_date must be <= end_date',
         )
     try:
-        result = create_batch_tasks(body.start_date, body.end_date)
+        result = create_batch_tasks(body.start_date, body.end_date, market_mode=body.market_mode)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 

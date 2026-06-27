@@ -184,6 +184,13 @@ class BatchTaskRequest(BaseModel):
     )
 
 
+    market_mode: str = Field(
+        'FULL_SYNC',
+        pattern=r'^(FULL_SYNC|INCREMENTAL_SYNC|RANGE)$',
+        description='MARKET_DATA mode: FULL_SYNC | INCREMENTAL_SYNC | RANGE',
+    )
+
+
 class BatchTaskResponse(BaseModel):
     stock_list_task: TaskResponse
     market_data_task: TaskResponse

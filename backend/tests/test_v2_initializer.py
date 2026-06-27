@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from app.modules.market_data.initializer import (
     _idle_status,
     _write_duckdb_day,
     _write_duckdb_stock_bulk,
+    create_batch_tasks,
     create_task,
     get_overview,
     get_task,
@@ -194,6 +196,47 @@ def test_create_task_accepts_macd_alert_scan_without_market_credentials(tmp_path
     assert task['end_date'] == '20260110'
     assert task['total_items'] == 0
     assert task['processed_items'] == 0
+
+
+def test_create_batch_tasks_passes_market_mode_to_market_data_task() -> None:
+    sqlite_path = Path('tmp') / f'test-batch-mode-{uuid.uuid4().hex}.db'
+    created: list[dict[str, str]] = []
+
+    def fake_create_task(
+        start_date: str,
+        end_date: str,
+        mode: str = 'FULL_SYNC',
+        task_type: str = 'MARKET_DATA',
+        sqlite_path: Path | None = None,
+    ) -> dict[str, Any]:
+        task = {
+            'task_id': f'{task_type}-{len(created)}',
+            'task_type': task_type,
+            'start_date': start_date,
+            'end_date': end_date,
+            'mode': mode,
+            'status': 'PENDING',
+        }
+        created.append(task)
+        return task
+
+    with patch('app.modules.market_data.initializer.create_task', side_effect=fake_create_task), patch(
+        'app.modules.market_data.initializer.get_task',
+        return_value=None,
+    ), patch('app.modules.market_data.initializer.threading.Thread') as thread_cls:
+        result = create_batch_tasks(
+            '20240401',
+            '20240403',
+            market_mode='INCREMENTAL_SYNC',
+            sqlite_path=sqlite_path,
+        )
+
+    assert result['stock_list_task']['task_type'] == 'STOCK_LIST_SYNC'
+    assert result['market_data_task']['task_type'] == 'MARKET_DATA'
+    assert result['market_data_task']['mode'] == 'INCREMENTAL_SYNC'
+    assert result['jygs_review_task']['task_type'] == 'JYGS_REVIEW'
+    assert [task['mode'] for task in created] == ['FULL_SYNC', 'INCREMENTAL_SYNC', 'FULL_SYNC']
+    thread_cls.return_value.start.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

@@ -74,36 +74,40 @@ def test_market_data_incremental_update_tool_creates_task_from_latest_success(
         },
     )
 
-    def fake_create_task(start_date: str, end_date: str, *, mode: str, task_type: str) -> dict:
+    def fake_create_batch_tasks(start_date: str, end_date: str, *, market_mode: str) -> dict:
         created.update(
             start_date=start_date,
             end_date=end_date,
-            mode=mode,
-            task_type=task_type,
+            market_mode=market_mode,
         )
-        return {'task_id': 'new-task', 'start_date': start_date, 'end_date': end_date, 'status': 'PENDING'}
+        return {
+            'stock_list_task': {'task_id': 'stock-task', 'task_type': 'STOCK_LIST_SYNC', 'status': 'PENDING'},
+            'market_data_task': {
+                'task_id': 'market-task',
+                'task_type': 'MARKET_DATA',
+                'start_date': start_date,
+                'end_date': end_date,
+                'status': 'PENDING',
+            },
+            'jygs_review_task': {'task_id': 'jygs-task', 'task_type': 'JYGS_REVIEW', 'status': 'PENDING'},
+        }
 
-    monkeypatch.setattr(mcp_route, 'create_task', fake_create_task)
-    monkeypatch.setattr(mcp_route, 'start_task', lambda task_id: task_id == 'new-task')
-    monkeypatch.setattr(
-        mcp_route,
-        'get_task',
-        lambda task_id: {'task_id': task_id, 'start_date': '20240401', 'end_date': '20240403', 'status': 'RUNNING'},
-    )
+    monkeypatch.setattr(mcp_route, 'create_batch_tasks', fake_create_batch_tasks)
 
     result = mcp_route.start_market_data_incremental_update(target_end_date='20240403')
 
     assert created == {
         'start_date': '20240401',
         'end_date': '20240403',
-        'mode': 'INCREMENTAL_SYNC',
-        'task_type': 'MARKET_DATA',
+        'market_mode': 'INCREMENTAL_SYNC',
     }
     assert result['started'] is True
-    assert result['task_id'] == 'new-task'
+    assert result['task_id'] == 'market-task'
+    assert result['stock_list_task_id'] == 'stock-task'
+    assert result['jygs_review_task_id'] == 'jygs-task'
     assert result['start_date'] == '20240401'
     assert result['end_date'] == '20240403'
-    assert result['status'] == 'RUNNING'
+    assert result['status'] == 'PENDING'
 
 
 def test_main_app_mounts_mcp_under_api_mcp() -> None:

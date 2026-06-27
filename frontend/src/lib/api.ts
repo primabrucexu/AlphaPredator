@@ -628,10 +628,15 @@ export function getInitV2Overview(): Promise<InitV2OverviewResponse> {
   return fetchJson<InitV2OverviewResponse>('/api/data-init/init/overview');
 }
 
-export function createBatchInitTasks(startDate: string, endDate: string): Promise<BatchTaskResponse> {
+export function createBatchInitTasks(
+  startDate: string,
+  endDate: string,
+  marketMode: string = 'FULL_SYNC',
+): Promise<BatchTaskResponse> {
   return postJson<BatchTaskResponse>('/api/data-init/tasks/batch', {
     start_date: startDate,
     end_date: endDate,
+    market_mode: marketMode,
   });
 }
 

@@ -14,7 +14,7 @@ from app.modules.macd_alert.service import (
     list_macd_alert_results as list_macd_alert_results_service,
     track_macd_alerts as track_macd_alerts_service,
 )
-from app.modules.market_data.initializer import create_task, get_overview, get_task, start_task
+from app.modules.market_data.initializer import create_batch_tasks, get_overview, get_task, start_task
 
 
 mcp = FastMCP(
@@ -121,7 +121,7 @@ def start_market_data_incremental_update(target_end_date: str | None = None) -> 
         }
 
     try:
-        task = create_task(start_date, end_date, mode='INCREMENTAL_SYNC', task_type='MARKET_DATA')
+        tasks = create_batch_tasks(start_date, end_date, market_mode='INCREMENTAL_SYNC')
     except ValueError as exc:
         return {
             'started': False,
@@ -132,11 +132,13 @@ def start_market_data_incremental_update(target_end_date: str | None = None) -> 
             'message': str(exc),
         }
 
-    started = start_task(task['task_id'])
-    current = get_task(task['task_id']) or task
+    started = True
+    current = tasks['market_data_task']
     return {
         'started': started,
         'task_id': current.get('task_id'),
+        'stock_list_task_id': tasks['stock_list_task'].get('task_id'),
+        'jygs_review_task_id': tasks['jygs_review_task'].get('task_id'),
         'start_date': current.get('start_date', start_date),
         'end_date': current.get('end_date', end_date),
         'status': current.get('status', 'RUNNING' if started else 'PENDING'),
