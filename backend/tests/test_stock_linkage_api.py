@@ -59,6 +59,35 @@ def test_create_stock_linkage_backtest_creates_and_starts_background_job(monkeyp
     assert started == ['job-1']
 
 
+def test_create_stock_linkage_backtest_accepts_six_digit_stock_code(monkeypatch):
+    from app.api.routes import stock_linkage
+
+    captured = {}
+
+    def fake_create(request):
+        captured['manual_a_full_code'] = request.manual_a_full_code
+        return _job()
+
+    monkeypatch.setattr(stock_linkage, 'create_stock_linkage_backtest_job', fake_create)
+    monkeypatch.setattr(stock_linkage, 'start_stock_linkage_backtest_job', lambda job_id: True)
+    app = FastAPI()
+    app.include_router(stock_linkage.router)
+    client = TestClient(app)
+
+    response = client.post(
+        '/backtests',
+        json={
+            'a_select_mode': 'manual_single',
+            'manual_a_full_code': '000001',
+            'start_date': '2025-01-01',
+            'end_date': '2025-06-01',
+        },
+    )
+
+    assert response.status_code == 202
+    assert captured['manual_a_full_code'] == '000001.SZ'
+
+
 def test_create_stock_linkage_backtest_returns_conflict_when_job_is_running(monkeypatch):
     from app.api.routes import stock_linkage
 

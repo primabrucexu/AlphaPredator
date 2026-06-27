@@ -11,6 +11,15 @@ from app.models.sqlite_models import StockList
 from app.queries.market_queries import get_stock_list_active_board_count_rows
 
 
+def _normalize_stock_search_query(query: str) -> str:
+    normalized = str(query or '').strip().upper()
+    if len(normalized) == 8 and normalized[:2] in {'SH', 'SZ', 'BJ'}:
+        return normalized[2:]
+    if len(normalized) == 9 and normalized[6:] in {'.SH', '.SZ', '.BJ'}:
+        return normalized[:6]
+    return normalized
+
+
 class StockListRepo:
     def __init__(self, sqlite_path: Path | None = None) -> None:
         self._sqlite_path = sqlite_path
@@ -101,18 +110,22 @@ class StockListRepo:
             return self._models_to_dicts(list(rows))
 
     def list_for_search(self, query_upper: str, limit: int) -> list[dict[str, Any]]:
+        normalized_query = _normalize_stock_search_query(query_upper)
         session_factory = self._session_factory()
         with session_factory() as session:
-            if query_upper.isdigit():
+            if normalized_query.isdigit():
                 statement = (
                     select(StockList)
-                    .where(StockList.code.like(query_upper + '%'))  # type: ignore[attr-defined]
+                    .where(StockList.code.like(normalized_query + '%'))  # type: ignore[attr-defined]
                     .limit(limit)
                 )
             else:
                 statement = (
                     select(StockList)
-                    .where(StockList.cnspell.like(query_upper + '%'))  # type: ignore[attr-defined]
+                    .where(
+                        (StockList.cnspell.like(normalized_query + '%'))  # type: ignore[attr-defined]
+                        | (StockList.name.like(normalized_query + '%'))  # type: ignore[attr-defined]
+                    )
                     .limit(limit)
                 )
             rows = session.exec(statement).all()

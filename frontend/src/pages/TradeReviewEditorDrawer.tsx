@@ -16,6 +16,7 @@ import {
   updateTradeReview,
 } from '../lib/api';
 import type {OcrOperationItem, OperationItem, TradeReviewDetail} from '../lib/api';
+import {StockSearchInput} from '../components/StockSearchBar';
 
 const {TextArea} = Input;
 const {Text} = Typography;
@@ -257,7 +258,11 @@ export function TradeReviewEditorDrawer({open, editTarget, onClose, onSaved}: Pr
               <Input placeholder="如：卓郎智能" />
             </Form.Item>
             <Form.Item name="stock_code" label="股票代码" style={{marginBottom: 8}}>
-              <Input placeholder="如：601218" />
+              <StockSearchInput
+                placeholder="代码/名称/拼音"
+                style={{width: 180}}
+                onSelectStock={(stock) => form.setFieldValue('stock_name', stock.stock_name)}
+              />
             </Form.Item>
             <Form.Item name="start_date" label="建仓日期" rules={[{required: true}]} style={{marginBottom: 8}}>
               <DatePicker format="YYYY-MM-DD" />

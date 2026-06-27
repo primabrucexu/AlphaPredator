@@ -4,7 +4,23 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.modules.market_data.data_source import _to_full_code
 from app.modules.stock_linkage.models import StockLinkageBacktestRequest
+
+
+def _normalize_manual_a_full_code(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().upper()
+    if not normalized:
+        return normalized
+    if len(normalized) == 8 and normalized[:2] in {'SH', 'SZ', 'BJ'}:
+        normalized = normalized[2:]
+    if len(normalized) == 9 and normalized[6:] in {'.SH', '.SZ', '.BJ'}:
+        return normalized[:6] + normalized[6:]
+    if len(normalized) == 6 and normalized.isdigit():
+        return _to_full_code(normalized)
+    return normalized
 
 
 class StockLinkageBacktestCreateRequest(BaseModel):
@@ -21,6 +37,13 @@ class StockLinkageBacktestCreateRequest(BaseModel):
     def validate_date_text(cls, value: str) -> str:
         datetime.strptime(value, '%Y-%m-%d')
         return value
+
+    @field_validator('manual_a_full_code', mode='before')
+    @classmethod
+    def normalize_manual_a_full_code(cls, value: str | None) -> str | None:
+        if not isinstance(value, str):
+            return value
+        return _normalize_manual_a_full_code(value)
 
     def to_service_request(self) -> StockLinkageBacktestRequest:
         return StockLinkageBacktestRequest(

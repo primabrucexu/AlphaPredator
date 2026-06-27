@@ -20,6 +20,7 @@ import {
   type TaskItemsResponse,
   type TaskResponse,
 } from '../lib/api';
+import {StockSearchInput} from '../components/StockSearchBar';
 
 interface ScanFormValues {
   trade_date: string;
@@ -662,11 +663,10 @@ export function MacdAlertPage() {
                           name="stock_code"
                           label="股票代码"
                           rules={[
-                            {required: true, message: '请输入股票代码'},
-                            {len: 6, message: '股票代码需为6位'},
+                            {required: true, message: '请选择股票'},
                           ]}
                         >
-                          <Input placeholder="如 600545" style={{width: 130}} />
+                          <StockSearchInput placeholder="代码/名称/拼音" style={{width: 180}} />
                         </Form.Item>
                         <Form.Item name="end_date" label="截止日" rules={[{required: true, message: '请选择截止日'}]}>
                           <Input type="date" style={{width: 150}} />

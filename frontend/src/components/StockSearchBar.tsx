@@ -1,22 +1,32 @@
-import {type ReactNode, useRef, useState} from 'react';
+import {type CSSProperties, type ReactNode, useRef, useState} from 'react';
 import {AutoComplete, Input, Spin} from 'antd';
 import {SearchOutlined} from '@ant-design/icons';
 import {useNavigate} from 'react-router-dom';
 import {searchStocks, type StockCandidate} from '../lib/api';
 
-interface StockSearchBarProps {
-    style?: React.CSSProperties;
+interface StockSearchInputProps {
+    value?: string;
+    onChange?: (value: string) => void;
+    onSelectStock?: (stock: StockCandidate) => void;
+    style?: CSSProperties;
     inputSize?: 'small' | 'middle' | 'large';
     placeholder?: string;
 }
 
-export function StockSearchBar({
-                                   style,
-                                   inputSize = 'middle',
-                                   placeholder = '搜索股票代码或名称',
-                               }: StockSearchBarProps) {
-    const navigate = useNavigate();
-    const [query, setQuery] = useState('');
+interface StockSearchBarProps {
+    style?: CSSProperties;
+    inputSize?: 'small' | 'middle' | 'large';
+    placeholder?: string;
+}
+
+export function StockSearchInput({
+                                     value,
+                                     onChange,
+                                     onSelectStock,
+                                     style,
+                                     inputSize = 'middle',
+                                     placeholder = '搜索股票代码或名称',
+                                 }: StockSearchInputProps) {
     const [searching, setSearching] = useState(false);
     const [options, setOptions] = useState<{ value: string; label: ReactNode }[]>([]);
     const [lastCandidates, setLastCandidates] = useState<StockCandidate[]>([]);
@@ -57,18 +67,19 @@ export function StockSearchBar({
     };
 
     const handleSelect = (stockCode: string) => {
-        setQuery('');
         setOptions([]);
-        navigate(`/stocks/${stockCode}`);
+        onChange?.(stockCode);
+        const selected = lastCandidates.find((item) => item.stock_code === stockCode);
+        if (selected) onSelectStock?.(selected);
     };
 
     const handleEnter = () => {
-        const q = query.trim();
+        const q = (value ?? '').trim();
         if (!q) return;
         if (lastCandidates.length === 1) {
-            setQuery('');
             setOptions([]);
-            navigate(`/stocks/${lastCandidates[0].stock_code}`);
+            onChange?.(lastCandidates[0].stock_code);
+            onSelectStock?.(lastCandidates[0]);
         }
     };
 
@@ -76,9 +87,9 @@ export function StockSearchBar({
         <AutoComplete
             style={{width: 280, ...style}}
             options={options}
-            value={query}
+            value={value}
             onChange={(val) => {
-                setQuery(val);
+                onChange?.(val);
                 triggerSearch(val);
             }}
             onSelect={handleSelect}
@@ -95,3 +106,25 @@ export function StockSearchBar({
     );
 }
 
+export function StockSearchBar({
+                                   style,
+                                   inputSize = 'middle',
+                                   placeholder = '搜索股票代码或名称',
+                               }: StockSearchBarProps) {
+    const navigate = useNavigate();
+    const [query, setQuery] = useState('');
+
+    return (
+        <StockSearchInput
+            value={query}
+            onChange={setQuery}
+            onSelectStock={(stock) => {
+                setQuery('');
+                navigate(`/stocks/${stock.stock_code}`);
+            }}
+            style={style}
+            inputSize={inputSize}
+            placeholder={placeholder}
+        />
+    );
+}

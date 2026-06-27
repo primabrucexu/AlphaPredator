@@ -9,6 +9,7 @@ import {
   type StockLinkageBacktestJobResponse,
   type StockLinkageBacktestResultRow,
 } from '../lib/api';
+import {StockSearchInput} from '../components/StockSearchBar';
 
 const triggerTypeText: Record<string, string> = {
   single_bar_return: '单根5分钟',
@@ -35,7 +36,7 @@ function toPercent(value: number): string {
 
 interface FormValues {
   a_select_mode: StockLinkageASelectMode;
-  manual_a_full_code?: string;
+  manual_a_stock_code?: string;
   hot_top_n?: number;
   start_date: string;
   end_date: string;
@@ -188,7 +189,7 @@ export function StockLinkagePage() {
     try {
       const result = await createStockLinkageBacktest({
         a_select_mode: values.a_select_mode,
-        manual_a_full_code: values.a_select_mode === 'manual_single' ? values.manual_a_full_code?.trim() : null,
+        manual_a_full_code: values.a_select_mode === 'manual_single' ? values.manual_a_stock_code?.trim() : null,
         hot_top_n: values.a_select_mode === 'hot_limit_top' ? values.hot_top_n : null,
         start_date: values.start_date,
         end_date: values.end_date,
@@ -235,11 +236,11 @@ export function StockLinkagePage() {
 
           {mode === 'manual_single' ? (
             <Form.Item
-              name="manual_a_full_code"
+              name="manual_a_stock_code"
               label="A股票"
-              rules={[{required: true, message: '请输入完整股票代码'}]}
+              rules={[{required: true, message: '请选择A股票'}]}
             >
-              <Input placeholder="000001.SZ" style={{width: 140}} />
+              <StockSearchInput placeholder="代码/名称/拼音" style={{width: 180}} />
             </Form.Item>
           ) : (
             <Form.Item name="hot_top_n" label="Top N" rules={[{required: true}]}>

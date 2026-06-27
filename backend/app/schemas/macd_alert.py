@@ -37,6 +37,18 @@ class MacdStockValidateRequest(BaseModel):
     green_shrink_days: int = Field(2, ge=1, le=10, description='连续绿柱缩短天数')
     cross_zone: str = Field('all', description='形态范围：all/underwater/above_zero/mixed')
 
+    @field_validator('stock_code', mode='before')
+    @classmethod
+    def normalize_stock_code(cls, value: str) -> str:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip().upper()
+        if len(normalized) == 8 and normalized[:2] in {'SH', 'SZ', 'BJ'}:
+            return normalized[2:]
+        if len(normalized) == 9 and normalized[6:] in {'.SH', '.SZ', '.BJ'}:
+            return normalized[:6]
+        return normalized
+
     @field_validator('end_date')
     @classmethod
     def validate_end_date(cls, value: str) -> str:
