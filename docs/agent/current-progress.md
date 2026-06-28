@@ -6,44 +6,24 @@
 ---
 
 ## 当前活跃需求
-- [F06：MACD 形态预警](F06-macd-alert.md)
+- [F08：后端日志文件输出](F08-backend-log-files.md)
 
 ---
 
 ### 完成情况
 
-- [x] 定位 `POST /api/macd-alerts/stock-validate` 422 根因：股票代码输入带空白或交易所前后缀时，在 Pydantic schema 阶段被长度校验拒绝。
-- [x] 为个股验证接口补充股票代码规范化：支持空白裁剪、`SH/SZ/BJ` 前缀和 `.SH/.SZ/.BJ` 后缀归一为 6 位代码。
-- [x] 补充后端回归测试，覆盖常见完整代码输入不会再返回 422。
-- [x] 后端 MACD 接口定点测试通过。
-- [x] 修正 agent 规则：网页交互层对齐首页搜索框，支持多种股票输入和候选搜索；程序内部流转统一使用 6 位数字股票代码。
-- [x] 按新规则审计并修复前端股票输入入口：MACD 个股验证、股票联动回测、交易复盘编辑均改为复用股票候选搜索输入。
-- [x] 扩展股票搜索后端能力：支持交易所前缀、交易所后缀和中文名称前缀搜索；联动回测接口支持 6 位代码入参并归一到现有 full_code 服务字段。
-- [x] 修复个股验证非交易日截止日返回 422：当用户选择周末或本地无当日日线时，自动使用截止日前最近一条日线作为实际验证日期。
-- [x] 修复个股验证直接输入股票名称/拼音后提交时 schema 过早 422：前端提交前先 resolve 为 6 位代码，后端 schema 不再限制股票查询文本必须 6 位。
-- [x] 新增 agent 规则：用户日期与行情联动时必须解析到有效交易日，非交易日/缺当日 K 线不应被 schema 或路由层误判为参数格式错误。
-- [x] 调整 MACD 回测卖出规则：金叉前如趋势破坏且 3 个交易日内未修复，则按第 3 个观察日收盘价卖出；观察窗只在金叉前生效，金叉后卖出逻辑保持不变。
-- [x] 修复 MACD 批量扫描未遵守日期联动规则：当用户选择周末、非交易日或本地当日日线缺失/明显不完整时，扫描任务自动解析到此前最近的有效日线交易日，后台任务日期、落库日期和前端结果查询日期保持一致。
-- [x] 修复 MACD 历史回测样本重复计数：同一只股票连续多个交易日满足预警形态时，只按连续命中区间首日生成一条历史样本；600452 涪陵电力 2026-04-02 至 2026-04-17 区间验证为单条样本，收益率约 7.85%。
-- [x] 调整 MACD 金叉后卖出规则：金叉后只要 MACD 柱值小于前一交易日柱值即卖出，不再要求仍为红柱；603677 奇精机械 2024-08-14 样本按新规则在 2024-08-19 卖出。
-- [x] 重写 MACD 回测卖出规则为三分支：趋势破坏观察 3 个交易日、趋势未破坏但 5 日无法金叉卖出、5 日内金叉后按 MACD 柱缩短卖出；603677 奇精机械 2025-06-19 样本按新规则在 2025-06-26 卖出。
-- [x] 适配用户已更新的 DBML 落库枚举：`sell_reason` 改为 `trend_broken`、`cross_timeout`、`macd_bar_shrink` 三类；同步后端落库、回归测试、前端展示和 F06 agent 文档。
+- [x] 已确认后端日志文件默认输出到项目根目录 `logs/` 文件夹。
+- [x] 已确认日志文件名为 `logs/backend.log`。
+- [x] 已确认使用标准库 `TimedRotatingFileHandler` 按天轮转。
+- [x] 已确认历史日志 gzip 压缩。
+- [x] 已确认历史日志只保留 7 天。
+- [x] 已实现后端日志文件输出并保留控制台输出。
+- [x] 已补充日志配置测试。
+- [x] 已运行目标测试和轻量回归测试。
 
 ### 下一步
-- 等待用户确认是否需要提交本次 MACD 预警结果统计口径调整。
+- 询问用户是否需要 commit，以及是否需要打标签（feature/fix）。
 
 ### 已知问题 / 阻塞 / 待人工决策
-- 无。
 
----
-
-## 2026-06-28 补充
-
-- [x] 修复 MACD 预警扫描历史时间显示：前端不再直接截取原始 ISO 字符串，统一用北京时间展示；显式 UTC/offset 时间会转换到 `Asia/Shanghai`，无时区本地时间仅规范为 `YYYY-MM-DD HH:mm`。
-- [x] 已验证：`node tmp/macd_time_format_check.mjs`、`npm run build`、`npm run check:playwright`、`node tmp/macd_page_probe.mjs` 均通过。
-- [x] 调整 MACD 预警结果回测摘要统计口径：胜率、均收益、最大收益、最大亏损、平均持有天数和完成/盈利交易数只统计已形成金叉且已有收益率的样本；未金叉即趋势破坏或超时卖出的样本不再进入这些收益指标。
-- [x] 已验证：`.venv\Scripts\pytest.exe backend/tests/test_macd_alert_service.py -q` 通过。
-- [x] MACD 预警结果和历史样本展开详情增加最近 3 次涨停记录：按预警日之前 `daily_hot_info` 中最近 3 条涨停复盘展示日期、`hot_theme` 所属板块/题材和描述，描述优先使用 `short_reason`，为空时使用 `reason`；不新增或修改数据库表。
-- [x] 已验证：`.venv\Scripts\pytest.exe backend/tests/test_macd_alert_service.py -q`、`npm.cmd run build`、`npm.cmd run check:playwright` 均通过。
-- [x] 修复 MCP 调用 MACD 后台扫描未显式传 `markets` 时被误判为非默认主板股票池：`create_macd_alert_scan_task` 现在仅在 `markets is None` 时归一化为 `['主板']`，显式传入其它股票池仍按第一版限制拒绝。
-- [x] 已验证：`.venv\Scripts\pytest.exe backend/tests/test_macd_alert_service.py -q -k default_main_board`、`.venv\Scripts\pytest.exe backend/tests/test_mcp_basic.py -q`、`.venv\Scripts\pytest.exe backend/tests/test_macd_alert_service.py -q` 均通过。
+- 暂无。
