@@ -356,6 +356,12 @@ export interface MacdAlertScanRequest {
   green_shrink_days?: number;
 }
 
+export interface RecentLimitUpInfo {
+  trade_date: string;
+  theme: string;
+  description: string;
+}
+
 export interface MacdAlertResultRow {
   id: string;
   trade_date: string;
@@ -391,6 +397,7 @@ export interface MacdAlertResultRow {
   backtest_confidence_level: string;
   score: number;
   summary: string;
+  recent_limit_ups?: RecentLimitUpInfo[];
 }
 
 export interface MacdAlertScanResponse {
@@ -439,6 +446,7 @@ export interface MacdAlertBacktestSampleRow {
   return_pct: number | null;
   holding_days: number | null;
   status: string;
+  recent_limit_ups?: RecentLimitUpInfo[];
 }
 
 export interface MacdStockValidateRequest {
@@ -469,6 +477,7 @@ export interface MacdStockValidateCandidate {
   green_shrink_days: number;
   score: number;
   summary: string;
+  recent_limit_ups?: RecentLimitUpInfo[];
 }
 
 export interface MacdStockValidateSummary {

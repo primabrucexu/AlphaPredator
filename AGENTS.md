@@ -43,6 +43,7 @@
 
 - 检查是否遵守了 [agent-rules.md](docs/agent-rules.md) 的所有规则
 - 检查是否违反了 [human](docs/human) 目录下的规则
+- 检查是否遵守了 [biz-rules.md](docs/human/biz-rules.md) 的规则
 - 如有新增或迁移需求文档，更新 [guide.md](docs/guide.md) 索引
 - 更新 [`docs/agent/current-progress.md`](docs/agent/current-progress.md) 进度和 [`docs/agent/recent-actions.md`](docs/agent/recent-actions.md) 操作日志
 - 提问用户是否需要 commit

@@ -306,6 +306,43 @@ def _last_limit_up_info(sqlite_path: Path | None, stock_code: str, trade_date: s
             session.close()
 
 
+def _recent_limit_ups(
+    sqlite_path: Path | None,
+    stock_code: str,
+    trade_date: str,
+    limit: int = 3,
+    _session: Any = None,
+) -> list[dict[str, Any]]:
+    if _session is not None:
+        session = _session
+        needs_close = False
+    else:
+        session_factory = _session_factory(sqlite_path)
+        session = session_factory()
+        needs_close = True
+    try:
+        rows = session.exec(
+            select(DailyHotInfo)
+            .where(
+                DailyHotInfo.stock_code == stock_code,
+                DailyHotInfo.trade_date <= trade_date,
+            )
+            .order_by(DailyHotInfo.trade_date.desc())  # type: ignore[attr-defined]
+            .limit(limit)
+        ).all()
+        return [
+            {
+                'trade_date': row.trade_date,
+                'theme': row.hot_theme,
+                'description': row.short_reason or row.reason,
+            }
+            for row in rows
+        ]
+    finally:
+        if needs_close:
+            session.close()
+
+
 def _theme_heat(sqlite_path: Path | None, theme: str | None, trade_date: str, window_days: int = 5, _session: Any = None) -> dict[str, Any]:
     if not theme:
         return {'theme_recent_limit_up_count': 0, 'theme_recent_rank': None, 'theme_heat_level': 'none'}
@@ -489,7 +526,7 @@ def _build_sample(
 def _summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
     sample_count = len(samples)
     cross_success = [sample for sample in samples if sample['cross_date']]
-    completed = [sample for sample in samples if sample['return_pct'] is not None]
+    completed = [sample for sample in cross_success if sample['return_pct'] is not None]
     t1_cross = [sample for sample in samples if sample['t1_track_status'] == 't1_cross_confirmed']
     t1_kept = [sample for sample in samples if sample['t1_track_status'] == 't1_trend_kept']
     t1_weakened = [sample for sample in samples if sample['t1_track_status'] == 't1_trend_weakened']
@@ -573,6 +610,13 @@ def _candidate_to_dict(candidate: AlertCandidate) -> dict[str, Any]:
     }
 
 
+def _candidate_to_detail_dict(candidate: AlertCandidate, sqlite_path: Path | None) -> dict[str, Any]:
+    return {
+        **_candidate_to_dict(candidate),
+        'recent_limit_ups': _recent_limit_ups(sqlite_path, candidate.stock_code, candidate.trade_date),
+    }
+
+
 def _load_stock(sqlite_path: Path | None, stock_code: str) -> dict[str, str]:
     ensure_sqlite_schema(sqlite_path)
     session_factory = _session_factory(sqlite_path)
@@ -633,6 +677,13 @@ def validate_stock_macd_alert(
         for idx, candidate in sample_matches
         if idx < current_idx
     ]
+    samples_with_limit_ups = [
+        {
+            **sample,
+            'recent_limit_ups': _recent_limit_ups(sqlite_path, sample['stock_code'], sample['alert_date']),
+        }
+        for sample in samples
+    ]
     return {
         'stock_code': stock['code'],
         'stock_name': stock['name'],
@@ -642,10 +693,10 @@ def validate_stock_macd_alert(
         'green_shrink_days': green_shrink_days,
         'cross_zone': cross_zone,
         'triggered_on_end_date': triggered_on_end_date,
-        'latest_candidate': _candidate_to_dict(latest_candidate) if latest_candidate else None,
-        'end_date_candidate': _candidate_to_dict(end_candidate) if end_candidate else None,
+        'latest_candidate': _candidate_to_detail_dict(latest_candidate, sqlite_path) if latest_candidate else None,
+        'end_date_candidate': _candidate_to_detail_dict(end_candidate, sqlite_path) if end_candidate else None,
         'summary': _summarize_samples(samples),
-        'samples': samples,
+        'samples': samples_with_limit_ups,
         'disclaimer': DISCLAIMER,
     }
 
@@ -811,13 +862,14 @@ def create_macd_alert_scan_task(
 ) -> dict[str, Any]:
     if universe_scope != 'market':
         raise ValueError('第一版仅支持 market 股票池')
-    if markets != ['主板']:
+    target_markets = ['主板'] if markets is None else markets
+    if target_markets != ['主板']:
         raise ValueError('第一版后台扫描仅支持默认主板股票池')
     if exclude_st is not True:
         raise ValueError('第一版后台扫描默认排除 ST')
     from app.modules.market_data.initializer import create_task
 
-    stocks = _load_universe(sqlite_path, markets, exclude_st)
+    stocks = _load_universe(sqlite_path, target_markets, exclude_st)
     effective_trade_date = _resolve_effective_trade_date(
         duckdb_path,
         [stock['full_code'] for stock in stocks],
@@ -927,7 +979,13 @@ def list_macd_alert_results(
             .offset(offset)
             .limit(limit)
         ).all()
-    return [row.model_dump() for row in rows]
+        return [
+            {
+                **row.model_dump(),
+                'recent_limit_ups': _recent_limit_ups(sqlite_path, row.stock_code, row.trade_date, _session=session),
+            }
+            for row in rows
+        ]
 
 
 def list_macd_alert_backtest_samples(
@@ -947,7 +1005,13 @@ def list_macd_alert_backtest_samples(
             .offset(offset)
             .limit(limit)
         ).all()
-    return [row.model_dump() for row in rows]
+        return [
+            {
+                **row.model_dump(),
+                'recent_limit_ups': _recent_limit_ups(sqlite_path, row.stock_code, row.alert_date, _session=session),
+            }
+            for row in rows
+        ]
 
 
 def get_latest_trade_date(*, duckdb_path: Path | None = None) -> str | None:

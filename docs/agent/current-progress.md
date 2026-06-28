@@ -30,7 +30,7 @@
 - [x] 适配用户已更新的 DBML 落库枚举：`sell_reason` 改为 `trend_broken`、`cross_timeout`、`macd_bar_shrink` 三类；同步后端落库、回归测试、前端展示和 F06 agent 文档。
 
 ### 下一步
-- 等待用户确认是否需要提交本次 MACD 回测卖出规则重写。
+- 等待用户确认是否需要提交本次 MACD 预警结果统计口径调整。
 
 ### 已知问题 / 阻塞 / 待人工决策
 - 无。
@@ -41,3 +41,9 @@
 
 - [x] 修复 MACD 预警扫描历史时间显示：前端不再直接截取原始 ISO 字符串，统一用北京时间展示；显式 UTC/offset 时间会转换到 `Asia/Shanghai`，无时区本地时间仅规范为 `YYYY-MM-DD HH:mm`。
 - [x] 已验证：`node tmp/macd_time_format_check.mjs`、`npm run build`、`npm run check:playwright`、`node tmp/macd_page_probe.mjs` 均通过。
+- [x] 调整 MACD 预警结果回测摘要统计口径：胜率、均收益、最大收益、最大亏损、平均持有天数和完成/盈利交易数只统计已形成金叉且已有收益率的样本；未金叉即趋势破坏或超时卖出的样本不再进入这些收益指标。
+- [x] 已验证：`.venv\Scripts\pytest.exe backend/tests/test_macd_alert_service.py -q` 通过。
+- [x] MACD 预警结果和历史样本展开详情增加最近 3 次涨停记录：按预警日之前 `daily_hot_info` 中最近 3 条涨停复盘展示日期、`hot_theme` 所属板块/题材和描述，描述优先使用 `short_reason`，为空时使用 `reason`；不新增或修改数据库表。
+- [x] 已验证：`.venv\Scripts\pytest.exe backend/tests/test_macd_alert_service.py -q`、`npm.cmd run build`、`npm.cmd run check:playwright` 均通过。
+- [x] 修复 MCP 调用 MACD 后台扫描未显式传 `markets` 时被误判为非默认主板股票池：`create_macd_alert_scan_task` 现在仅在 `markets is None` 时归一化为 `['主板']`，显式传入其它股票池仍按第一版限制拒绝。
+- [x] 已验证：`.venv\Scripts\pytest.exe backend/tests/test_macd_alert_service.py -q -k default_main_board`、`.venv\Scripts\pytest.exe backend/tests/test_mcp_basic.py -q`、`.venv\Scripts\pytest.exe backend/tests/test_macd_alert_service.py -q` 均通过。

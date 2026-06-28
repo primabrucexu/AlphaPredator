@@ -15,6 +15,8 @@ from app.modules.macd_alert.service import (
     DailyBar,
     _build_backtest_samples,
     _build_sample,
+    _recent_limit_ups,
+    _summarize_samples,
     calculate_cross_trigger_price,
     calculate_trend_keep_price,
     create_macd_alert_scan_task,
@@ -22,6 +24,72 @@ from app.modules.macd_alert.service import (
     track_macd_alerts,
     validate_stock_macd_alert,
 )
+
+
+def test_recent_limit_ups_returns_latest_three_with_theme_and_preferred_short_reason() -> None:
+    tmp_path = _workspace_tmp_dir('macd-recent-limit-ups')
+    sqlite_path = tmp_path / 'macd-alert.db'
+    ensure_sqlite_schema(sqlite_path)
+    conn = connect_sqlite(sqlite_path)
+    try:
+        conn.executemany(
+            """
+            INSERT INTO daily_hot_info
+            (trade_date, limit_up_time, stock_code, name, streak_text, hot_theme, reason, short_reason, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                ('2026-01-02', '09:30', '000001', '测试一号', '首板', '机器人', '机器人长描述', '', 'test'),
+                ('2026-01-04', '09:30', '000001', '测试一号', '首板', '算力', '算力长描述', '算力短描述', 'test'),
+                ('2026-01-06', '09:30', '000001', '测试一号', '首板', '电力', '电力长描述', '电力短描述', 'test'),
+                ('2026-01-08', '09:30', '000001', '测试一号', '首板', '芯片', '芯片长描述', '芯片短描述', 'test'),
+                ('2026-01-09', '09:30', '000002', '测试二号', '首板', '无关', '无关描述', '无关短描述', 'test'),
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    rows = _recent_limit_ups(sqlite_path, '000001', '2026-01-07')
+
+    assert rows == [
+        {'trade_date': '2026-01-06', 'theme': '电力', 'description': '电力短描述'},
+        {'trade_date': '2026-01-04', 'theme': '算力', 'description': '算力短描述'},
+        {'trade_date': '2026-01-02', 'theme': '机器人', 'description': '机器人长描述'},
+    ]
+
+
+def test_backtest_summary_only_uses_post_cross_returns_for_win_rate_and_average_return() -> None:
+    samples = [
+        {
+            'cross_date': None,
+            'return_pct': -0.20,
+            'holding_days': 4,
+            't1_track_status': 't1_trend_weakened',
+        },
+        {
+            'cross_date': '2026-01-03',
+            'return_pct': 0.10,
+            'holding_days': 2,
+            't1_track_status': 't1_cross_confirmed',
+        },
+        {
+            'cross_date': '2026-01-04',
+            'return_pct': None,
+            'holding_days': None,
+            't1_track_status': 't1_trend_kept',
+        },
+    ]
+
+    summary = _summarize_samples(samples)
+
+    assert summary['backtest_cross_success_count'] == 2
+    assert summary['backtest_completed_trade_count'] == 1
+    assert summary['backtest_profit_trade_count'] == 1
+    assert summary['backtest_win_rate'] == pytest.approx(1.0)
+    assert summary['backtest_avg_return_pct'] == pytest.approx(0.10)
+    assert summary['backtest_max_loss_pct'] == pytest.approx(0.10)
+    assert summary['backtest_avg_holding_days'] == pytest.approx(2.0)
 
 
 def _workspace_tmp_dir(name: str) -> Path:
@@ -436,6 +504,27 @@ def test_create_macd_alert_scan_task_uses_effective_trade_date() -> None:
         duckdb_path=duckdb_path,
     )
 
+    assert task['start_date'] == '20260110'
+    assert task['end_date'] == '20260110'
+
+
+def test_create_macd_alert_scan_task_uses_default_main_board_when_markets_omitted() -> None:
+    tmp_path = _workspace_tmp_dir('macd-task-default-market')
+    sqlite_path = tmp_path / 'macd-alert.db'
+    duckdb_path = tmp_path / 'macd-alert.duckdb'
+    _seed_stock_list(sqlite_path)
+    _seed_daily_bars(duckdb_path, [10, 9.6, 9.2, 8.8, 8.5, 8.35, 8.3, 8.28, 8.27, 8.27])
+
+    task = create_macd_alert_scan_task(
+        trade_date='2026-01-12',
+        universe_scope='market',
+        exclude_st=True,
+        green_shrink_days=2,
+        sqlite_path=sqlite_path,
+        duckdb_path=duckdb_path,
+    )
+
+    assert task['task_type'] == 'MACD_ALERT_SCAN'
     assert task['start_date'] == '20260110'
     assert task['end_date'] == '20260110'
 

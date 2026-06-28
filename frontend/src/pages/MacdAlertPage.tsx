@@ -18,6 +18,7 @@ import {
   type MacdAlertResultRow,
   type MacdStockValidateResponse,
   type MacdAlertTrackResponse,
+  type RecentLimitUpInfo,
   type TaskItemsResponse,
   type TaskResponse,
 } from '../lib/api';
@@ -132,6 +133,32 @@ function formatSampleSentence(row: MacdAlertBacktestSampleRow): string {
   return `${alert} ${buy}，${row.sell_date}${reason}${fmtPrice(row.sell_price)}元卖出，期间收益率${fmtPct(row.return_pct)}。`;
 }
 
+function renderRecentLimitUps(rows?: RecentLimitUpInfo[]) {
+  if (!rows || rows.length === 0) {
+    return <Typography.Text type="secondary">近 120 日未找到涨停复盘记录。</Typography.Text>;
+  }
+
+  return (
+    <Space direction="vertical" size={4} style={{display: 'flex'}}>
+      <Typography.Text strong>最近 3 次涨停</Typography.Text>
+      {rows.map((item) => (
+        <Typography.Text key={`${item.trade_date}-${item.theme}`}>
+          {item.trade_date}｜{item.theme || '未标注板块'}｜{item.description || '暂无描述'}
+        </Typography.Text>
+      ))}
+    </Space>
+  );
+}
+
+function renderAlertDetail(row: MacdAlertResultRow) {
+  return (
+    <Space direction="vertical" size={8} style={{display: 'flex'}}>
+      <Typography.Paragraph style={{margin: 0}}>{row.summary}</Typography.Paragraph>
+      {renderRecentLimitUps(row.recent_limit_ups)}
+    </Space>
+  );
+}
+
 function renderSampleDetail(row: MacdAlertBacktestSampleRow) {
   const detailItems = [
     ['预警日收盘价', `${fmtPrice(row.alert_close_price)}元`],
@@ -158,6 +185,7 @@ function renderSampleDetail(row: MacdAlertBacktestSampleRow) {
           </Col>
         ))}
       </Row>
+      {renderRecentLimitUps(row.recent_limit_ups)}
     </Space>
   );
 }
@@ -649,9 +677,7 @@ export function MacdAlertPage() {
                       scroll={{x: 1600}}
                       pagination={{pageSize: 20, showSizeChanger: true}}
                       expandable={{
-                        expandedRowRender: (row) => (
-                          <Typography.Paragraph style={{margin: 0}}>{row.summary}</Typography.Paragraph>
-                        ),
+                        expandedRowRender: renderAlertDetail,
                       }}
                       locale={{emptyText: <Empty description={activeTradeDate ? `${activeTradeDate} 暂无预警结果` : '请从左侧选择扫描记录'} />}}
                     />
