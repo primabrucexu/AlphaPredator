@@ -363,12 +363,35 @@ def _build_sample(
         else:
             t1_status = 't1_trend_weakened'
         cross_idx = None
+        pre_cross_sell_idx = None
+        broken_idx = None
         for probe_idx in range(buy_idx, min(len(bars), buy_idx + 5)):
             if points[probe_idx].dif >= points[probe_idx].dea:
                 cross_idx = probe_idx
                 break
+            current_point = points[probe_idx]
+            previous_point = points[probe_idx - 1]
+            if (
+                current_point.hist < 0
+                and previous_point.hist < 0
+                and abs(current_point.hist) < abs(previous_point.hist)
+            ):
+                broken_idx = None
+            elif current_point.hist < 0 and broken_idx is None:
+                broken_idx = probe_idx
+            if broken_idx is not None and probe_idx - broken_idx >= 3:
+                pre_cross_sell_idx = probe_idx
+                break
         if cross_idx is None:
-            status = 'cross_failed' if len(bars) >= buy_idx + 5 else 'insufficient_data'
+            if pre_cross_sell_idx is not None:
+                sell_date = bars[pre_cross_sell_idx].trade_date
+                sell_price = bars[pre_cross_sell_idx].close
+                sell_reason = 'timeout'
+                return_pct = sell_price / buy_bar.open - 1
+                holding_days = pre_cross_sell_idx - buy_idx + 1
+                status = 'cross_failed'
+            else:
+                status = 'cross_failed' if len(bars) >= buy_idx + 5 else 'insufficient_data'
         else:
             cross_date = bars[cross_idx].trade_date
             cross_type = _cross_zone(points[cross_idx])

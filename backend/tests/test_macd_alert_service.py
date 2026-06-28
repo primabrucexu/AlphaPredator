@@ -8,14 +8,17 @@ import pytest
 from app.db.duckdb_storage import connect_duckdb, ensure_duckdb_schema
 from app.db.sqlite import connect_sqlite, ensure_sqlite_schema
 from app.modules.market_data.initializer import create_task, get_task
+from app.modules.macd_alert.indicators import MacdPoint, compute_macd_points
 from app.modules.macd_alert.service import (
+    AlertCandidate,
+    DailyBar,
+    _build_sample,
     calculate_cross_trigger_price,
     calculate_trend_keep_price,
     scan_macd_alerts,
     track_macd_alerts,
     validate_stock_macd_alert,
 )
-from app.modules.macd_alert.indicators import compute_macd_points
 
 
 def _workspace_tmp_dir(name: str) -> Path:
@@ -89,6 +92,98 @@ def _seed_daily_bars(duckdb_path: Path, closes: list[float], *, code: str = '000
         )
     finally:
         conn.close()
+
+
+def test_backtest_sample_sells_before_cross_when_broken_trend_is_not_repaired() -> None:
+    stock = {'full_code': '000001.SZ', 'code': '000001', 'name': '测试一号'}
+    bars = [
+        DailyBar('000001.SZ', '2026-01-01', 10.0, 10.2, 9.8, 10.0, 9.9, False, False),
+        DailyBar('000001.SZ', '2026-01-02', 10.0, 10.2, 9.8, 9.9, 10.0, False, False),
+        DailyBar('000001.SZ', '2026-01-03', 9.8, 10.0, 9.6, 9.7, 9.9, False, False),
+        DailyBar('000001.SZ', '2026-01-04', 9.6, 9.8, 9.4, 9.5, 9.7, False, False),
+        DailyBar('000001.SZ', '2026-01-05', 9.4, 9.6, 9.2, 9.3, 9.5, False, False),
+    ]
+    points = [
+        MacdPoint(10.0, 10.1, -0.20, -0.10, -0.20),
+        MacdPoint(9.9, 10.0, -0.22, -0.10, -0.24),
+        MacdPoint(9.8, 9.9, -0.24, -0.10, -0.28),
+        MacdPoint(9.7, 9.8, -0.26, -0.10, -0.32),
+        MacdPoint(9.6, 9.7, -0.28, -0.10, -0.36),
+    ]
+    candidate = AlertCandidate(
+        stock_code='000001',
+        stock_name='测试一号',
+        full_code='000001.SZ',
+        trade_date='2026-01-01',
+        close_price=10.0,
+        cross_zone='underwater',
+        next_cross_trigger_price=10.5,
+        cross_trigger_distance_pct=0.05,
+        next_limit_up_price=11.0,
+        cross_trigger_reachable=True,
+        cross_trigger_unreachable_reason=None,
+        next_trend_keep_price=9.95,
+        trend_keep_distance_pct=-0.005,
+        macd=points[0],
+        green_shrink_days=2,
+        score=1.0,
+        summary='测试预警',
+    )
+
+    sample = _build_sample('', stock, bars, points, 0, candidate, None)
+
+    assert sample['cross_date'] is None
+    assert sample['sell_date'] == '2026-01-05'
+    assert sample['sell_price'] == pytest.approx(9.3)
+    assert sample['sell_reason'] == 'timeout'
+    assert sample['return_pct'] == pytest.approx(9.3 / 10.0 - 1)
+    assert sample['holding_days'] == 4
+
+
+def test_backtest_sample_keeps_observing_when_broken_trend_is_repaired_before_cross() -> None:
+    stock = {'full_code': '000001.SZ', 'code': '000001', 'name': '测试一号'}
+    bars = [
+        DailyBar('000001.SZ', '2026-01-01', 10.0, 10.2, 9.8, 10.0, 9.9, False, False),
+        DailyBar('000001.SZ', '2026-01-02', 10.0, 10.2, 9.8, 9.9, 10.0, False, False),
+        DailyBar('000001.SZ', '2026-01-03', 9.8, 10.0, 9.6, 9.8, 9.9, False, False),
+        DailyBar('000001.SZ', '2026-01-04', 9.8, 10.1, 9.7, 10.0, 9.8, False, False),
+        DailyBar('000001.SZ', '2026-01-05', 10.0, 10.4, 9.9, 10.2, 10.0, False, False),
+        DailyBar('000001.SZ', '2026-01-06', 10.2, 10.6, 10.1, 10.5, 10.2, False, False),
+    ]
+    points = [
+        MacdPoint(10.0, 10.1, -0.20, -0.10, -0.20),
+        MacdPoint(9.9, 10.0, -0.22, -0.10, -0.24),
+        MacdPoint(9.8, 9.9, -0.20, -0.10, -0.20),
+        MacdPoint(9.9, 9.95, -0.16, -0.10, -0.12),
+        MacdPoint(10.1, 10.0, 0.02, -0.02, 0.08),
+        MacdPoint(10.3, 10.1, 0.08, 0.00, 0.16),
+    ]
+    candidate = AlertCandidate(
+        stock_code='000001',
+        stock_name='测试一号',
+        full_code='000001.SZ',
+        trade_date='2026-01-01',
+        close_price=10.0,
+        cross_zone='underwater',
+        next_cross_trigger_price=10.5,
+        cross_trigger_distance_pct=0.05,
+        next_limit_up_price=11.0,
+        cross_trigger_reachable=True,
+        cross_trigger_unreachable_reason=None,
+        next_trend_keep_price=9.95,
+        trend_keep_distance_pct=-0.005,
+        macd=points[0],
+        green_shrink_days=2,
+        score=1.0,
+        summary='测试预警',
+    )
+
+    sample = _build_sample('', stock, bars, points, 0, candidate, None)
+
+    assert sample['cross_date'] == '2026-01-05'
+    assert sample['sell_date'] is None
+    assert sample['sell_reason'] is None
+    assert sample['status'] == 'cross_success'
 
 
 def test_macd_trigger_price_formula_matches_f06_design() -> None:
