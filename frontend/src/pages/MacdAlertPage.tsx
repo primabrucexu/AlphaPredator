@@ -273,7 +273,7 @@ export function MacdAlertPage() {
       });
       setScanTask(task);
       setScanTaskItems(null);
-      setScanTradeDate(values.trade_date);
+      setScanTradeDate(taskDate(task));
       setRows([]);
       message.success('MACD 扫描任务已提交');
     } catch (error) {

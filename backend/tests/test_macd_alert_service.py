@@ -15,6 +15,7 @@ from app.modules.macd_alert.service import (
     _build_sample,
     calculate_cross_trigger_price,
     calculate_trend_keep_price,
+    create_macd_alert_scan_task,
     scan_macd_alerts,
     track_macd_alerts,
     validate_stock_macd_alert,
@@ -235,6 +236,55 @@ def test_scan_macd_alerts_is_idempotent_and_writes_backtest_summary() -> None:
     assert alert_rows[0]['pattern_key'] == 'golden_cross_setup'
     assert alert_rows[0]['backtest_sample_count'] >= 0
     assert len(sample_rows) == alert_rows[0]['backtest_sample_count']
+
+
+def test_scan_macd_alerts_uses_latest_available_bar_before_non_trading_date() -> None:
+    tmp_path = _workspace_tmp_dir('macd-alert-scan-non-trading')
+    sqlite_path = tmp_path / 'macd-alert.db'
+    duckdb_path = tmp_path / 'macd-alert.duckdb'
+    _seed_stock_list(sqlite_path)
+    _seed_daily_bars(duckdb_path, [10, 9.6, 9.2, 8.8, 8.5, 8.35, 8.3, 8.28, 8.27, 8.27])
+
+    result = scan_macd_alerts(
+        trade_date='2026-01-12',
+        sqlite_path=sqlite_path,
+        duckdb_path=duckdb_path,
+        green_shrink_days=2,
+    )
+
+    assert result['requested_trade_date'] == '2026-01-12'
+    assert result['trade_date'] == '2026-01-10'
+    assert result['matched_count'] == 1
+
+    conn = connect_sqlite(sqlite_path)
+    try:
+        row = conn.execute('SELECT trade_date, stock_code FROM macd_alert_result').fetchone()
+    finally:
+        conn.close()
+
+    assert row['trade_date'] == '2026-01-10'
+    assert row['stock_code'] == '000001'
+
+
+def test_create_macd_alert_scan_task_uses_effective_trade_date() -> None:
+    tmp_path = _workspace_tmp_dir('macd-task-effective-date')
+    sqlite_path = tmp_path / 'macd-alert.db'
+    duckdb_path = tmp_path / 'macd-alert.duckdb'
+    _seed_stock_list(sqlite_path)
+    _seed_daily_bars(duckdb_path, [10, 9.6, 9.2, 8.8, 8.5, 8.35, 8.3, 8.28, 8.27, 8.27])
+
+    task = create_macd_alert_scan_task(
+        trade_date='2026-01-12',
+        universe_scope='market',
+        markets=['主板'],
+        exclude_st=True,
+        green_shrink_days=2,
+        sqlite_path=sqlite_path,
+        duckdb_path=duckdb_path,
+    )
+
+    assert task['start_date'] == '20260110'
+    assert task['end_date'] == '20260110'
 
 
 def test_track_macd_alerts_updates_trend_status() -> None:

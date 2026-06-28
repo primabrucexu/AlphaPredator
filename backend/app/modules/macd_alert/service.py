@@ -141,6 +141,36 @@ def _load_daily_bars(duckdb_path: Path | None, full_codes: list[str], end_date: 
     return grouped
 
 
+def _resolve_effective_trade_date(duckdb_path: Path | None, full_codes: list[str], requested_trade_date: str) -> str:
+    if not full_codes:
+        return requested_trade_date
+    ensure_duckdb_schema(duckdb_path)
+    placeholders = ','.join(['?'] * len(full_codes))
+    conn = connect_duckdb(duckdb_path)
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT CAST(trade_date AS DATE) AS trade_day, COUNT(DISTINCT full_code) AS bar_count
+            FROM day_level_trade_data
+            WHERE full_code IN ({placeholders})
+              AND CAST(trade_date AS DATE) <= CAST(? AS DATE)
+            GROUP BY CAST(trade_date AS DATE)
+            ORDER BY trade_day DESC
+            """,
+            [*full_codes, requested_trade_date],
+        ).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        raise ValueError(f'{requested_trade_date} 前没有可用日线数据')
+    max_count = max(int(row[1] or 0) for row in rows)
+    min_count = max(1, (max_count * 4 + 4) // 5)
+    for row in rows:
+        if int(row[1] or 0) >= min_count:
+            return str(row[0])[:10]
+    return str(rows[0][0])[:10]
+
+
 def _is_green_shrinking(points: list[MacdPoint], end_idx: int, green_shrink_days: int) -> bool:
     if end_idx < green_shrink_days:
         return False
@@ -684,11 +714,17 @@ def scan_macd_alerts(
         raise ValueError('第一版仅支持 market 股票池')
     target_markets = markets or ['主板']
     stocks = _load_universe(sqlite_path, target_markets, exclude_st)
+    requested_trade_date = trade_date
+    effective_trade_date = _resolve_effective_trade_date(
+        duckdb_path,
+        [stock['full_code'] for stock in stocks],
+        requested_trade_date,
+    )
     task_repo = InitTaskRepo(sqlite_path) if task_id else None
     if task_repo and task_id:
         task_repo.set_total_items(task_id, len(stocks))
         task_repo.set_processed_items(task_id, 0)
-    bars_by_code = _load_daily_bars(duckdb_path, [stock['full_code'] for stock in stocks], trade_date)
+    bars_by_code = _load_daily_bars(duckdb_path, [stock['full_code'] for stock in stocks], effective_trade_date)
     matches: list[tuple[dict[str, str], AlertCandidate, list[dict[str, Any]]]] = []
     for stock in stocks:
         if task_repo and task_id:
@@ -696,7 +732,7 @@ def scan_macd_alerts(
                 break
             task_repo.set_current_label(task_id, stock['full_code'])
         bars = bars_by_code.get(stock['full_code'], [])
-        found = _find_candidate_on_date(stock, bars, trade_date, green_shrink_days)
+        found = _find_candidate_on_date(stock, bars, effective_trade_date, green_shrink_days)
         if found:
             candidate, _, idx = found
             samples = _build_backtest_samples(
@@ -725,9 +761,15 @@ def scan_macd_alerts(
             fixed_samples = [{**sample, 'alert_result_id': alert_id} for sample in samples]
             _insert_samples(session, fixed_samples)
         session.commit()
-    results = list_macd_alert_results(trade_date=trade_date, limit=100, sqlite_path=sqlite_path)
+    results = list_macd_alert_results(trade_date=effective_trade_date, limit=100, sqlite_path=sqlite_path)
     return {
-        'trade_date': trade_date,
+        'trade_date': effective_trade_date,
+        'requested_trade_date': requested_trade_date,
+        'data_warning': (
+            f'请求日期 {requested_trade_date} 无有效日线，已使用最近可用交易日 {effective_trade_date}。'
+            if effective_trade_date != requested_trade_date
+            else None
+        ),
         'total_scanned': len(stocks),
         'matched_count': len(matches),
         'report_generatable': True,
@@ -744,6 +786,7 @@ def create_macd_alert_scan_task(
     exclude_st: bool = True,
     green_shrink_days: int = 2,
     sqlite_path: Path | None = None,
+    duckdb_path: Path | None = None,
 ) -> dict[str, Any]:
     if universe_scope != 'market':
         raise ValueError('第一版仅支持 market 股票池')
@@ -753,7 +796,13 @@ def create_macd_alert_scan_task(
         raise ValueError('第一版后台扫描默认排除 ST')
     from app.modules.market_data.initializer import create_task
 
-    day = trade_date.replace('-', '')
+    stocks = _load_universe(sqlite_path, markets, exclude_st)
+    effective_trade_date = _resolve_effective_trade_date(
+        duckdb_path,
+        [stock['full_code'] for stock in stocks],
+        trade_date,
+    )
+    day = effective_trade_date.replace('-', '')
     task = create_task(day, day, task_type=MACD_ALERT_SCAN_TASK_TYPE, sqlite_path=sqlite_path)
     _pending_green_shrink_days[task['task_id']] = green_shrink_days
     return task
