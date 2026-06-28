@@ -531,9 +531,16 @@ def _build_backtest_samples(
     points = compute_macd_points([bar.close for bar in bars])
     samples: list[dict[str, Any]] = []
     start_idx = max(0, current_idx - lookback_days)
+    in_alert_range = False
     for idx in range(start_idx, current_idx):
         candidate = _make_candidate(stock, bars, idx, points, green_shrink_days)
-        if candidate and candidate.cross_zone == current_zone:
+        if not candidate:
+            in_alert_range = False
+            continue
+        if in_alert_range:
+            continue
+        in_alert_range = True
+        if candidate.cross_zone == current_zone:
             samples.append(_build_sample(alert_id, stock, bars, points, idx, candidate, sqlite_path))
     return samples
 
@@ -601,15 +608,25 @@ def validate_stock_macd_alert(
 
     start_idx = max(0, current_idx - lookback_days)
     matched: list[tuple[int, AlertCandidate]] = []
+    sample_matches: list[tuple[int, AlertCandidate]] = []
+    in_alert_range = False
     for idx in range(start_idx, current_idx + 1):
         candidate = _make_candidate(stock, bars, idx, points, green_shrink_days)
-        if candidate and (cross_zone == 'all' or candidate.cross_zone == cross_zone):
+        if not candidate:
+            in_alert_range = False
+            continue
+        if cross_zone == 'all' or candidate.cross_zone == cross_zone:
             matched.append((idx, candidate))
+        if in_alert_range:
+            continue
+        in_alert_range = True
+        if cross_zone == 'all' or candidate.cross_zone == cross_zone:
+            sample_matches.append((idx, candidate))
 
     latest_candidate = matched[-1][1] if matched else None
     samples = [
         _build_sample('', stock, bars, points, idx, candidate, sqlite_path)
-        for idx, candidate in matched
+        for idx, candidate in sample_matches
         if idx < current_idx
     ]
     return {
