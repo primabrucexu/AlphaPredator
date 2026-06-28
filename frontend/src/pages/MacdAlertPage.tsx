@@ -21,6 +21,7 @@ import {
   type TaskItemsResponse,
   type TaskResponse,
 } from '../lib/api';
+import {formatBeijingDateTime} from '../lib/time';
 import {StockSearchInput} from '../components/StockSearchBar';
 
 interface ScanFormValues {
@@ -601,7 +602,7 @@ export function MacdAlertPage() {
                     description={
                       <Space size={8}>
                         <Typography.Text type="secondary" style={{fontSize: 12}}>
-                          {task.task_start_date?.slice(0, 16) || '-'}
+                          {formatBeijingDateTime(task.task_start_date)}
                         </Typography.Text>
                         {activeTaskId === task.task_id && rows.length > 0 ? (
                           <Typography.Text type="secondary" style={{fontSize: 12}}>
