@@ -70,15 +70,18 @@ const t1StatusText: Record<string, string> = {
 };
 
 const sellReasonText: Record<string, string> = {
-  red_shrink: '不符合形态',
-  timeout: '持有超时',
+  trend_broken: '趋势破坏',
+  cross_timeout: '超时无法金叉',
+  macd_bar_shrink: 'MACD柱缩短',
+  red_shrink: 'MACD柱缩短',
+  timeout: '超时卖出',
 };
 
 const sampleStatusText: Record<string, string> = {
   pending_cross: '等待金叉',
   cross_failed: '金叉失败',
   cross_success: '已金叉未卖出',
-  sold_by_red_shrink: '红柱缩短卖出',
+  sold_by_red_shrink: 'MACD柱缩短卖出',
   sold_by_timeout: '超时卖出',
   insufficient_data: '数据不足',
 };

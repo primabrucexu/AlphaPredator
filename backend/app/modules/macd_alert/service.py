@@ -393,14 +393,19 @@ def _build_sample(
         else:
             t1_status = 't1_trend_weakened'
         cross_idx = None
-        pre_cross_sell_idx = None
         broken_idx = None
-        for probe_idx in range(buy_idx, min(len(bars), buy_idx + 5)):
-            if points[probe_idx].dif >= points[probe_idx].dea:
-                cross_idx = probe_idx
-                break
+        max_cross_idx = min(len(bars), buy_idx + 5)
+        probe_idx = buy_idx
+        while probe_idx < max_cross_idx:
             current_point = points[probe_idx]
             previous_point = points[probe_idx - 1]
+            if current_point.dif >= current_point.dea:
+                cross_idx = probe_idx
+                cross_date = bars[cross_idx].trade_date
+                cross_type = _cross_zone(current_point)
+                status = 'cross_success'
+                break
+
             if (
                 current_point.hist < 0
                 and previous_point.hist < 0
@@ -409,39 +414,38 @@ def _build_sample(
                 broken_idx = None
             elif current_point.hist < 0 and broken_idx is None:
                 broken_idx = probe_idx
+
             if broken_idx is not None and probe_idx - broken_idx >= 3:
-                pre_cross_sell_idx = probe_idx
-                break
-        if cross_idx is None:
-            if pre_cross_sell_idx is not None:
-                sell_date = bars[pre_cross_sell_idx].trade_date
-                sell_price = bars[pre_cross_sell_idx].close
-                sell_reason = 'timeout'
-                return_pct = sell_price / buy_bar.open - 1
-                holding_days = pre_cross_sell_idx - buy_idx + 1
+                sell_date = bars[probe_idx].trade_date
+                sell_price = bars[probe_idx].close
+                sell_reason = 'trend_broken'
                 status = 'cross_failed'
-            else:
-                status = 'cross_failed' if len(bars) >= buy_idx + 5 else 'insufficient_data'
-        else:
-            cross_date = bars[cross_idx].trade_date
-            cross_type = _cross_zone(points[cross_idx])
-            status = 'cross_success'
-            for sell_idx in range(cross_idx, min(len(bars), cross_idx + 10)):
-                if points[sell_idx].hist > 0 and sell_idx > 0 and points[sell_idx].hist < points[sell_idx - 1].hist:
-                    sell_date = bars[sell_idx].trade_date
-                    sell_price = bars[sell_idx].close
-                    sell_reason = 'red_shrink'
-                    status = 'sold_by_red_shrink'
-                    break
-            if sell_price is None and len(bars) > cross_idx + 9:
-                sell_idx = cross_idx + 9
+                break
+            probe_idx += 1
+
+        if sell_price is None and cross_idx is None:
+            if len(bars) >= buy_idx + 5:
+                sell_idx = buy_idx + 4
                 sell_date = bars[sell_idx].trade_date
                 sell_price = bars[sell_idx].close
-                sell_reason = 'timeout'
-                status = 'sold_by_timeout'
-            if sell_price is not None:
-                return_pct = sell_price / buy_bar.open - 1
-                holding_days = bars.index(next(bar for bar in bars if bar.trade_date == sell_date)) - buy_idx + 1
+                sell_reason = 'cross_timeout'
+                status = 'cross_failed'
+            else:
+                status = 'insufficient_data'
+
+        if sell_price is None and cross_idx is not None:
+            for sell_idx in range(cross_idx, len(bars)):
+                if sell_idx > 0 and points[sell_idx].hist < points[sell_idx - 1].hist:
+                    sell_date = bars[sell_idx].trade_date
+                    sell_price = bars[sell_idx].close
+                    sell_reason = 'macd_bar_shrink'
+                    status = 'sold_by_red_shrink'
+                    break
+            if sell_price is None:
+                status = 'cross_success'
+        if sell_price is not None:
+            return_pct = sell_price / buy_bar.open - 1
+            holding_days = bars.index(next(bar for bar in bars if bar.trade_date == sell_date)) - buy_idx + 1
     last_limit = _last_limit_up_info(sqlite_path, stock['code'], candidate.trade_date, _session)
     heat = _theme_heat(sqlite_path, last_limit['last_limit_up_theme'], candidate.trade_date, _session=_session)
     created_at = _now()

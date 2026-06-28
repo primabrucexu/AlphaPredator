@@ -663,7 +663,7 @@ Table macd_alert_backtest_sample [headercolor: #7a3f8f] {
   cross_type varchar(255) [note: '实际金叉类型：underwater/above_zero/mixed/none。']
   sell_date date [note: '卖出日期；未完成交易时为空。']
   sell_price numeric [note: '卖出价格。']
-  sell_reason varchar(255) [note: '卖出原因：red_shrink/timeout。']
+  sell_reason varchar(255) [note: '卖出原因：trend_broken/cross_timeout/macd_bar_shrink。trend_broken 表示金叉前趋势破坏且3个交易日内未恢复；cross_timeout 表示趋势未破坏但T+1到T+5未形成金叉；macd_bar_shrink 表示5个交易日内形成金叉后MACD柱缩短卖出。']
   return_pct numeric [note: '收益率，小数形式，如0.05表示5%。']
   holding_days integer [note: '从买入到卖出的持有交易日数。']
   status varchar(255) [not null, note: '样本状态：pending_cross/cross_failed/cross_success/sold_by_red_shrink/sold_by_timeout/insufficient_data。']

@@ -378,7 +378,7 @@ abs(macd_hist[当日]) < abs(macd_hist[前一交易日])
 
 例如 M 日出现预警，M+1 日金叉趋势被破坏；如果 M+2 日 MACD 绿柱比 M+1 日短，则视为金叉趋势修复，继续观察后续是否金叉。
 
-如果趋势破坏后 3 个交易日内都没有修复，则按第 3 个观察日收盘价卖出。例如 M+1 日破坏，M+2、M+3、M+4 都未修复，则 M+4 收盘卖出，卖出原因记为 `timeout`。
+如果趋势破坏后 3 个交易日内都没有修复，则按第 3 个观察日收盘价卖出。例如 M+1 日破坏，M+2、M+3、M+4 都未修复，则 M+4 收盘卖出，卖出原因记为 `trend_broken`。
 
 如果观察期间形成金叉，则金叉前观察窗结束，后续只执行金叉后的卖出逻辑。
 
@@ -392,25 +392,25 @@ abs(macd_hist[当日]) < abs(macd_hist[前一交易日])
 - 如果金叉发生时 `DIF < 0` 且 `DEA < 0`，记为水下金叉成功。
 - 如果金叉发生时 `DIF > 0` 且 `DEA > 0`，记为水上金叉成功。
 - 如果金叉发生时 DIF 和 DEA 分处零轴两侧，记为零轴附近金叉成功。
-- 5 个交易日内未出现 `DIF >= DEA`，记为金叉失败。
+- 如果 5 个交易日内未形成金叉，且期间金叉趋势未被破坏，则按第 5 个交易日收盘价卖出，卖出原因记为 `cross_timeout`，该类样本称为“超时无法金叉”。
+- 如果 5 个交易日内趋势破坏，则优先进入金叉前趋势修复观察；趋势破坏观察结果优先于“超时无法金叉”。
 
 ### 金叉后卖出规则
 
 金叉成功样本进入金叉后卖出逻辑；出现金叉后的卖出逻辑保持不变。
 
 ```text
-从金叉日开始，最多持有 10 个交易日。
+仅当 T+1 到 T+5 内形成金叉时，才进入金叉后卖出逻辑。
 ```
 
 卖出优先级：
 
-1. 第一次出现红柱缩短时，按当日收盘价卖出。
-2. 如果 10 个交易日内没有出现红柱缩短，按第 10 个交易日收盘价卖出。
+1. 第一次出现 MACD 柱缩短时，按当日收盘价卖出，卖出原因记为 `macd_bar_shrink`。
+2. 如果后续数据不足且尚未出现 MACD 柱缩短，则样本状态保持为 `cross_success`，收益率为空。
 
-红柱缩短定义：
+MACD 柱缩短定义：
 
 ```text
-macd_hist > 0
 macd_hist < macd_hist[前一交易日]
 ```
 
@@ -423,7 +423,7 @@ return_pct = sell_price / buy_price - 1
 其中：
 
 - `buy_price` 为 T+1 开盘价。
-- `sell_price` 为红柱缩短日收盘价，或超时卖出日收盘价。
+- `sell_price` 为 MACD 柱缩短日收盘价，或超时卖出日收盘价。
 
 ### 样本状态
 
@@ -431,12 +431,12 @@ return_pct = sell_price / buy_price - 1
 pending_cross        预警后数据不足，尚无法判断 5 日内是否金叉
 cross_failed         T+1 到 T+5 未形成金叉
 cross_success        已形成金叉，但后续卖出数据不足
-sold_by_red_shrink   金叉后出现红柱缩短，按规则卖出
-sold_by_timeout      金叉后 10 个交易日内未红柱缩短，按第10日收盘卖出
+sold_by_red_shrink   金叉后出现 MACD 柱缩短，按规则卖出
+sold_by_timeout      金叉后超时卖出；当前三分支规则下暂不使用
 insufficient_data    后续行情数据不足，不能完成判断
 ```
 
-说明：金叉前趋势破坏且 3 个交易日内未修复时，也会产生一笔完成交易；该样本仍属于未形成金叉样本，`sell_reason` 复用 `timeout`。
+说明：金叉前趋势破坏且 3 个交易日内未修复时，也会产生一笔完成交易；该样本仍属于未形成金叉样本，`sell_reason` 记为 `trend_broken`。趋势未破坏但 T+1 到 T+5 未形成金叉时，按第 5 个交易日收盘价卖出，`sell_reason` 记为 `cross_timeout`。
 
 ## 回测输出
 
@@ -495,7 +495,7 @@ T+1 趋势状态：t1_cross_confirmed / t1_trend_kept / t1_trend_weakened / t1_d
 预警类型：underwater / above_zero / mixed
 金叉类型：underwater / above_zero / mixed
 卖出日
-卖出原因：red_shrink / timeout
+卖出原因：trend_broken / cross_timeout / macd_bar_shrink
 卖出价
 收益率
 持有天数
@@ -869,7 +869,7 @@ Table macd_alert_backtest_sample [headercolor: #7a3f8f] {
   cross_type varchar(255) [note: '实际金叉类型：underwater/above_zero/mixed/none。']
   sell_date date [note: '卖出日期；未完成交易时为空。']
   sell_price numeric [note: '卖出价格。']
-  sell_reason varchar(255) [note: '卖出原因：red_shrink/timeout。']
+  sell_reason varchar(255) [note: '卖出原因：trend_broken/cross_timeout/macd_bar_shrink。trend_broken 表示金叉前趋势破坏且3个交易日内未恢复；cross_timeout 表示趋势未破坏但T+1到T+5未形成金叉；macd_bar_shrink 表示5个交易日内形成金叉后MACD柱缩短卖出。']
   return_pct numeric [note: '收益率，小数形式，如0.05表示5%。']
   holding_days integer [note: '从买入到卖出的持有交易日数。']
   status varchar(255) [not null, note: '样本状态：pending_cross/cross_failed/cross_success/sold_by_red_shrink/sold_by_timeout/insufficient_data。']
@@ -1136,7 +1136,7 @@ list_macd_alert_backtest_samples(alert_result_id, limit, offset)
 - MCP 返回包含数据新鲜度和非买卖建议声明。
 - 扫描、跟踪和回测完成后不自动生成报告文件；用户或 Agent 需要时按需生成 HTML/PDF 报告。
 - 每条预警发出时同步生成该标的历史同类形态回测摘要。
-- 预警内置回测按照 T+1 开盘买入、T+1 趋势验证、5 个交易日内观察金叉、金叉后最多持有 10 个交易日、红柱缩短或超时卖出的规则计算。
+- 预警内置回测按照 T+1 开盘买入、T+1 趋势验证、金叉前趋势破坏观察、5 个交易日内观察金叉、金叉后 MACD 柱缩短卖出的规则计算；趋势破坏或 5 日无法金叉均需要卖出并计算收益率。
 - 回测输出 T+1 已金叉、趋势维持、趋势走弱的统计，用于验证趋势维持价是否有效。
 - 回测输出汇总指标和样本明细。
 - 第一版只使用日线数据，不读取或依赖 5 分钟 K 线。
