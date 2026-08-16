@@ -1,0 +1,29 @@
+import { CloudSyncOutlined, KeyOutlined, ReloadOutlined } from '@ant-design/icons'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Alert, Button, Card, DatePicker, Input, Space, Statistic, Typography, message } from 'antd'
+import dayjs from 'dayjs'
+import { useState } from 'react'
+import { api } from '../api'
+
+export default function SettingsPage() {
+  const client = useQueryClient(); const [session, setSession] = useState(''); const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>([dayjs().subtract(30, 'day'), dayjs()])
+  const status = useQuery({ queryKey: ['jygs-status'], queryFn: api.jygsStatus })
+  const action = useMutation({ mutationFn: (fn: () => Promise<unknown>) => fn(), onSuccess: () => client.invalidateQueries({ queryKey: ['jygs-status'] }), onError: e => message.error(e.message) })
+  return <div className="stack-lg settings-page">
+    <div><Typography.Title>数据设置</Typography.Title><Typography.Text type="secondary">行情保持在线获取；这里只维护股票搜索目录与韭研涨停历史。</Typography.Text></div>
+    <Card title="股票搜索目录" extra={<CloudSyncOutlined />}>
+      <Typography.Paragraph type="secondary">从 thsdk 获取 A 股目录并建立本地代码、名称和拼音索引。不会保存行情。</Typography.Paragraph>
+      <Button type="primary" icon={<ReloadOutlined />} loading={action.isPending} onClick={() => action.mutate(() => api.syncStocks().then(result => message.success(`已同步 ${result.count} 只股票`)))}>刷新股票目录</Button>
+    </Card>
+    <Card title="韭研公社连接" extra={<KeyOutlined />}>
+      {status.data?.last_error && <Alert type="error" showIcon message={status.data.last_error} className="mb-16" />}
+      <div className="status-row"><Statistic title="配置状态" value={status.data?.is_configured ? '已配置' : '未配置'} /><Statistic title="认证状态" value={status.data?.is_valid ? '有效' : '待验证'} valueStyle={{ color: status.data?.is_valid ? '#22c55e' : '#f59e0b' }} /></div>
+      <Typography.Paragraph type="secondary">登录韭研公社网页后，从浏览器 Cookie 中复制 SESSION 值。凭据仅保存在本机 SQLite，不会显示或回传到前端。</Typography.Paragraph>
+      <Space.Compact block><Input.Password value={session} onChange={e => setSession(e.target.value)} placeholder="粘贴 SESSION 或 SESSION=..." /><Button disabled={!session.trim()} loading={action.isPending} onClick={() => action.mutate(() => api.saveJygsSession(session).then(() => { setSession(''); message.success('SESSION 已保存') }))}>保存</Button><Button loading={action.isPending} onClick={() => action.mutate(() => api.checkJygs().then(result => result.is_valid ? message.success('认证有效') : Promise.reject(new Error(result.last_error))))}>验证</Button></Space.Compact>
+    </Card>
+    <Card title="涨停历史同步">
+      <Typography.Paragraph type="secondary">按日期从韭研公社拉取并覆盖本地同日记录。第一版仅支持手动同步，单次最多 366 天。</Typography.Paragraph>
+      <Space wrap><DatePicker.RangePicker value={range} onChange={value => value?.[0] && value[1] && setRange([value[0], value[1]])} /><Button type="primary" disabled={!status.data?.is_configured} loading={action.isPending} onClick={() => action.mutate(() => api.syncJygs(range[0].format('YYYY-MM-DD'), range[1].format('YYYY-MM-DD')).then(result => message.success(`同步完成：${result.days} 天，${result.records} 条`)))}>开始同步</Button></Space>
+    </Card>
+  </div>
+}

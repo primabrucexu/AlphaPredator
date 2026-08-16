@@ -1,5 +1,10 @@
 {
   "feature": [
-    
+    {
+      "id": "F001",
+      "name": "行情、自选股与涨停历史",
+      "status": "完成",
+      "document": "F001-market-watchlist.md"
+    }
   ]
 }
