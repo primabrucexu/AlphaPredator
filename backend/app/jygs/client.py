@@ -113,8 +113,6 @@ def sync_range(db: Session, start_date: str, end_date: str) -> dict[str, int]:
     start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
     if end < start:
         raise ValueError("结束日期不能早于开始日期")
-    if (end - start).days > 366:
-        raise ValueError("单次最多同步 366 天")
     credential = db.get(JygsCredential, 1)
     if not credential:
         raise JygsError("尚未配置韭研公社 SESSION")

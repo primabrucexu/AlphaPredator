@@ -22,6 +22,11 @@ class Quote(BaseModel):
     low: float | None = None
     volume: float | None = None
     amount: float | None = None
+    volume_ratio: float | None = None
+    turnover_rate: float | None = None
+    pe_ttm: float | None = None
+    total_market_cap: float | None = None
+    float_market_cap: float | None = None
     timestamp: str | None = None
 
 

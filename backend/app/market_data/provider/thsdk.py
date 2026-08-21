@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import threading
-from datetime import datetime
+from datetime import date, datetime, time
 from typing import Any
 
 from app.market_data.schemas import DailyBar, Quote, StockSummary
@@ -97,10 +97,12 @@ class ThsdkMarketDataProvider:
         if not rows or not isinstance(rows[0], dict):
             raise MarketDataError("行情源未返回最新行情")
         row = rows[0]
+        extended_rows = self._call("market_data_cn", symbol_to_thscode(normalized), query_key="扩展2")
+        extended = extended_rows[0] if extended_rows and isinstance(extended_rows[0], dict) else {}
         price = _number(row, "价格", "最新价")
         previous = _number(row, "昨收价", "昨收")
-        change = price - previous if price is not None and previous is not None else _number(row, "涨跌")
-        percent = change / previous * 100 if change is not None and previous else _number(row, "涨跌幅")
+        change = price - previous if price is not None and previous is not None else _number(extended, "涨跌")
+        percent = change / previous * 100 if change is not None and previous else _number(extended, "涨幅", "涨跌幅")
         return Quote(
             symbol=normalized,
             name=str(row.get("名称") or ""),
@@ -113,12 +115,31 @@ class ThsdkMarketDataProvider:
             low=_number(row, "最低价", "最低"),
             volume=_number(row, "成交量"),
             amount=_number(row, "总金额", "成交额"),
+            volume_ratio=_number(extended, "量比"),
+            turnover_rate=_number(extended, "换手率"),
+            pe_ttm=_number(extended, "市盈率TTM"),
+            total_market_cap=_number(extended, "总市值"),
+            float_market_cap=_number(extended, "流通市值"),
             timestamp=datetime.now().astimezone().isoformat(),
         )
 
-    def get_daily_bars(self, symbol: str, count: int = 250) -> list[DailyBar]:
+    def get_daily_bars(
+        self,
+        symbol: str,
+        count: int = 250,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> list[DailyBar]:
         normalized = normalize_symbol(symbol)
-        rows = self._call("klines", symbol_to_thscode(normalized), interval="day", count=count)
+        query = {"interval": "day", "adjust": "forward"}
+        if start_date is not None and end_date is not None:
+            query.update(
+                start_time=datetime.combine(start_date, time.min),
+                end_time=datetime.combine(end_date, time.max),
+            )
+        else:
+            query["count"] = count
+        rows = self._call("klines", symbol_to_thscode(normalized), **query)
         bars: list[DailyBar] = []
         previous: float | None = None
         for row in rows:
@@ -140,4 +161,4 @@ class ThsdkMarketDataProvider:
                 previous_close=prior, is_limit_up=up, is_limit_down=down,
             ))
             previous = close
-        return bars[-count:]
+        return bars if start_date is not None else bars[-count:]

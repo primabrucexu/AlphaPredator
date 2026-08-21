@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import ForeignKey, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from .session import Base
 
@@ -22,34 +22,31 @@ class Stock(Base):
     pinyin_initials: Mapped[str] = mapped_column(String(32), index=True, default="")
 
 
-class WatchlistGroup(Base):
-    __tablename__ = "watchlist_groups"
+class WatchlistItem(Base):
+    __tablename__ = "watchlist_items"
+    __table_args__ = (UniqueConstraint("symbol"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    created_at: Mapped[datetime] = mapped_column(default=utc_now)
+
+
+class Tag(Base):
+    __tablename__ = "tags"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(64), unique=True)
-    is_default: Mapped[bool] = mapped_column(default=False)
-    created_at: Mapped[datetime] = mapped_column(default=utc_now)
-    items: Mapped[list[WatchlistItem]] = relationship(back_populates="group", cascade="all, delete-orphan")
-
-
-class WatchlistItem(Base):
-    __tablename__ = "watchlist_items"
-    __table_args__ = (UniqueConstraint("group_id", "symbol"),)
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    group_id: Mapped[int] = mapped_column(ForeignKey("watchlist_groups.id", ondelete="CASCADE"), index=True)
-    symbol: Mapped[str] = mapped_column(String(16), index=True)
-    created_at: Mapped[datetime] = mapped_column(default=utc_now)
-    group: Mapped[WatchlistGroup] = relationship(back_populates="items")
+    sort_order: Mapped[int] = mapped_column(default=0, index=True)
 
 
 class StockTag(Base):
     __tablename__ = "stock_tags"
-    __table_args__ = (UniqueConstraint("symbol", "name"),)
+    __table_args__ = (UniqueConstraint("symbol", "tag_id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     symbol: Mapped[str] = mapped_column(String(16), index=True)
-    name: Mapped[str] = mapped_column(String(32))
+    tag_id: Mapped[int] = mapped_column(ForeignKey("tags.id", ondelete="CASCADE"), index=True)
+    sort_order: Mapped[int] = mapped_column(default=0)
 
 
 class JygsCredential(Base):

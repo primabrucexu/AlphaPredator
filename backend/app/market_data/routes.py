@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
@@ -45,8 +47,22 @@ def quote(request: Request, symbol: str):
 
 
 @router.get("/market/stocks/{symbol}/daily-bars")
-def daily_bars(request: Request, symbol: str, count: int = Query(250, ge=20, le=1000)):
+def daily_bars(
+    request: Request,
+    symbol: str,
+    count: int = Query(250, ge=20, le=1000),
+    start_date: date | None = None,
+    end_date: date | None = None,
+):
     try:
-        return {"symbol": normalize_symbol(symbol), "bars": _provider(request).get_daily_bars(symbol, count)}
+        if (start_date is None) != (end_date is None):
+            raise ValueError("start_date 和 end_date 必须同时提供")
+        if start_date is not None and end_date is not None:
+            if end_date < start_date:
+                raise ValueError("end_date 不能早于 start_date")
+            if (end_date - start_date).days > 366:
+                raise ValueError("单次最多查询 366 天")
+        bars = _provider(request).get_daily_bars(symbol, count, start_date, end_date)
+        return {"symbol": normalize_symbol(symbol), "bars": bars}
     except (MarketDataError, ValueError) as exc:
         raise _market_error(exc) from exc

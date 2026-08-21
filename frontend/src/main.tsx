@@ -10,7 +10,7 @@ const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, sta
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <ConfigProvider theme={{ algorithm: theme.darkAlgorithm, token: { colorPrimary: '#ef4444', borderRadius: 8 } }}>
+    <ConfigProvider theme={{ algorithm: theme.defaultAlgorithm, token: { colorPrimary: '#dc2626', borderRadius: 8 } }}>
       <QueryClientProvider client={queryClient}><BrowserRouter><App /></BrowserRouter></QueryClientProvider>
     </ConfigProvider>
   </React.StrictMode>,

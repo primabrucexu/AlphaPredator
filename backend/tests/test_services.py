@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.database.models import Stock, StockTag, WatchlistGroup, WatchlistItem
+from app.database.models import Stock, StockTag, Tag, WatchlistItem
 from app.market_data.schemas import Quote, StockSummary
 from app.market_data.service import StockService, pinyin_keys
 
@@ -33,14 +33,11 @@ def test_directory_sync_and_search_by_code_name_and_initials(db):
 
 
 def test_watchlist_and_tags_persist(db):
-    group = WatchlistGroup(name="观察", is_default=False)
-    db.add(group)
+    tag = Tag(name="白酒", sort_order=0)
+    db.add(tag)
     db.flush()
-    db.add_all([
-        WatchlistItem(group_id=group.id, symbol="600519.SH"),
-        StockTag(symbol="600519.SH", name="白酒"),
-    ])
+    db.add_all([WatchlistItem(symbol="600519.SH"), StockTag(symbol="600519.SH", tag_id=tag.id)])
     db.commit()
     db.expire_all()
     assert db.query(WatchlistItem).one().symbol == "600519.SH"
-    assert db.query(StockTag).one().name == "白酒"
+    assert db.query(StockTag).one().tag_id == tag.id

@@ -1,4 +1,4 @@
-from .models import JygsCredential, LimitUpRecord, Stock, StockTag, WatchlistGroup, WatchlistItem
+from .models import JygsCredential, LimitUpRecord, Stock, StockTag, Tag, WatchlistItem
 from .session import Base, SessionLocal, engine, get_session
 
 __all__ = [
@@ -7,8 +7,8 @@ __all__ = [
     "engine",
     "get_session",
     "Stock",
+    "Tag",
     "StockTag",
-    "WatchlistGroup",
     "WatchlistItem",
     "JygsCredential",
     "LimitUpRecord",

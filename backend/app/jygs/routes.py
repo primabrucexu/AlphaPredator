@@ -8,7 +8,8 @@ from app.database.session import get_session
 from app.market_data.provider.base import normalize_symbol
 
 from .client import JygsError, check_credential, recent_records, save_credential, sync_range
-from .schemas import JygsSessionInput, JygsSyncInput
+from .playwright_login import login_and_capture_session
+from .schemas import JygsLoginInput, JygsSessionInput, JygsSyncInput
 
 
 router = APIRouter()
@@ -33,6 +34,24 @@ def jygs_status(db: Session = Depends(get_session)):
 def update_jygs_session(payload: JygsSessionInput, db: Session = Depends(get_session)):
     save_credential(db, payload.session)
     return {"message": "SESSION 已保存"}
+
+
+@router.post("/jygs/login")
+def login_jygs(payload: JygsLoginInput, db: Session = Depends(get_session)):
+    try:
+        result = login_and_capture_session(payload.timeout_seconds)
+        session_value = str(result.get("session") or "").strip()
+        if not session_value:
+            raise JygsError("登录完成，但未捕获到 SESSION")
+        save_credential(db, session_value)
+        credential = check_credential(db)
+        if not credential.is_valid:
+            raise JygsError(f"登录后校验失败：{credential.last_error}")
+        return {"is_valid": True}
+    except JygsError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"韭研公社登录失败：{exc}") from exc
 
 
 @router.post("/jygs/check")

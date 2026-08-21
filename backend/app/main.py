@@ -5,21 +5,20 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select
 
 from app.api.router import api_router
-from app.database.models import WatchlistGroup
-from app.database.session import Base, SessionLocal, engine
+from app.database.migrations import migrate_legacy_tags, migrate_legacy_watchlists, migrate_stock_tag_order, sync_tagged_stocks_to_watchlist
+from app.database.session import Base, engine
 from app.market_data.provider import ThsdkMarketDataProvider
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    migrate_legacy_watchlists(engine)
+    migrate_legacy_tags(engine)
+    migrate_stock_tag_order(engine)
     Base.metadata.create_all(engine)
-    with SessionLocal() as db:
-        if not db.scalar(select(WatchlistGroup).where(WatchlistGroup.is_default.is_(True))):
-            db.add(WatchlistGroup(name="默认分组", is_default=True))
-            db.commit()
+    sync_tagged_stocks_to_watchlist(engine)
     yield
     app.state.market_provider.close()
 
@@ -37,7 +36,7 @@ app.include_router(api_router)
 
 
 def main() -> None:
-    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, workers=1)
+    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, workers=1, reload=True)
 
 
 if __name__ == "__main__":

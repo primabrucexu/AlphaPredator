@@ -1,31 +1,50 @@
-import { PlusOutlined, StarOutlined } from '@ant-design/icons'
+import { StarOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Card, Empty, Input, Select, Space, Table, Tag, Typography, message } from 'antd'
-import { useState } from 'react'
+import { Alert, Button, Card, Empty, Space, Table, Tag, Typography, message } from 'antd'
+import dayjs from 'dayjs'
+import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { api } from '../api'
 import KlineChart from '../components/KlineChart'
 import QuoteCard from '../components/QuoteCard'
-import type { LimitUpRecord } from '../types'
+import TagPicker from '../components/TagPicker'
+import type { DailyBar, LimitUpRecord } from '../types'
 
 export default function StockDetailPage() {
-  const { symbol = '' } = useParams(); const client = useQueryClient(); const [tagName, setTagName] = useState(''); const [groupId, setGroupId] = useState<number>()
+  const { symbol = '' } = useParams(); const client = useQueryClient()
+  const [history, setHistory] = useState<DailyBar[]>([]); const [hasEarlier, setHasEarlier] = useState(true)
   const bars = useQuery({ queryKey: ['bars', symbol], queryFn: () => api.bars(symbol) })
   const tags = useQuery({ queryKey: ['tags', symbol], queryFn: () => api.tags(symbol) })
-  const groups = useQuery({ queryKey: ['groups'], queryFn: api.groups })
+  const catalog = useQuery({ queryKey: ['tag-catalog'], queryFn: api.tagCatalog })
+  const watchlist = useQuery({ queryKey: ['watchlist'], queryFn: api.watchlist })
   const limitUps = useQuery({ queryKey: ['limit-ups', symbol], queryFn: () => api.limitUps(symbol) })
   const mutate = useMutation({ mutationFn: (fn: () => Promise<unknown>) => fn(), onSuccess: () => message.success('已保存'), onError: e => message.error(e.message) })
-  const addTag = () => { if (!tagName.trim()) return; mutate.mutate(() => api.addTag(symbol, tagName.trim()).then(() => { setTagName(''); return client.invalidateQueries({ queryKey: ['tags', symbol] }) })) }
-  const targetGroup = groupId || groups.data?.[0]?.id
+  const earlier = useMutation({ mutationFn: async () => {
+    const earliest = history[0]?.date
+    if (!earliest) return { symbol, bars: [] as DailyBar[] }
+    const end = dayjs(earliest).subtract(1, 'day'); const start = end.subtract(1, 'year').add(1, 'day')
+    return api.barsRange(symbol, start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'))
+  }, onSuccess: result => {
+    if (result.symbol !== symbol) return
+    setHistory(current => {
+      const previousDates = new Set(current.map(bar => bar.date)); const added = result.bars.filter(bar => !previousDates.has(bar.date))
+      if (added.length === 0) setHasEarlier(false)
+      return [...added, ...current].sort((a, b) => a.date.localeCompare(b.date))
+    })
+  }, onError: error => message.error(`更早 K 线加载失败：${error.message}`) })
+  useEffect(() => { setHistory(bars.data?.bars ?? []); setHasEarlier(true) }, [symbol, bars.data])
+  const refreshTags = () => Promise.all([client.invalidateQueries({ queryKey: ['tags', symbol] }), client.invalidateQueries({ queryKey: ['watchlist'] }), client.invalidateQueries({ queryKey: ['tag-catalog'] })])
+  const addTag = (name: string) => mutate.mutate(() => api.addTag(symbol, name).then(refreshTags))
+  const watched = watchlist.data?.find(item => item.symbol === symbol)
   return <div className="stack-lg">
     <QuoteCard symbol={symbol} />
     <Card size="small"><div className="detail-actions">
-      <Space wrap><Typography.Text strong>个股标签</Typography.Text>{tags.data?.map(tag => <Tag key={tag.id} closable onClose={e => { e.preventDefault(); mutate.mutate(() => api.deleteTag(symbol, tag.id).then(() => client.invalidateQueries({ queryKey: ['tags', symbol] }))) }}>{tag.name}</Tag>)}
-        <Space.Compact><Input size="small" value={tagName} onChange={e => setTagName(e.target.value)} onPressEnter={addTag} placeholder="添加标签" maxLength={32} /><Button size="small" icon={<PlusOutlined />} onClick={addTag} /></Space.Compact></Space>
-      <Space><Select value={targetGroup} onChange={setGroupId} style={{ width: 140 }} options={groups.data?.map(g => ({ value: g.id, label: g.name }))} /><Button icon={<StarOutlined />} disabled={!targetGroup} onClick={() => mutate.mutate(() => api.addWatch(targetGroup!, symbol).then(() => client.invalidateQueries({ queryKey: ['groups'] })))}>加入自选</Button></Space>
+      <Space wrap><Typography.Text strong>个股标签</Typography.Text>{tags.data?.map(tag => <Tag key={tag.id} closable onClose={e => { e.preventDefault(); mutate.mutate(() => api.deleteTag(symbol, tag.id).then(refreshTags)) }}>{tag.name}</Tag>)}
+        <TagPicker catalog={catalog.data ?? []} excludedIds={(tags.data ?? []).map(tag => tag.id)} onAdd={addTag} loading={mutate.isPending} /></Space>
+      <Button icon={<StarOutlined />} danger={Boolean(watched)} loading={watchlist.isLoading || mutate.isPending} onClick={() => mutate.mutate(() => (watched ? api.deleteWatch(watched.id) : api.addWatch(symbol)).then(() => client.invalidateQueries({ queryKey: ['watchlist'] })))}>{watched ? '移出自选' : '加入自选'}</Button>
     </div></Card>
     {bars.error && <Alert type="error" showIcon message="K 线获取失败" description={(bars.error as Error).message} />}
-    {bars.data && bars.data.bars.length > 0 && <KlineChart bars={bars.data.bars} />}
+    {history.length > 0 && <KlineChart key={symbol} bars={history} hasEarlier={hasEarlier} isLoadingEarlier={earlier.isPending} onLoadEarlier={() => { if (hasEarlier && !earlier.isPending) earlier.mutate() }} />}
     {bars.data && bars.data.bars.length === 0 && <Card><Empty description="行情源没有返回日 K 数据" /></Card>}
     <Card title="最近涨停记录" extra={<Typography.Text type="secondary">来源：韭研公社，最近 10 条</Typography.Text>}>
       {limitUps.error ? <Alert type="error" message="涨停记录读取失败" description={(limitUps.error as Error).message} /> : <Table<LimitUpRecord> rowKey={row => `${row.trade_date}-${row.limit_up_time}`} loading={limitUps.isLoading} dataSource={limitUps.data} pagination={false} locale={{ emptyText: '尚未同步到该股票的涨停记录' }} columns={[
