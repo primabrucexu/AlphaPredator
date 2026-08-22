@@ -2,7 +2,7 @@
   "feature": [
     {
       "id": "F001",
-      "name": "行情、自选股与涨停历史",
+      "summary": "个人 A 股行情与技术指标展示、自选标签管理及韭研涨停历史",
       "status": "完成",
       "document": "F001-market-watchlist.md"
     }
