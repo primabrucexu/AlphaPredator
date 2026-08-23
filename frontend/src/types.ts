@@ -16,3 +16,15 @@ export interface LimitUpRecord { trade_date: string; limit_up_time: string; stre
 export interface JygsStatus {
   is_configured: boolean; is_valid: boolean; updated_at: string | null; last_checked_at: string | null; last_error: string
 }
+export interface Task {
+  id: number; task_type: string; scheduling_policy: 'COMPUTE' | 'EXCLUSIVE_UPDATE'; title: string; status: string
+  total_items: number; completed_items: number; failed_items: number; progress: number | null
+  status_message: string; input: Record<string, unknown>; result: Record<string, unknown>; error: string
+  created_at: string; started_at: string | null; finished_at: string | null; updated_at: string; cancel_requested_at: string | null
+}
+export interface TaskItem {
+  id: number; task_id: number; sequence: number; title: string; status: string
+  current: number | null; total: number | null; progress: number | null; status_message: string
+  result: Record<string, unknown>; error: string; started_at: string | null; finished_at: string | null; updated_at: string
+}
+export interface Page<T> { items: T[]; total: number; page: number; page_size: number }

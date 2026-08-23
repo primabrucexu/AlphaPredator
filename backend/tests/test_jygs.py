@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from app.database.models import JygsCredential
-from app.jygs.client import parse_records, sync_range
+from app.jygs.client import parse_records
 from app.jygs.playwright_browser import browser_channel_candidates
 
 
@@ -22,13 +21,3 @@ def test_parse_jygs_records_merges_themes():
 def test_browser_channels_prefer_configured_value(monkeypatch):
     monkeypatch.setenv("PLAYWRIGHT_BROWSER_CHANNEL", "chrome")
     assert browser_channel_candidates() == ["chrome"]
-
-
-def test_sync_range_allows_more_than_366_days(db, monkeypatch):
-    db.add(JygsCredential(id=1, session="test-session"))
-    db.commit()
-    monkeypatch.setattr("app.jygs.client._post", lambda *_args, **_kwargs: {"data": []})
-
-    result = sync_range(db, "2024-01-01", "2025-01-02")
-
-    assert result == {"days": 368, "records": 0}

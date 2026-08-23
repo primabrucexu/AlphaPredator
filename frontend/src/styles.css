@@ -73,7 +73,12 @@ a { color: inherit; }
 .chart-frequency { color: #6b7280; }
 .settings-page { max-width: 980px; margin: 0 auto; }
 .status-row { display: flex; gap: 90px; margin-bottom: 18px; }
+.clickable-row { cursor: pointer; }
+.clickable-row:hover td { background: #f8fafc !important; }
+.task-summary { width: 100%; }
+.tasks-page .ant-card-extra { max-width: 65%; }
 .mb-16 { margin-bottom: 16px; }
+.mt-16 { margin-top: 16px; }
 @media (max-width: 1150px) {
   body { min-width: 760px; }
   .quote-market { grid-template-columns: minmax(190px, 1fr) repeat(3, minmax(150px, 1fr)); }

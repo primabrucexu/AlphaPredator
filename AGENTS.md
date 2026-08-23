@@ -26,6 +26,8 @@
 3. 不同调用入口应复用 service 层的业务逻辑，避免重复编码。
 4. 外部服务不可用时返回明确错误，禁止生成伪造数据。
 5. Feature 文档中的“非目标”只约束该 Feature；除非明确标记为项目级决策，不得据此限制后续 Feature。
+6. 后台任务必须通过 `backend/app/tasks/` 的任务框架接入。Handler 使用 `build_items()` 将循环元素逐一生成子任务，并统一通过 `run_item()` 执行；没有循环的任务也必须返回一个子任务，不得绕过子任务执行路径。
+7. 新增或修改生产任务类型时，必须在统一的 `register_production_handlers()` 中注册，并由 FastAPI Web 进程和独立 Worker 进程在启动时分别调用。Web 注册用于创建任务时执行 `build_items()`，Worker 注册用于执行 `run_item()` 和 `summarize()`；必须验证两个进程都能识别同一 `task_type`，禁止只在单一进程中依赖导入副作用注册。
 
 ## 5. 数据存储
 

@@ -7,8 +7,3 @@ class JygsSessionInput(BaseModel):
 
 class JygsLoginInput(BaseModel):
     timeout_seconds: int = Field(default=300, ge=30, le=900)
-
-
-class JygsSyncInput(BaseModel):
-    start_date: str
-    end_date: str

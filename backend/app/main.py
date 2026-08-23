@@ -8,8 +8,15 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
 from app.database.migrations import migrate_legacy_tags, migrate_legacy_watchlists, migrate_stock_tag_order, sync_tagged_stocks_to_watchlist
-from app.database.session import Base, engine
+from app.database.session import Base, SessionLocal, engine
 from app.market_data.provider import ThsdkMarketDataProvider
+from app.tasks.migrations import migrate_task_tables
+from app.tasks.handlers.production import register_production_handlers
+from app.tasks.process import start_worker_process
+from app.tasks.service import next_pending_task
+
+
+register_production_handlers()
 
 
 @asynccontextmanager
@@ -17,8 +24,12 @@ async def lifespan(app: FastAPI):
     migrate_legacy_watchlists(engine)
     migrate_legacy_tags(engine)
     migrate_stock_tag_order(engine)
+    migrate_task_tables(engine)
     Base.metadata.create_all(engine)
     sync_tagged_stocks_to_watchlist(engine)
+    with SessionLocal() as session:
+        if next_pending_task(session) is not None:
+            start_worker_process()
     yield
     app.state.market_provider.close()
 

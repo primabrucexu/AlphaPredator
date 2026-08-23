@@ -4,6 +4,8 @@ import SearchBar from './components/SearchBar'
 import TagSidebar from './components/TagSidebar'
 import SettingsPage from './pages/SettingsPage'
 import StockDetailPage from './pages/StockDetailPage'
+import TaskDetailPage from './pages/TaskDetailPage'
+import TasksPage from './pages/TasksPage'
 import WatchlistPage from './pages/WatchlistPage'
 
 export default function App() {
@@ -18,6 +20,8 @@ export default function App() {
         <Route path="/" element={<WatchlistPage />} />
         <Route path="/stocks/:symbol" element={<StockDetailPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/tasks" element={<TasksPage />} />
+        <Route path="/tasks/:taskId" element={<TaskDetailPage />} />
       </Routes>
     </Layout.Content>
     <Layout.Footer className="footer"><Typography.Text type="secondary">仅供个人研究，不构成投资建议</Typography.Text></Layout.Footer>

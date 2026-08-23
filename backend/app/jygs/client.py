@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 import httpx
@@ -109,26 +109,20 @@ def parse_records(trade_date: str, payload: dict[str, Any]) -> list[LimitUpRecor
     return records
 
 
-def sync_range(db: Session, start_date: str, end_date: str) -> dict[str, int]:
-    start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
-    if end < start:
-        raise ValueError("结束日期不能早于开始日期")
+def fetch_date_records(db: Session, trade_date: str) -> list[LimitUpRecord]:
+    date.fromisoformat(trade_date)
     credential = db.get(JygsCredential, 1)
     if not credential:
         raise JygsError("尚未配置韭研公社 SESSION")
-    days = records_count = 0
-    current = start
-    while current <= end:
-        trade_date = current.isoformat()
-        payload = _post("/api/v1/action/field", {"date": trade_date, "pc": 1}, credential.session)
-        records = parse_records(trade_date, payload)
-        db.execute(delete(LimitUpRecord).where(LimitUpRecord.trade_date == trade_date))
-        db.add_all(records)
-        db.commit()
-        records_count += len(records)
-        days += 1
-        current += timedelta(days=1)
-    return {"days": days, "records": records_count}
+    payload = _post("/api/v1/action/field", {"date": trade_date, "pc": 1}, credential.session)
+    return parse_records(trade_date, payload)
+
+
+def replace_date_records(db: Session, trade_date: str, records: list[LimitUpRecord]) -> int:
+    db.execute(delete(LimitUpRecord).where(LimitUpRecord.trade_date == trade_date))
+    db.add_all(records)
+    db.commit()
+    return len(records)
 
 
 def recent_records(db: Session, stock_code: str, limit: int = 10) -> list[LimitUpRecord]:

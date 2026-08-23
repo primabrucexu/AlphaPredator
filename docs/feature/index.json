@@ -5,6 +5,18 @@
       "summary": "个人 A 股行情与技术指标展示、自选标签管理及韭研涨停历史",
       "status": "完成",
       "document": "F001-market-watchlist.md"
+    },
+    {
+      "id": "F002",
+      "summary": "通用任务处理、总任务进度与子任务进度管理",
+      "status": "完成",
+      "document": "F002-task-processing.md"
+    },
+    {
+      "id": "F002.1",
+      "summary": "迁移韭研增量同步和股票搜索目录刷新任务",
+      "status": "完成",
+      "document": "F002.1-data-update-tasks.md"
     }
   ]
 }

@@ -1,6 +1,6 @@
-import { BarChartOutlined, CheckOutlined, CloseOutlined, DeleteOutlined, DragOutlined, EditOutlined, PlusOutlined, SearchOutlined, SettingOutlined, StarOutlined } from '@ant-design/icons'
+import { BarChartOutlined, CheckOutlined, CloseOutlined, DeleteOutlined, DragOutlined, EditOutlined, PlusOutlined, ScheduleOutlined, SearchOutlined, SettingOutlined, StarOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Button, Input, Layout, Menu, Modal, Typography, message } from 'antd'
+import { Badge, Button, Input, Layout, Menu, Modal, Typography, message } from 'antd'
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../api'
@@ -10,6 +10,7 @@ export default function TagSidebar() {
   const location = useLocation(); const navigate = useNavigate(); const client = useQueryClient()
   const catalog = useQuery({ queryKey: ['tag-catalog'], queryFn: api.tagCatalog })
   const watchlist = useQuery({ queryKey: ['watchlist'], queryFn: api.watchlist })
+  const activeTasks = useQuery({ queryKey: ['active-task-count'], queryFn: api.activeTaskCount, refetchInterval: 3000 })
   const [tags, setTags] = useState<GlobalTag[]>([]); const [search, setSearch] = useState(''); const [dragging, setDragging] = useState<number>()
   const [editing, setEditing] = useState<number>(); const [editName, setEditName] = useState(''); const [newTagName, setNewTagName] = useState('')
   const activeTag = new URLSearchParams(location.search).get('tag')
@@ -34,12 +35,13 @@ export default function TagSidebar() {
     action.mutate(() => api.createTag(newTagName.trim()).then(() => { setNewTagName(''); message.success('标签已创建') }))
   }
   const remove = (tag: GlobalTag) => Modal.confirm({ title: `删除标签“${tag.name}”？`, content: '将从所有关联股票移除此标签，但不会删除自选股。', okText: '删除', okButtonProps: { danger: true }, onOk: () => action.mutateAsync(() => api.deleteGlobalTag(tag.id)).then(() => { if (activeTag === String(tag.id)) navigate('/') }) })
-  const navKey = location.pathname.startsWith('/settings') ? '/settings' : '/'
+  const navKey = location.pathname.startsWith('/settings') ? '/settings' : location.pathname.startsWith('/tasks') ? '/tasks' : '/'
   return <Fragment>
     <Layout.Sider width={200} theme="light" className="sidebar primary-sidebar">
       <Link to="/" className="sidebar-brand"><BarChartOutlined /><span>AlphaPredator</span></Link>
       <Menu mode="inline" selectedKeys={[navKey]} items={[
         { key: '/', icon: <StarOutlined />, label: <Link to="/">我的自选</Link> },
+        { key: '/tasks', icon: <ScheduleOutlined />, label: <Link to="/tasks">任务 <Badge count={activeTasks.data?.count ?? 0} size="small" /></Link> },
         { key: '/settings', icon: <SettingOutlined />, label: <Link to="/settings">数据设置</Link> },
       ]} />
     </Layout.Sider>

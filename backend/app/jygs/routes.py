@@ -7,9 +7,9 @@ from app.database.models import JygsCredential
 from app.database.session import get_session
 from app.market_data.provider.base import normalize_symbol
 
-from .client import JygsError, check_credential, recent_records, save_credential, sync_range
+from .client import JygsError, check_credential, recent_records, save_credential
 from .playwright_login import login_and_capture_session
-from .schemas import JygsLoginInput, JygsSessionInput, JygsSyncInput
+from .schemas import JygsLoginInput, JygsSessionInput
 
 
 router = APIRouter()
@@ -61,11 +61,3 @@ def check_jygs(db: Session = Depends(get_session)):
     except JygsError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"is_valid": row.is_valid, "last_error": row.last_error}
-
-
-@router.post("/jygs/sync")
-def sync_jygs(payload: JygsSyncInput, db: Session = Depends(get_session)):
-    try:
-        return sync_range(db, payload.start_date, payload.end_date)
-    except (JygsError, ValueError) as exc:
-        raise HTTPException(400, str(exc)) from exc

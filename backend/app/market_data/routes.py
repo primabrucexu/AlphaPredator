@@ -30,14 +30,6 @@ def search_stocks(request: Request, q: str = Query(min_length=1), db: Session = 
         raise _market_error(exc) from exc
 
 
-@router.post("/stocks/sync-directory")
-def sync_stock_directory(request: Request, db: Session = Depends(get_session)):
-    try:
-        return {"count": StockService(_provider(request)).sync_directory(db)}
-    except MarketDataError as exc:
-        raise _market_error(exc) from exc
-
-
 @router.get("/market/stocks/{symbol}/quote")
 def quote(request: Request, symbol: str):
     try:
