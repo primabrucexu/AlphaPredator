@@ -1,0 +1,21 @@
+{
+  "integration": [
+    {
+      "id": "thsdk",
+      "summary": "同花顺行情 SDK 能力、账号配置和项目接入说明",
+      "status": "已接入",
+      "documents": [
+        "thsdk.md"
+      ]
+    },
+    {
+      "id": "jygs",
+      "summary": "韭研公社登录鉴权、涨停数据接口和项目接入说明",
+      "status": "已接入",
+      "documents": [
+        "jygs.md",
+        "jygs-api.yaml"
+      ]
+    }
+  ]
+}
