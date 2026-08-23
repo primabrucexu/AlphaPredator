@@ -17,6 +17,24 @@
       "summary": "迁移韭研增量同步和股票搜索目录刷新任务",
       "status": "完成",
       "document": "F002.1-data-update-tasks.md"
+    },
+    {
+      "id": "F004",
+      "summary": "同花顺登录",
+      "status": "设计",
+      "document": "F004-ths-login.md"
+    },
+    {
+      "id": "F005",
+      "summary": "MCP 接入",
+      "status": "设计",
+      "document": "F005-mcp-integration.md"
+    },
+    {
+      "id": "F006",
+      "summary": "趋势反转筛选",
+      "status": "设计",
+      "document": "F006-trend-reversal-screening.md"
     }
   ]
 }
