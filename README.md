@@ -17,6 +17,21 @@ $env:THS_MAC="你的MAC地址"
 python -m uvicorn app.main:app --reload --workers 1
 ```
 
+### 同花顺账号文件（F004）
+
+> F004 已完成设计但尚未实现；以下文件读取行为将在该功能实现后生效。当前版本仍使用上面的环境变量配置正式账号。
+
+F004 实现后，AlphaPredator 的正式同花顺登录只允许通过手工编写项目根目录下的 `data/ths_credentials.json` 配置。项目不提供账号密码配置页面或文件写入 API；Web 进程和独立后台 Worker 统一读取这个文件。文件格式保持为：
+
+```json
+{
+  "username": "你的同花顺账号",
+  "password": "你的同花顺密码"
+}
+```
+
+保存或修改文件后需要重启后端，使 Web 进程和独立后台 Worker 重新读取配置。程序不会读取或保存机器网卡 MAC；创建 thsdk 客户端时只传入账号密码，由 SDK 使用账号派生默认 MAC。该 JSON 文件包含明文密码，仅供本机个人环境使用；`data/` 已被 Git 忽略，不要强制添加或提交该文件。
+
 也可以在 IDE 中直接运行 `app.main`，或执行：
 
 ```powershell

@@ -30,11 +30,14 @@
 5. Feature 文档中的“非目标”只约束该 Feature；除非明确标记为项目级决策，不得据此限制后续 Feature。
 6. 后台任务必须通过 `backend/app/tasks/` 的任务框架接入。Handler 使用 `build_items()` 将循环元素逐一生成子任务，并统一通过 `run_item()` 执行；没有循环的任务也必须返回一个子任务，不得绕过子任务执行路径。
 7. 新增或修改生产任务类型时，必须在统一的 `register_production_handlers()` 中注册，并由 FastAPI Web 进程和独立 Worker 进程在启动时分别调用。Web 注册用于创建任务时执行 `build_items()`，Worker 注册用于执行 `run_item()` 和 `summarize()`；必须验证两个进程都能识别同一 `task_type`，禁止只在单一进程中依赖导入副作用注册。
+8. 每个进程最多维护一个 thsdk 客户端；进程内所有 thsdk 调用必须串行，并保证相邻底层调用间隔不小于 50ms。Web 和 Worker 可以各自维护一个客户端，但不得在同一进程创建多个客户端并发访问原生库。
+9. thsdk 正式账号客户端只传入统一配置中的账号和密码，使用 SDK 默认派生 MAC；不得读取、持久化或显式传入机器真实 MAC，也不得在日志、任务或 API 中暴露完整派生 MAC。
 
 ## 5. 数据存储
 
 - SESSION、账号、密码、本地数据库及其他敏感信息不得提交。
 - 行情时序数据默认不落库，由 `MarketDataProvider` 在线获取；如需缓存或持久化，必须由对应 Feature 明确规定。
+- 持久化行情使用的 DuckDB 只能由独立 Worker 进程打开和访问；FastAPI Web、页面请求和 MCP 不得直接连接 DuckDB。所有 DuckDB 行情更新和计算必须通过 `backend/app/tasks/` 任务交给 Worker 串行执行。
 - 修改持久化模型时，必须评估存量数据库兼容性；涉及表结构或数据语义变化时，需要提供迁移方案和迁移测试。
 
 ## 6. 文档资料管理
