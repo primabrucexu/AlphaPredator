@@ -9,7 +9,13 @@ from typing import Any
 
 from app.market_data.schemas import DailyBar, Quote, StockSummary
 
-from .base import MarketDataError, is_at_price_limit, limit_percent, normalize_symbol
+from .base import (
+    MarketDataError,
+    MarketDataNoDataError,
+    is_at_price_limit,
+    limit_percent,
+    normalize_symbol,
+)
 from .credentials import load_ths_credentials
 
 
@@ -110,8 +116,11 @@ class ThsdkMarketDataProvider:
                 self.close()
                 raise MarketDataError(f"thsdk 调用 {method} 失败：{self._redact(exc)}") from exc
             if not response.success:
+                error = self._redact(response.error) if response.error else ""
+                if "not data" in error.lower():
+                    raise MarketDataNoDataError(error or "thsdk 未返回数据")
                 raise MarketDataError(
-                    self._redact(response.error) if response.error else f"thsdk 调用 {method} 失败"
+                    error or f"thsdk 调用 {method} 失败"
                 )
             return response.data or []
 
@@ -181,6 +190,8 @@ class ThsdkMarketDataProvider:
         else:
             query["count"] = count
         rows = self._call("klines", symbol_to_thscode(normalized), **query)
+        if not rows:
+            raise MarketDataNoDataError("thsdk 未返回日 K 数据")
         bars: list[DailyBar] = []
         previous: float | None = None
         for row in rows:

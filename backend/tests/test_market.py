@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from app.market_data.provider.base import (
+    MarketDataNoDataError,
     is_at_price_limit,
     limit_percent,
     normalize_symbol,
@@ -70,13 +71,32 @@ def test_thsdk_daily_bars_support_forward_adjusted_date_range():
     captured = {}
     provider._call = lambda *args, **kwargs: captured.update({"args": args, "kwargs": kwargs}) or []
 
-    provider.get_daily_bars("600519.SH", start_date=date(2024, 1, 1), end_date=date(2024, 12, 31))
+    with pytest.raises(MarketDataNoDataError, match="未返回日 K 数据"):
+        provider.get_daily_bars("600519.SH", start_date=date(2024, 1, 1), end_date=date(2024, 12, 31))
 
     assert captured["kwargs"]["adjust"] == "forward"
     assert captured["kwargs"]["interval"] == "day"
     assert captured["kwargs"]["start_time"] == datetime(2024, 1, 1, 0, 0)
     assert captured["kwargs"]["end_time"] == datetime(2024, 12, 31, 23, 59, 59, 999999)
     assert "count" not in captured["kwargs"]
+
+
+def test_thsdk_not_data_error_has_explicit_type():
+    provider = ThsdkMarketDataProvider(minimum_interval_seconds=0)
+    provider._client = SimpleNamespace(
+        klines=lambda *args, **kwargs: SimpleNamespace(
+            success=False,
+            error="[thsdk]QueryData错误:not data",
+            data=None,
+        ),
+    )
+
+    with pytest.raises(MarketDataNoDataError, match="not data"):
+        provider.get_daily_bars(
+            "600519.SH",
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 12, 31),
+        )
 
 
 def test_thsdk_quote_merges_extended_market_fields():

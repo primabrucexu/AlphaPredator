@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from app.database.models import Stock
 from app.database.session import Base
 from app.market_data.schemas import DailyBar
+from app.market_data.provider.base import MarketDataNoDataError
 from app.market_data.storage import DuckDbMarketDataStore
 from app.tasks.handlers import register_handler, unregister_handler
 from app.tasks.handlers.market_daily_bars import MarketDailyBarsUpdateHandler, TASK_TYPE
@@ -90,6 +91,8 @@ def test_initial_full_then_unchanged_overlap_appends_only_new_bar(tmp_path):
             assert load_json(first.result_json)["full_stocks"] == 1
             assert load_json(second.result_json)["incremental_stocks"] == 1
             assert load_json(second.result_json)["written_rows"] == 1
+            assert load_json(second.result_json)["data_start_date"] == "2025-01-02"
+            assert load_json(second.result_json)["data_end_date"] == "2025-01-04"
         with DuckDbMarketDataStore(path) as store:
             assert len(store.recent_bars("000001.SZ", 10)) == 3
     finally:
@@ -156,5 +159,41 @@ def test_one_failed_stock_does_not_stop_next_stock(tmp_path):
                 TaskItemStatus.FAILED.value, TaskItemStatus.SUCCEEDED.value,
             ]
             assert load_json(task.result_json)["failed_stocks"] == 1
+    finally:
+        unregister_handler(TASK_TYPE)
+
+
+def test_no_market_data_is_skipped_without_changing_existing_bars(tmp_path):
+    db_factory = factory(tmp_path)
+    with db_factory() as db:
+        db.add(Stock(symbol="000001.SZ", code="000001", name="平安银行"))
+        db.commit()
+    path = tmp_path / "market.duckdb"
+    with DuckDbMarketDataStore(path) as store:
+        from app.market_data.storage import prepare_daily_bars
+        store.replace_full("000001.SZ", prepare_daily_bars(
+            bars(("2025-01-02", 10), ("2025-01-03", 10.2)),
+            start_date=date(2025, 1, 1), end_date=date(2025, 1, 4),
+        ))
+    provider = FakeProvider([MarketDataNoDataError("[thsdk]QueryData错误:not data")])
+    register_handler(TASK_TYPE, MarketDailyBarsUpdateHandler(
+        db_factory, lambda: provider, lambda: DuckDbMarketDataStore(path)
+    ))
+    try:
+        task_id = create(db_factory)
+        run_next_task(db_factory)
+        with db_factory() as db:
+            task = db.get(Task, task_id)
+            item = db.scalar(select(TaskItem).where(TaskItem.task_id == task_id))
+            summary = load_json(task.result_json)
+            assert task.status == TaskStatus.SUCCEEDED.value
+            assert item.status == TaskItemStatus.SKIPPED.value
+            assert item.status_message == "000001.SZ 无日 K 数据，已跳过"
+            assert load_json(item.result_json)["reason"] == "no_market_data"
+            assert summary["succeeded_stocks"] == 0
+            assert summary["skipped_stocks"] == 1
+            assert summary["failed_stocks"] == 0
+        with DuckDbMarketDataStore(path) as store:
+            assert len(store.recent_bars("000001.SZ", 10)) == 2
     finally:
         unregister_handler(TASK_TYPE)

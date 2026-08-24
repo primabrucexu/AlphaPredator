@@ -42,6 +42,7 @@ def test_duckdb_schema_and_decimal_quantization(tmp_path):
 
 def test_incremental_append_is_idempotent(tmp_path):
     with DuckDbMarketDataStore(tmp_path / "market.duckdb") as store:
+        assert store.coverage() == (None, None)
         initial = prepare_daily_bars(
             [bar("2025-01-02"), bar("2025-01-03", 10.2)],
             start_date=date(2025, 1, 1), end_date=date(2025, 1, 4),
@@ -54,6 +55,7 @@ def test_incremental_append_is_idempotent(tmp_path):
         assert store.append_new("000001.SZ", fetched) == 1
         assert store.append_new("000001.SZ", fetched) == 0
         assert len(store.recent_bars("000001.SZ", 10)) == 3
+        assert store.coverage() == (date(2025, 1, 2), date(2025, 1, 4))
 
 
 def test_full_replace_rolls_back_when_insert_fails(tmp_path):

@@ -10,12 +10,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.database.models import Stock
 from app.database.session import SessionLocal
 from app.market_data.provider import get_process_market_provider
-from app.market_data.provider.base import MarketDataProvider
+from app.market_data.provider.base import MarketDataNoDataError, MarketDataProvider
 from app.market_data.storage import DuckDbMarketDataStore, StoredDailyBar, prepare_daily_bars
 from app.tasks.context import TaskContext
 from app.tasks.models import Task, TaskItem, TaskItemStatus
 
-from . import TaskItemSpec
+from . import TaskItemSkipped, TaskItemSpec
 
 
 TASK_TYPE = "market_daily_bars_update"
@@ -121,6 +121,23 @@ class MarketDailyBarsUpdateHandler:
         return written, bars[0].trade_date, bars[-1].trade_date
 
     def run_item(self, task: Task, item: TaskItem, context: TaskContext) -> dict:
+        try:
+            return self._run_item(task, item, context)
+        except MarketDataNoDataError as exc:
+            symbol = str(_json(item.input_json)["symbol"])
+            context.report_progress(3, 3, f"{symbol} 无日 K 数据，已跳过")
+            raise TaskItemSkipped(
+                f"{symbol} 无日 K 数据，已跳过",
+                {
+                    "symbol": symbol,
+                    "execution": "skipped",
+                    "reason": "no_market_data",
+                    "written_rows": 0,
+                    "diagnostic": str(exc),
+                },
+            ) from exc
+
+    def _run_item(self, task: Task, item: TaskItem, context: TaskContext) -> dict:
         item_input = _json(item.input_json)
         symbol = str(item_input["symbol"])
         mode = str(item_input["mode"])
@@ -216,18 +233,29 @@ class MarketDailyBarsUpdateHandler:
                 if item.status == TaskItemStatus.SUCCEEDED.value
             ]
             failed = [item for item in items if item.status == TaskItemStatus.FAILED.value]
+            skipped = [
+                _json(item.result_json)
+                for item in items
+                if item.status == TaskItemStatus.SKIPPED.value
+            ]
             task_input = _json(task.input_json)
             actual_dates = [str(result["after_last_date"]) for result in succeeded if result.get("after_last_date")]
+            data_start_date, data_end_date = (
+                self._store.coverage() if self._store is not None else (None, None)
+            )
             return {
                 "mode": task_input.get("mode"),
                 "target_end_date": task_input.get("target_end_date"),
                 "stock_count": len(items),
                 "succeeded_stocks": len(succeeded),
+                "skipped_stocks": len(skipped),
                 "failed_stocks": len(failed),
                 "incremental_stocks": sum(result.get("execution") == "incremental" for result in succeeded),
                 "full_stocks": sum(result.get("execution") == "full" for result in succeeded),
                 "written_rows": sum(int(result.get("written_rows") or 0) for result in succeeded),
                 "actual_end_date": max(actual_dates) if actual_dates else None,
+                "data_start_date": data_start_date.isoformat() if data_start_date else None,
+                "data_end_date": data_end_date.isoformat() if data_end_date else None,
                 "failed_summary": [
                     {"symbol": _json(item.input_json).get("symbol"), "error": item.error}
                     for item in failed[:20]

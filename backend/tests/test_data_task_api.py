@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import json
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
+
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -13,6 +18,7 @@ from app.tasks.handlers import get_handler
 from app.tasks.handlers import register_handler
 from app.tasks.handlers.market_daily_bars import MarketDailyBarsUpdateHandler
 from app.tasks.models import Task, TaskItem, TaskItemStatus, TaskStatus
+from app.tasks.routes import _market_target_end_date
 from app.tasks.service import load_json
 
 
@@ -92,6 +98,27 @@ def test_market_daily_bars_creation_and_failed_stock_retry(db, monkeypatch):
     assert load_json(item.input_json)["symbol"] == "000001.SZ"
 
     task = db.get(Task, task_id)
+    task.status = TaskStatus.SUCCEEDED.value
+    item.status = TaskItemStatus.SUCCEEDED.value
+    item.result_json = json.dumps({
+        "after_first_date": "2025-01-02",
+        "after_last_date": "2026-08-20",
+    })
+    db.commit()
+    assert client.get("/api/tasks/market-daily-bars-coverage").json() == {
+        "start_date": "2025-01-02",
+        "end_date": "2026-08-20",
+    }
+
+    task.result_json = json.dumps({
+        "data_start_date": "2025-01-02",
+        "data_end_date": "2026-08-21",
+    })
+    db.commit()
+    coverage = client.get("/api/tasks/market-daily-bars-coverage")
+    assert coverage.status_code == 200
+    assert coverage.json() == {"start_date": "2025-01-02", "end_date": "2026-08-21"}
+
     task.status = TaskStatus.PARTIALLY_SUCCEEDED.value
     item.status = TaskItemStatus.FAILED.value
     item.error = "remote failed"
@@ -102,6 +129,13 @@ def test_market_daily_bars_creation_and_failed_stock_retry(db, monkeypatch):
     assert retry_payload["input"]["symbols"] == ["000001.SZ"]
     assert retry_payload["input"]["target_end_date"] == payload["input"]["target_end_date"]
     assert retry_payload["input"]["retry_of_task_id"] == task_id
+    retry_task = db.get(Task, retry_payload["id"])
+    retry_task.result_json = json.dumps({"data_start_date": None, "data_end_date": None})
+    db.commit()
+    assert client.get("/api/tasks/market-daily-bars-coverage").json() == {
+        "start_date": "2025-01-02",
+        "end_date": "2026-08-21",
+    }
     duplicate_retry = client.post(f"/api/tasks/{task_id}/retry-failed")
     assert duplicate_retry.status_code == 409
     assert duplicate_retry.json()["detail"]["existing_task_id"] == retry_payload["id"]
@@ -113,6 +147,20 @@ def test_market_daily_bars_creation_requires_stock_directory(db, monkeypatch):
     response = client.post("/api/tasks/market-daily-bars-update", json={"mode": "full"})
     assert response.status_code == 400
     assert "股票目录为空" in response.json()["detail"]
+    assert client.get("/api/tasks/market-daily-bars-coverage").json() == {
+        "start_date": None,
+        "end_date": None,
+    }
+
+
+@pytest.mark.parametrize(("hour", "minute", "second", "expected"), [
+    (15, 44, 59, date(2026, 8, 23)),
+    (15, 45, 0, date(2026, 8, 23)),
+    (15, 45, 1, date(2026, 8, 24)),
+])
+def test_market_target_end_date_boundary(hour, minute, second, expected):
+    now = datetime(2026, 8, 24, hour, minute, second, tzinfo=ZoneInfo("Asia/Shanghai"))
+    assert _market_target_end_date(now) == expected
 
 
 def test_old_data_update_routes_are_removed(db):

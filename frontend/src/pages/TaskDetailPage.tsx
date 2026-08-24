@@ -15,7 +15,7 @@ const resultLabels: Record<string, string> = {
   selected_days: '选择天数', executed_days: '实际执行', skipped_days: '历史跳过', succeeded_days: '本次成功',
   failed_days: '失败天数', records: '写入记录', source_count: '行情源数量', processed_count: '本地处理数量',
   mode: '更新模式', target_end_date: '目标结束日期', stock_count: '股票总数', succeeded_stocks: '成功股票',
-  failed_stocks: '失败股票', incremental_stocks: '增量更新股票', full_stocks: '全量更新股票',
+  skipped_stocks: '跳过股票', failed_stocks: '失败股票', incremental_stocks: '增量更新股票', full_stocks: '全量更新股票',
   written_rows: '写入日线', actual_end_date: '实际行情截止日期',
 }
 
@@ -30,6 +30,7 @@ export default function TaskDetailPage() {
   const [modal, modalContext] = Modal.useModal()
   const task = useQuery({ queryKey: ['task', taskId], queryFn: () => api.task(taskId), enabled: Number.isInteger(taskId), refetchInterval: query => activeTaskStatuses.has(query.state.data?.status ?? '') ? 2000 : false })
   const items = useQuery({ queryKey: ['task-items', taskId, page], queryFn: () => api.taskItems(taskId, page, 50), enabled: Number.isInteger(taskId), refetchInterval: () => activeTaskStatuses.has(task.data?.status ?? '') ? 2000 : false })
+  const isMarketDailyBarsTask = task.data?.task_type === 'market_daily_bars_update'
   const cancel = useMutation({ mutationFn: () => api.cancelTask(taskId), onSuccess: () => { message.success('已提交取消请求'); client.invalidateQueries({ queryKey: ['task', taskId] }); client.invalidateQueries({ queryKey: ['tasks'] }) }, onError: error => message.error(error.message) })
   const retry = useMutation({
     mutationFn: () => api.retryFailedMarketDailyBarsTask(taskId),
@@ -50,7 +51,7 @@ export default function TaskDetailPage() {
     { title: '子任务', dataIndex: 'title' },
     { title: '状态', dataIndex: 'status', width: 110, render: value => <TaskStatusTag status={value} /> },
     { title: '进度', dataIndex: 'progress', width: 180, render: (value, row) => <TaskProgress progress={value} status={row.status} /> },
-    { title: '工作量', width: 100, render: (_, row) => row.total === null ? '—' : `${row.current ?? 0}/${row.total}` },
+    { title: isMarketDailyBarsTask ? '处理步骤' : '工作量', width: 110, render: (_, row) => row.total === null ? '—' : isMarketDailyBarsTask ? `第 ${row.current ?? 0}/${row.total} 步` : `${row.current ?? 0}/${row.total}` },
     { title: '状态说明', dataIndex: 'status_message' },
     { title: '错误', dataIndex: 'error', render: value => value || '—' },
   ]

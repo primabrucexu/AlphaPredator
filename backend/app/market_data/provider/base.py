@@ -10,6 +10,10 @@ class MarketDataError(RuntimeError):
     pass
 
 
+class MarketDataNoDataError(MarketDataError):
+    pass
+
+
 class MarketDataProvider(Protocol):
     def connect(self) -> None: ...
     def close(self) -> None: ...

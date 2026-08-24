@@ -18,6 +18,7 @@ export default function TasksPage() {
   const navigate = useNavigate(); const client = useQueryClient(); const [page, setPage] = useState(1); const [status, setStatus] = useState(''); const [taskType, setTaskType] = useState('')
   const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>([dayjs().subtract(30, 'day'), dayjs()])
   const jygsStatus = useQuery({ queryKey: ['jygs-status'], queryFn: api.jygsStatus })
+  const marketCoverage = useQuery({ queryKey: ['market-daily-bars-coverage'], queryFn: api.marketDailyBarsCoverage })
   const createTask = useMutation<Task, Error, () => Promise<Task>>({
     mutationFn: factory => factory(),
     onSuccess: task => { client.invalidateQueries({ queryKey: ['tasks'] }); navigate(`/tasks/${task.id}`) },
@@ -40,9 +41,11 @@ export default function TasksPage() {
     { title: '类型', dataIndex: 'scheduling_policy', width: 130, render: value => value === 'EXCLUSIVE_UPDATE' ? '数据更新' : '计算任务' },
     { title: '状态', dataIndex: 'status', width: 110, render: value => <TaskStatusTag status={value} /> },
     { title: '进度', dataIndex: 'progress', width: 190, render: (value, row) => <TaskProgress progress={value} status={row.status} /> },
-    { title: '子任务', width: 180, render: (_, row) => row.task_type === 'jygs_limit_up_sync' && typeof row.result.skipped_days === 'number'
+    { title: '子任务', width: 260, render: (_, row) => row.task_type === 'jygs_limit_up_sync' && typeof row.result.skipped_days === 'number'
       ? `本次 ${row.completed_items} / 跳过 ${row.result.skipped_days} / 共 ${row.total_items}`
-      : `${row.completed_items}/${row.total_items}` },
+      : row.task_type === 'market_daily_bars_update' && typeof row.result.skipped_stocks === 'number'
+        ? `成功 ${row.result.succeeded_stocks ?? 0} / 跳过 ${row.result.skipped_stocks} / 失败 ${row.result.failed_stocks ?? 0} / 共 ${row.total_items}`
+        : `${row.completed_items}/${row.total_items}` },
     { title: '创建时间', dataIndex: 'created_at', width: 170, render: value => dayjs(value).format('YYYY-MM-DD HH:mm:ss') },
   ]
   return <div className="stack-lg tasks-page">
@@ -59,7 +62,16 @@ export default function TasksPage() {
         <Button type="primary" loading={createTask.isPending} onClick={() => createTask.mutate(api.createStockDirectoryTask)}>创建刷新任务</Button>
       </Card></Col>
       <Col xs={24} xl={8}><Card type="inner" title="更新股票日线" extra={<LineChartOutlined />}>
-        <Typography.Paragraph type="secondary">保存从 2025-01-01 开始的前复权日线；结束日期固定为昨天。</Typography.Paragraph>
+        <Typography.Paragraph type="secondary">保存从 2025-01-01 开始的前复权日线；15:45 后包含今天，否则截至昨天。</Typography.Paragraph>
+        <Typography.Paragraph>
+          当前已有数据：{marketCoverage.isLoading
+            ? '读取中…'
+            : marketCoverage.error
+              ? '读取失败'
+              : marketCoverage.data?.start_date && marketCoverage.data.end_date
+                ? `${marketCoverage.data.start_date} 至 ${marketCoverage.data.end_date}`
+                : '暂无已保存的日线数据'}
+        </Typography.Paragraph>
         <Space wrap>
           <Button type="primary" loading={createTask.isPending} onClick={() => createTask.mutate(() => api.createMarketDailyBarsTask('incremental'))}>自动增量更新</Button>
           <Button loading={createTask.isPending} onClick={() => createTask.mutate(() => api.createMarketDailyBarsTask('full'))}>强制全量更新</Button>

@@ -69,3 +69,8 @@ class JygsLimitUpTaskCreate(BaseModel):
 
 class MarketDailyBarsTaskCreate(BaseModel):
     mode: Literal["incremental", "full"]
+
+
+class MarketDailyBarsCoverage(BaseModel):
+    start_date: date | None
+    end_date: date | None

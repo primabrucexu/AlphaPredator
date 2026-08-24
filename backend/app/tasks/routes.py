@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from threading import Lock
 from zoneinfo import ZoneInfo
 
@@ -19,6 +19,7 @@ from .process import start_worker_process
 from .schemas import (
     ActiveTaskCount,
     JygsLimitUpTaskCreate,
+    MarketDailyBarsCoverage,
     MarketDailyBarsTaskCreate,
     TaskItemPage,
     TaskItemRead,
@@ -26,6 +27,7 @@ from .schemas import (
     TaskRead,
 )
 from .service import (
+    TERMINAL_TASK_STATUSES,
     active_task_count,
     create_task,
     get_active_task_by_type,
@@ -40,6 +42,15 @@ from .service import (
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 _creation_lock = Lock()
+_shanghai_timezone = ZoneInfo("Asia/Shanghai")
+_same_day_cutoff = time(15, 45)
+
+
+def _market_target_end_date(now: datetime | None = None) -> date:
+    local_now = now.astimezone(_shanghai_timezone) if now is not None else datetime.now(_shanghai_timezone)
+    if local_now.time() > _same_day_cutoff:
+        return local_now.date()
+    return local_now.date() - timedelta(days=1)
 
 
 def task_read(task: Task) -> TaskRead:
@@ -182,7 +193,7 @@ def create_market_daily_bars_task(
 ):
     if db.scalar(select(Stock.symbol).limit(1)) is None:
         raise HTTPException(400, "本地股票目录为空，请先刷新股票搜索目录")
-    target_end_date = (datetime.now(ZoneInfo("Asia/Shanghai")).date() - timedelta(days=1)).isoformat()
+    target_end_date = _market_target_end_date().isoformat()
     title = "自动增量更新股票日线" if payload.mode == "incremental" else "强制全量更新股票日线"
     return task_read(_create_update_task(
         db,
@@ -190,6 +201,46 @@ def create_market_daily_bars_task(
         title=f"{title}（截至 {target_end_date}）",
         input={"mode": payload.mode, "target_end_date": target_end_date},
     ))
+
+
+@router.get(
+    "/market-daily-bars-coverage",
+    response_model=MarketDailyBarsCoverage,
+)
+def market_daily_bars_coverage(db: Session = Depends(get_session)):
+    snapshots = db.scalars(
+        select(Task).where(
+            Task.task_type == MARKET_DAILY_BARS_TASK_TYPE,
+            Task.result_json.contains('"data_start_date"'),
+        ).order_by(Task.created_at.desc(), Task.id.desc())
+    ).all()
+    for snapshot in snapshots:
+        result = load_json(snapshot.result_json)
+        start_date = result.get("data_start_date")
+        end_date = result.get("data_end_date")
+        if isinstance(start_date, str) and isinstance(end_date, str):
+            return MarketDailyBarsCoverage(start_date=start_date, end_date=end_date)
+    first_dates: list[date] = []
+    last_dates: list[date] = []
+    historical_items = db.scalars(
+        select(TaskItem).join(Task, Task.id == TaskItem.task_id).where(
+            Task.task_type == MARKET_DAILY_BARS_TASK_TYPE,
+            Task.status.in_(TERMINAL_TASK_STATUSES),
+            TaskItem.status == TaskItemStatus.SUCCEEDED.value,
+        )
+    ).all()
+    for item in historical_items:
+        result = load_json(item.result_json)
+        try:
+            first_date = date.fromisoformat(str(result["after_first_date"]))
+            last_date = date.fromisoformat(str(result["after_last_date"]))
+        except (KeyError, ValueError):
+            continue
+        first_dates.append(first_date)
+        last_dates.append(last_date)
+    if first_dates and last_dates:
+        return MarketDailyBarsCoverage(start_date=min(first_dates), end_date=max(last_dates))
+    return MarketDailyBarsCoverage(start_date=None, end_date=None)
 
 
 @router.post(

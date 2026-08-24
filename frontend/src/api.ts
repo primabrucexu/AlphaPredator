@@ -47,6 +47,7 @@ export const api = {
   createJygsSyncTask: (start_date: string, end_date: string) => request<Task>('/api/tasks/jygs-limit-up-sync', { method: 'POST', body: JSON.stringify({ start_date, end_date }) }),
   createStockDirectoryTask: () => request<Task>('/api/tasks/stock-directory-refresh', { method: 'POST' }),
   createMarketDailyBarsTask: (mode: 'incremental' | 'full') => request<Task>('/api/tasks/market-daily-bars-update', { method: 'POST', body: JSON.stringify({ mode }) }),
+  marketDailyBarsCoverage: () => request<{ start_date: string | null; end_date: string | null }>('/api/tasks/market-daily-bars-coverage'),
   tasks: (page = 1, pageSize = 20, status = '', taskType = '') => {
     const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
     if (status) query.set('status', status)
