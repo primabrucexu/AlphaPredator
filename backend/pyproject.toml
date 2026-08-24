@@ -27,5 +27,6 @@ where = ["."]
 include = ["app*"]
 
 [tool.pytest.ini_options]
+addopts = "--basetemp=tmp"
 pythonpath = ["."]
 testpaths = ["tests"]
