@@ -5,11 +5,13 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastmcp.utilities.lifespan import combine_lifespans
 
 from app.api.router import api_router
 from app.database.migrations import migrate_legacy_tags, migrate_legacy_watchlists, migrate_stock_tag_order, sync_tagged_stocks_to_watchlist
 from app.database.session import Base, SessionLocal, engine
 from app.market_data.provider import close_process_market_provider, get_process_market_provider
+from app.mcp_server import mcp_app
 from app.tasks.migrations import migrate_task_tables
 from app.tasks.handlers.production import register_production_handlers
 from app.tasks.process import start_worker_process
@@ -34,7 +36,11 @@ async def lifespan(app: FastAPI):
     close_process_market_provider()
 
 
-app = FastAPI(title="AlphaPredator", version="0.1.0", lifespan=lifespan)
+app = FastAPI(
+    title="AlphaPredator",
+    version="0.1.0",
+    lifespan=combine_lifespans(lifespan, mcp_app.lifespan),
+)
 app.state.market_provider = get_process_market_provider()
 app.add_middleware(
     CORSMiddleware,
@@ -44,6 +50,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(api_router)
+app.mount("/api/mcp", mcp_app)
 
 
 def main() -> None:

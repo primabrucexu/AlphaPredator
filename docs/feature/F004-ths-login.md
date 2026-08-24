@@ -61,6 +61,10 @@
 - 根目录 `README.md` 说明手工配置步骤、文件路径、固定 JSON 格式、重启要求和敏感信息注意事项。
 - AlphaPredator 不提供账号密码配置页面或文件写入 API，正式账号不再通过环境变量配置。
 
+## MCP
+
+> 接入状态：待确认。F005.1 完成后更新。
+
 ## Acceptance Criteria
 - [x] AC1: 用户按照 README 手工创建只包含 `username`、`password` 两个非空字符串字段的 `data/ths_credentials.json` 后，正式账号能够用于 thsdk 登录。
 - [x] AC2: 项目不存在配置同花顺账号密码的网页表单和文件写入 API。

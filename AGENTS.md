@@ -46,6 +46,10 @@
 - Feature 文档模板使用 `docs/feature/template.md`。
 - `docs/` 下每个文档分类目录都需要维护 `index.json`，用于提供该分类下文档的快速索引。
 - 新增、删除、重命名文档，或调整文档摘要和状态时，需要同步更新对应目录的 `index.json`。
+- 每个 Feature 文档必须包含独立的 `MCP` 小节；F005.1 完成具体 Tool 确认前统一标记为“待确认”，确认后再更新接入状态，同时同步 `docs/feature/index.json` 的 `mcp_status`。
+- `docs/integrations/mcp.md` 只做 MCP 基础接入、Tool 和真实客户端验证状态的简单汇总，不重复维护完整业务能力分类。
+- 新增、修改或删除 MCP Tool 时，必须同步更新来源 Feature 的 `MCP` 小节和 `docs/integrations/mcp.md`；涉及 Feature 聚合状态或集成索引摘要、状态变化时，同时更新对应 `index.json`。
+- MCP 状态必须区分“计划中”“已实现”和“客户端已验证”；自动化测试通过不能代替 Hermes 等目标客户端的真实调用验证。
 
 ## 7. 验证
 

@@ -3,4 +3,4 @@
 | 文件夹 | 文档类型 |
 |---|---|
 | `feature/` | 功能需求、范围、设计决策和验收标准 |
-| `integrations/` | 第三方服务、SDK、API 能力及接入说明 |
+| `integrations/` | 第三方服务、SDK、API 及 MCP 等外部调用入口的能力与接入说明 |

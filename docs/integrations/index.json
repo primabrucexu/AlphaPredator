@@ -16,6 +16,14 @@
         "jygs.md",
         "jygs-api.yaml"
       ]
+    },
+    {
+      "id": "mcp",
+      "summary": "MCP 基础接入、Tool 和目标客户端验证状态汇总",
+      "status": "设计",
+      "documents": [
+        "mcp.md"
+      ]
     }
   ]
 }

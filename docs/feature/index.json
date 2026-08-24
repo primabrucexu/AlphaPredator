@@ -4,42 +4,57 @@
       "id": "F001",
       "summary": "个人 A 股行情与技术指标展示、自选标签管理及韭研涨停历史",
       "status": "完成",
+      "mcp_status": "待确认",
       "document": "F001-market-watchlist.md"
     },
     {
       "id": "F002",
       "summary": "通用任务处理、总任务进度与子任务进度管理",
       "status": "完成",
+      "mcp_status": "待确认",
       "document": "F002-task-processing.md"
     },
     {
       "id": "F002.1",
       "summary": "迁移韭研增量同步和股票搜索目录刷新任务",
       "status": "完成",
+      "mcp_status": "待确认",
       "document": "F002.1-data-update-tasks.md"
     },
     {
       "id": "F003",
       "summary": "持久化全市场前复权日线并提供增量与强制全量更新任务",
       "status": "完成",
+      "mcp_status": "待确认",
       "document": "F003-market-data-storage.md"
     },
     {
       "id": "F004",
       "summary": "同花顺登录",
       "status": "完成",
+      "mcp_status": "待确认",
       "document": "F004-ths-login.md"
     },
     {
       "id": "F005",
-      "summary": "MCP 接入",
+      "summary": "无业务能力的 MCP Server 基础接入和本机 Hermes 注册验证",
+      "status": "完成",
+      "mcp_status": "不适用",
+      "document": "F005-mcp-integration.md",
+      "implementation_plan": "F005-implementation-plan.md"
+    },
+    {
+      "id": "F005.1",
+      "summary": "将来源 Feature 已确认的业务能力接入为 MCP Tool",
       "status": "设计",
-      "document": "F005-mcp-integration.md"
+      "mcp_status": "待确认",
+      "document": "F005.1-mcp-tools.md"
     },
     {
       "id": "F006",
       "summary": "趋势反转筛选",
       "status": "设计",
+      "mcp_status": "待确认",
       "document": "F006-trend-reversal-screening.md"
     }
   ]

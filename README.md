@@ -14,6 +14,14 @@ python -m pip install -e ".[dev]"
 python -m uvicorn app.main:app --reload --workers 1
 ```
 
+### MCP Server 接入
+
+| 注册项 | 值 |
+|---|---|
+| 名称 | `AlphaPredator` |
+| 传输类型 | Streamable HTTP |
+| Server URL | `http://127.0.0.1:8000/api/mcp/` |
+
 ### 同花顺账号文件（F004）
 
 AlphaPredator 的正式同花顺登录只允许通过手工编写项目根目录下的 `data/ths_credentials.json` 配置。项目不提供账号密码配置页面或文件写入 API；Web 进程和独立后台 Worker 统一读取这个文件。文件格式为：
