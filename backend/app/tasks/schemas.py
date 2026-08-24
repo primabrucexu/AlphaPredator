@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -65,3 +65,7 @@ class ActiveTaskCount(BaseModel):
 class JygsLimitUpTaskCreate(BaseModel):
     start_date: date
     end_date: date
+
+
+class MarketDailyBarsTaskCreate(BaseModel):
+    mode: Literal["incremental", "full"]

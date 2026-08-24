@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import api_router
 from app.database.migrations import migrate_legacy_tags, migrate_legacy_watchlists, migrate_stock_tag_order, sync_tagged_stocks_to_watchlist
 from app.database.session import Base, SessionLocal, engine
-from app.market_data.provider import ThsdkMarketDataProvider
+from app.market_data.provider import close_process_market_provider, get_process_market_provider
 from app.tasks.migrations import migrate_task_tables
 from app.tasks.handlers.production import register_production_handlers
 from app.tasks.process import start_worker_process
@@ -31,11 +31,11 @@ async def lifespan(app: FastAPI):
         if next_pending_task(session) is not None:
             start_worker_process()
     yield
-    app.state.market_provider.close()
+    close_process_market_provider()
 
 
 app = FastAPI(title="AlphaPredator", version="0.1.0", lifespan=lifespan)
-app.state.market_provider = ThsdkMarketDataProvider()
+app.state.market_provider = get_process_market_provider()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],

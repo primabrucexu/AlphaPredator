@@ -21,13 +21,13 @@
     {
       "id": "F003",
       "summary": "持久化全市场前复权日线并提供增量与强制全量更新任务",
-      "status": "设计",
+      "status": "完成",
       "document": "F003-market-data-storage.md"
     },
     {
       "id": "F004",
       "summary": "同花顺登录",
-      "status": "设计",
+      "status": "完成",
       "document": "F004-ths-login.md"
     },
     {

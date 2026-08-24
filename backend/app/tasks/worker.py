@@ -7,6 +7,7 @@ from threading import Event
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.database.session import SessionLocal
+from app.market_data.provider import close_process_market_provider
 
 from .handlers.production import register_production_handlers
 from .runner import (
@@ -47,6 +48,7 @@ def run_worker(
                 return True
             time.sleep(poll_interval_seconds)
     finally:
+        close_process_market_provider()
         stop.set()
         heartbeat.join(timeout=2)
         release_worker_lease(session_factory, owner_id)

@@ -3,13 +3,16 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
 
 from app.api.router import api_router
-from app.database.models import JygsCredential
+from app.database.models import JygsCredential, Stock
 from app.database.session import get_session
 from app.tasks.handlers.production import register_production_handlers
 from app.tasks.handlers import get_handler
-from app.tasks.models import TaskItem
+from app.tasks.handlers import register_handler
+from app.tasks.handlers.market_daily_bars import MarketDailyBarsUpdateHandler
+from app.tasks.models import Task, TaskItem, TaskItemStatus, TaskStatus
 from app.tasks.service import load_json
 
 
@@ -56,10 +59,60 @@ def test_data_task_creation_and_duplicate_conflict(db, monkeypatch):
     assert stocks.json()["task_type"] == "stock_directory_refresh"
 
 
-def test_production_registration_exposes_both_handlers():
+def test_production_registration_exposes_all_handlers():
     register_production_handlers()
     assert get_handler("jygs_limit_up_sync") is not None
     assert get_handler("stock_directory_refresh") is not None
+    assert get_handler("market_daily_bars_update") is not None
+
+
+def test_market_daily_bars_creation_and_failed_stock_retry(db, monkeypatch):
+    factory = sessionmaker(db.get_bind(), expire_on_commit=False)
+    def forbidden_store():
+        raise AssertionError("Web 不得打开 DuckDB")
+    register_handler(
+        "market_daily_bars_update",
+        MarketDailyBarsUpdateHandler(
+            factory,
+            store_factory=forbidden_store,
+        ),
+    )
+    monkeypatch.setattr("app.tasks.routes.start_worker_process", lambda: None)
+    db.add(Stock(symbol="000001.SZ", code="000001", name="平安银行"))
+    db.commit()
+    client = make_client(db)
+
+    created = client.post("/api/tasks/market-daily-bars-update", json={"mode": "incremental"})
+    assert created.status_code == 202
+    payload = created.json()
+    assert payload["task_type"] == "market_daily_bars_update"
+    assert payload["input"]["mode"] == "incremental"
+    task_id = payload["id"]
+    item = db.scalar(select(TaskItem).where(TaskItem.task_id == task_id))
+    assert load_json(item.input_json)["symbol"] == "000001.SZ"
+
+    task = db.get(Task, task_id)
+    task.status = TaskStatus.PARTIALLY_SUCCEEDED.value
+    item.status = TaskItemStatus.FAILED.value
+    item.error = "remote failed"
+    db.commit()
+    retried = client.post(f"/api/tasks/{task_id}/retry-failed")
+    assert retried.status_code == 202
+    retry_payload = retried.json()
+    assert retry_payload["input"]["symbols"] == ["000001.SZ"]
+    assert retry_payload["input"]["target_end_date"] == payload["input"]["target_end_date"]
+    assert retry_payload["input"]["retry_of_task_id"] == task_id
+    duplicate_retry = client.post(f"/api/tasks/{task_id}/retry-failed")
+    assert duplicate_retry.status_code == 409
+    assert duplicate_retry.json()["detail"]["existing_task_id"] == retry_payload["id"]
+
+
+def test_market_daily_bars_creation_requires_stock_directory(db, monkeypatch):
+    monkeypatch.setattr("app.tasks.routes.start_worker_process", lambda: None)
+    client = make_client(db)
+    response = client.post("/api/tasks/market-daily-bars-update", json={"mode": "full"})
+    assert response.status_code == 400
+    assert "股票目录为空" in response.json()["detail"]
 
 
 def test_old_data_update_routes_are_removed(db):

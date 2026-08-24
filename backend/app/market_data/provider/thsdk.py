@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import logging
 import threading
+import time as time_module
 from datetime import date, datetime, time
+from pathlib import Path
 from typing import Any
 
 from app.market_data.schemas import DailyBar, Quote, StockSummary
 
 from .base import MarketDataError, is_at_price_limit, limit_percent, normalize_symbol
+from .credentials import load_ths_credentials
 
 
 def symbol_to_thscode(symbol: str) -> str:
@@ -37,23 +41,57 @@ def _number(row: dict[str, Any], *keys: str) -> float | None:
 
 
 class ThsdkMarketDataProvider:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        credentials_path: Path | None = None,
+        minimum_interval_seconds: float = 0.05,
+    ) -> None:
         self._client: Any | None = None
         self._lock = threading.RLock()
+        self._credentials_path = credentials_path
+        self._minimum_interval_seconds = minimum_interval_seconds
+        self._last_call_at: float | None = None
+        self._secrets: tuple[str, ...] = ()
+
+    def _redact(self, value: object) -> str:
+        message = str(value)
+        for secret in self._secrets:
+            message = message.replace(secret, "<redacted>")
+        return message
+
+    def _wait_for_slot(self) -> None:
+        if self._last_call_at is not None:
+            wait = self._minimum_interval_seconds - (time_module.monotonic() - self._last_call_at)
+            if wait > 0:
+                time_module.sleep(wait)
+        self._last_call_at = time_module.monotonic()
 
     def connect(self) -> None:
         with self._lock:
             if self._client is not None:
                 return
             try:
+                logging.getLogger("thsdk.base").disabled = True
                 from thsdk import THS
-                client = THS()
+                credentials = (
+                    load_ths_credentials(self._credentials_path)
+                    if self._credentials_path is not None
+                    else load_ths_credentials()
+                )
+                self._secrets = (
+                    (credentials["username"], credentials["password"])
+                    if credentials is not None
+                    else ()
+                )
+                client = THS(credentials) if credentials is not None else THS()
+                self._wait_for_slot()
                 response = client.connect()
             except Exception as exc:
-                raise MarketDataError(f"thsdk 连接失败：{exc}") from exc
+                raise MarketDataError(f"thsdk 连接失败：{self._redact(exc)}") from exc
             if not response.success:
                 client.disconnect()
-                raise MarketDataError(f"thsdk 连接失败：{response.error}")
+                raise MarketDataError(f"thsdk 连接失败：{self._redact(response.error)}")
             self._client = client
 
     def close(self) -> None:
@@ -66,12 +104,15 @@ class ThsdkMarketDataProvider:
         with self._lock:
             self.connect()
             try:
+                self._wait_for_slot()
                 response = getattr(self._client, method)(*args, **kwargs)
             except Exception as exc:
                 self.close()
-                raise MarketDataError(f"thsdk 调用 {method} 失败：{exc}") from exc
+                raise MarketDataError(f"thsdk 调用 {method} 失败：{self._redact(exc)}") from exc
             if not response.success:
-                raise MarketDataError(response.error or f"thsdk 调用 {method} 失败")
+                raise MarketDataError(
+                    self._redact(response.error) if response.error else f"thsdk 调用 {method} 失败"
+                )
             return response.data or []
 
     @staticmethod
@@ -162,3 +203,7 @@ class ThsdkMarketDataProvider:
             ))
             previous = close
         return bars if start_date is not None else bars[-count:]
+
+    def corporate_action(self, symbol: str) -> list[dict[str, Any]]:
+        rows = self._call("corporate_action", symbol_to_thscode(symbol))
+        return [row for row in rows if isinstance(row, dict)]

@@ -46,6 +46,7 @@ export const api = {
   loginJygs: () => request<{ is_valid: boolean }>('/api/jygs/login', { method: 'POST', body: JSON.stringify({ timeout_seconds: 300 }) }),
   createJygsSyncTask: (start_date: string, end_date: string) => request<Task>('/api/tasks/jygs-limit-up-sync', { method: 'POST', body: JSON.stringify({ start_date, end_date }) }),
   createStockDirectoryTask: () => request<Task>('/api/tasks/stock-directory-refresh', { method: 'POST' }),
+  createMarketDailyBarsTask: (mode: 'incremental' | 'full') => request<Task>('/api/tasks/market-daily-bars-update', { method: 'POST', body: JSON.stringify({ mode }) }),
   tasks: (page = 1, pageSize = 20, status = '', taskType = '') => {
     const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
     if (status) query.set('status', status)
@@ -55,5 +56,6 @@ export const api = {
   task: (id: number) => request<Task>(`/api/tasks/${id}`),
   taskItems: (id: number, page = 1, pageSize = 50) => request<Page<TaskItem>>(`/api/tasks/${id}/items?page=${page}&page_size=${pageSize}`),
   cancelTask: (id: number) => request<Task>(`/api/tasks/${id}/cancel`, { method: 'POST' }),
+  retryFailedMarketDailyBarsTask: (id: number) => request<Task>(`/api/tasks/${id}/retry-failed`, { method: 'POST' }),
   activeTaskCount: () => request<{ count: number }>('/api/tasks/active-count'),
 }

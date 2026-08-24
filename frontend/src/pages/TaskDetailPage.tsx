@@ -1,11 +1,11 @@
-import { ArrowLeftOutlined, StopOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Card, Descriptions, Modal, Space, Table, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { api } from '../api'
+import { ApiError, api } from '../api'
 import { activeTaskStatuses, TaskProgress, TaskStatusTag } from '../components/TaskStatusTag'
 import type { Task, TaskItem } from '../types'
 
@@ -14,6 +14,9 @@ function displayTime(value: string | null) { return value ? dayjs(value).format(
 const resultLabels: Record<string, string> = {
   selected_days: '选择天数', executed_days: '实际执行', skipped_days: '历史跳过', succeeded_days: '本次成功',
   failed_days: '失败天数', records: '写入记录', source_count: '行情源数量', processed_count: '本地处理数量',
+  mode: '更新模式', target_end_date: '目标结束日期', stock_count: '股票总数', succeeded_stocks: '成功股票',
+  failed_stocks: '失败股票', incremental_stocks: '增量更新股票', full_stocks: '全量更新股票',
+  written_rows: '写入日线', actual_end_date: '实际行情截止日期',
 }
 
 function resultItems(task: Task) {
@@ -28,6 +31,19 @@ export default function TaskDetailPage() {
   const task = useQuery({ queryKey: ['task', taskId], queryFn: () => api.task(taskId), enabled: Number.isInteger(taskId), refetchInterval: query => activeTaskStatuses.has(query.state.data?.status ?? '') ? 2000 : false })
   const items = useQuery({ queryKey: ['task-items', taskId, page], queryFn: () => api.taskItems(taskId, page, 50), enabled: Number.isInteger(taskId), refetchInterval: () => activeTaskStatuses.has(task.data?.status ?? '') ? 2000 : false })
   const cancel = useMutation({ mutationFn: () => api.cancelTask(taskId), onSuccess: () => { message.success('已提交取消请求'); client.invalidateQueries({ queryKey: ['task', taskId] }); client.invalidateQueries({ queryKey: ['tasks'] }) }, onError: error => message.error(error.message) })
+  const retry = useMutation({
+    mutationFn: () => api.retryFailedMarketDailyBarsTask(taskId),
+    onSuccess: created => { message.success('已创建失败股票重试任务'); client.invalidateQueries({ queryKey: ['tasks'] }); navigate(`/tasks/${created.id}`) },
+    onError: error => {
+      const detail = error instanceof ApiError && typeof error.data?.detail === 'object' ? error.data.detail : null
+      if (error instanceof ApiError && error.status === 409 && detail?.existing_task_id) {
+        message.warning('同类型任务已在等待或执行，已打开现有任务')
+        navigate(`/tasks/${detail.existing_task_id}`)
+        return
+      }
+      message.error(error.message)
+    },
+  })
   const confirmCancel = () => modal.confirm({ title: '取消任务？', content: '正在执行的处理会在下一个安全检查点停止。', okText: '确认取消', cancelText: '返回', okButtonProps: { danger: true }, onOk: () => cancel.mutateAsync() })
   const columns: ColumnsType<TaskItem> = [
     { title: '#', dataIndex: 'sequence', width: 60, render: value => value + 1 },
@@ -42,7 +58,11 @@ export default function TaskDetailPage() {
   const summaryItems = task.data ? resultItems(task.data) : []
   return <div className="stack-lg task-detail-page">{modalContext}
     <div><Button type="link" icon={<ArrowLeftOutlined />} onClick={() => navigate('/tasks')}>返回任务列表</Button></div>
-    <Card loading={task.isLoading} title={task.data?.title ?? '任务详情'} extra={task.data && ['PENDING', 'RUNNING'].includes(task.data.status) ? <Button danger icon={<StopOutlined />} loading={cancel.isPending} onClick={confirmCancel}>取消任务</Button> : null}>
+    <Card loading={task.isLoading} title={task.data?.title ?? '任务详情'} extra={task.data && ['PENDING', 'RUNNING'].includes(task.data.status)
+      ? <Button danger icon={<StopOutlined />} loading={cancel.isPending} onClick={confirmCancel}>取消任务</Button>
+      : task.data?.task_type === 'market_daily_bars_update' && task.data.status === 'PARTIALLY_SUCCEEDED'
+        ? <Button type="primary" icon={<ReloadOutlined />} loading={retry.isPending} onClick={() => retry.mutate()}>重试失败股票</Button>
+        : null}>
       {task.data && <Space direction="vertical" size="large" className="task-summary">
         <Descriptions column={{ xs: 1, sm: 2, lg: 3 }} items={[
           { key: 'status', label: '状态', children: <TaskStatusTag status={task.data.status} /> },

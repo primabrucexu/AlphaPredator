@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.market_data.schemas import DailyBar, Quote, StockSummary
 
@@ -23,6 +23,7 @@ class MarketDataProvider(Protocol):
         start_date: date | None = None,
         end_date: date | None = None,
     ) -> list[DailyBar]: ...
+    def corporate_action(self, symbol: str) -> list[dict[str, Any]]: ...
 
 
 def normalize_symbol(value: str) -> str:

@@ -6,7 +6,7 @@ from collections.abc import Callable
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.database.session import SessionLocal
-from app.market_data.provider import ThsdkMarketDataProvider
+from app.market_data.provider import get_process_market_provider
 from app.market_data.provider.base import MarketDataProvider
 from app.market_data.service import StockService
 from app.tasks.context import TaskContext
@@ -27,7 +27,7 @@ class StockDirectoryRefreshHandler:
     def __init__(
         self,
         session_factory: sessionmaker[Session] = SessionLocal,
-        provider_factory: Callable[[], MarketDataProvider] = ThsdkMarketDataProvider,
+        provider_factory: Callable[[], MarketDataProvider] = get_process_market_provider,
     ):
         self.session_factory = session_factory
         self.provider_factory = provider_factory

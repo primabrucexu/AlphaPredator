@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from types import SimpleNamespace
+import sys
 
 import pytest
 
@@ -14,6 +16,8 @@ from app.market_data.provider.thsdk import (
     symbol_to_thscode,
     thscode_to_symbol,
 )
+from app.market_data.provider.credentials import load_ths_credentials
+from app.market_data.provider.base import MarketDataError
 
 
 @pytest.mark.parametrize(("raw", "symbol", "thscode"), [
@@ -101,3 +105,65 @@ def test_thsdk_quote_merges_extended_market_fields():
     assert quote.pe_ttm == 7.4862
     assert quote.total_market_cap == 2779968800000
     assert quote.float_market_cap == 2102975300000
+
+
+def test_credentials_require_username_and_password(tmp_path):
+    path = tmp_path / "credentials.json"
+    assert load_ths_credentials(path) is None
+    path.write_text('{"username": "user", "password": "pass"}', encoding="utf-8")
+    assert load_ths_credentials(path) == {"username": "user", "password": "pass"}
+    path.write_text('{"username": "user"}', encoding="utf-8")
+    with pytest.raises(MarketDataError, match="password"):
+        load_ths_credentials(path)
+
+
+def test_thsdk_uses_credentials_without_mac_and_spaces_bottom_calls(tmp_path, monkeypatch):
+    path = tmp_path / "credentials.json"
+    path.write_text('{"username": "user", "password": "pass"}', encoding="utf-8")
+    created = []
+
+    class Client:
+        def __init__(self, config):
+            created.append(config)
+
+        def connect(self):
+            return SimpleNamespace(success=True, error="")
+
+        def stock_cn_lists(self):
+            return SimpleNamespace(success=True, error="", data=[])
+
+        def disconnect(self):
+            return None
+
+    monkeypatch.setitem(sys.modules, "thsdk", SimpleNamespace(THS=Client))
+    times = iter([0.0, 0.01, 0.05])
+    sleeps = []
+    monkeypatch.setattr("app.market_data.provider.thsdk.time_module.monotonic", lambda: next(times))
+    monkeypatch.setattr("app.market_data.provider.thsdk.time_module.sleep", sleeps.append)
+    provider = ThsdkMarketDataProvider(credentials_path=path)
+
+    provider.list_stocks()
+
+    assert created == [{"username": "user", "password": "pass"}]
+    assert "mac" not in created[0]
+    assert sleeps[0] == pytest.approx(0.04)
+    assert __import__("logging").getLogger("thsdk.base").disabled is True
+
+
+def test_thsdk_errors_redact_credentials(tmp_path, monkeypatch):
+    path = tmp_path / "credentials.json"
+    path.write_text('{"username": "private-user", "password": "private-pass"}', encoding="utf-8")
+
+    class Client:
+        def __init__(self, _config):
+            pass
+
+        def connect(self):
+            raise RuntimeError("private-user private-pass")
+
+    monkeypatch.setitem(sys.modules, "thsdk", SimpleNamespace(THS=Client))
+    provider = ThsdkMarketDataProvider(credentials_path=path, minimum_interval_seconds=0)
+    with pytest.raises(MarketDataError) as error:
+        provider.connect()
+    assert "private-user" not in str(error.value)
+    assert "private-pass" not in str(error.value)
