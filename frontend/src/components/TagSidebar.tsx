@@ -1,4 +1,4 @@
-import { BarChartOutlined, CheckOutlined, CloseOutlined, DeleteOutlined, DragOutlined, EditOutlined, PlusOutlined, ScheduleOutlined, SearchOutlined, SettingOutlined, StarOutlined } from '@ant-design/icons'
+import { BarChartOutlined, CheckOutlined, CloseOutlined, DeleteOutlined, DragOutlined, EditOutlined, PlusOutlined, ScheduleOutlined, SearchOutlined, StarOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Badge, Button, Input, Layout, Menu, Modal, Typography, message } from 'antd'
 import { Fragment, useEffect, useMemo, useState } from 'react'
@@ -35,14 +35,13 @@ export default function TagSidebar() {
     action.mutate(() => api.createTag(newTagName.trim()).then(() => { setNewTagName(''); message.success('标签已创建') }))
   }
   const remove = (tag: GlobalTag) => Modal.confirm({ title: `删除标签“${tag.name}”？`, content: '将从所有关联股票移除此标签，但不会删除自选股。', okText: '删除', okButtonProps: { danger: true }, onOk: () => action.mutateAsync(() => api.deleteGlobalTag(tag.id)).then(() => { if (activeTag === String(tag.id)) navigate('/') }) })
-  const navKey = location.pathname.startsWith('/settings') ? '/settings' : location.pathname.startsWith('/tasks') ? '/tasks' : '/'
+  const navKey = location.pathname.startsWith('/tasks') ? '/tasks' : '/'
   return <Fragment>
     <Layout.Sider width={200} theme="light" className="sidebar primary-sidebar">
       <Link to="/" className="sidebar-brand"><BarChartOutlined /><span>AlphaPredator</span></Link>
       <Menu mode="inline" selectedKeys={[navKey]} items={[
         { key: '/', icon: <StarOutlined />, label: <Link to="/">我的自选</Link> },
         { key: '/tasks', icon: <ScheduleOutlined />, label: <Link to="/tasks">任务 <Badge count={activeTasks.data?.count ?? 0} size="small" /></Link> },
-        { key: '/settings', icon: <SettingOutlined />, label: <Link to="/settings">数据设置</Link> },
       ]} />
     </Layout.Sider>
     {location.pathname === '/' && <Layout.Sider width={240} theme="light" className="sidebar tag-sidebar">

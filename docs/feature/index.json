@@ -2,8 +2,8 @@
   "feature": [
     {
       "id": "F001",
-      "summary": "个人 A 股行情与技术指标展示、自选标签管理及韭研涨停历史",
-      "status": "完成",
+      "summary": "个人 A 股行情与技术指标展示、自选标签管理；韭研涨停历史暂时停用",
+      "status": "部分停用",
       "mcp_status": "待确认",
       "document": "F001-market-watchlist.md"
     },
@@ -16,8 +16,8 @@
     },
     {
       "id": "F002.1",
-      "summary": "迁移韭研增量同步和股票搜索目录刷新任务",
-      "status": "完成",
+      "summary": "股票搜索目录刷新任务可用；韭研增量同步暂时停用",
+      "status": "部分停用",
       "mcp_status": "待确认",
       "document": "F002.1-data-update-tasks.md"
     },

@@ -11,11 +11,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from app.api.router import api_router
-from app.database.models import JygsCredential, Stock
+from app.database.models import Stock
 from app.database.session import get_session
 from app.tasks.handlers.production import register_production_handlers
 from app.tasks.handlers import get_handler
-from app.tasks.handlers import register_handler
+from app.tasks.handlers import register_handler, unregister_handler
 from app.tasks.handlers.market_daily_bars import MarketDailyBarsUpdateHandler
 from app.tasks.models import Task, TaskItem, TaskItemStatus, TaskStatus
 from app.tasks.routes import _market_target_end_date
@@ -33,43 +33,48 @@ def make_client(db):
     return TestClient(app)
 
 
-def test_data_task_creation_and_duplicate_conflict(db, monkeypatch):
+def test_stock_directory_task_creation_and_duplicate_conflict(db, monkeypatch):
     register_production_handlers()
     monkeypatch.setattr("app.tasks.routes.start_worker_process", lambda: None)
-    db.add(JygsCredential(id=1, session="secret"))
-    db.commit()
     client = make_client(db)
 
-    created = client.post("/api/tasks/jygs-limit-up-sync", json={
-        "start_date": "2026-08-22", "end_date": "2026-08-23"
-    })
+    created = client.post("/api/tasks/stock-directory-refresh")
     assert created.status_code == 202
-    assert created.json()["task_type"] == "jygs_limit_up_sync"
+    assert created.json()["task_type"] == "stock_directory_refresh"
     task_id = created.json()["id"]
     items = list(db.scalars(select(TaskItem).where(TaskItem.task_id == task_id)))
-    assert [load_json(item.input_json)["trade_date"] for item in items] == [
-        "2026-08-22", "2026-08-23"
-    ]
-    assert "secret" not in created.text
+    assert len(items) == 1
 
-    db.delete(db.get(JygsCredential, 1))
-    db.commit()
-    duplicate = client.post("/api/tasks/jygs-limit-up-sync", json={
-        "start_date": "2026-08-24", "end_date": "2026-08-24"
-    })
+    duplicate = client.post("/api/tasks/stock-directory-refresh")
     assert duplicate.status_code == 409
     assert duplicate.json()["detail"]["existing_task_id"] == task_id
-
-    stocks = client.post("/api/tasks/stock-directory-refresh")
-    assert stocks.status_code == 202
-    assert stocks.json()["task_type"] == "stock_directory_refresh"
+    assert client.post("/api/tasks/jygs-limit-up-sync", json={
+        "start_date": "2026-08-22", "end_date": "2026-08-23"
+    }).status_code == 404
 
 
 def test_production_registration_exposes_all_handlers():
+    unregister_handler("jygs_limit_up_sync")
     register_production_handlers()
-    assert get_handler("jygs_limit_up_sync") is not None
+    assert get_handler("jygs_limit_up_sync") is None
     assert get_handler("stock_directory_refresh") is not None
     assert get_handler("market_daily_bars_update") is not None
+
+
+def test_disabled_jygs_task_history_remains_readable(db):
+    historical = Task(
+        task_type="jygs_limit_up_sync",
+        scheduling_policy="EXCLUSIVE_UPDATE",
+        title="历史韭研同步任务",
+        status=TaskStatus.PARTIALLY_SUCCEEDED.value,
+    )
+    db.add(historical)
+    db.commit()
+
+    client = make_client(db)
+    listed = client.get("/api/tasks").json()
+    assert listed["items"][0]["task_type"] == "jygs_limit_up_sync"
+    assert client.get(f"/api/tasks/{historical.id}").json()["title"] == "历史韭研同步任务"
 
 
 def test_market_daily_bars_creation_and_failed_stock_retry(db, monkeypatch):

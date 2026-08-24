@@ -4,6 +4,8 @@
 
 AlphaPredator 使用韭研公社网页端接口获取涨停复盘数据。该接口不是面向本项目发布的稳定开放 API，路径、鉴权算法和响应字段都可能变化。接口失效时必须返回明确错误，不能用伪造数据代替。
 
+> 当前状态：暂时停用。页面不展示韭研数据，项目不挂载韭研专用路由、不提供新同步任务，Web 和 Worker 也不注册韭研生产 Handler。已有 SESSION、涨停记录、历史任务和实现代码保留，本文其余内容作为恢复时的历史技术参考。
+
 - 历史 OpenAPI：`docs/integrations/jygs-api.yaml`
 - 当前客户端：`backend/app/jygs/client.py`
 - 登录与 SESSION 捕获：`backend/app/jygs/playwright_login.py`
@@ -64,8 +66,8 @@ token     = 661abae951887c634a4f51b0f333bec1
 
 | 上游接口 | 用途 | 当前项目状态 |
 |---|---|---|
-| `POST /api/v1/action/diagram-url` | 获取每日涨停简图；当前也作为 SESSION 探针 | 已使用 |
-| `POST /api/v1/action/field` | 获取某日按题材分类的全量涨停股票解析 | 已使用 |
+| `POST /api/v1/action/diagram-url` | 获取每日涨停简图；历史上也作为 SESSION 探针 | 已停用 |
+| `POST /api/v1/action/field` | 获取某日按题材分类的全量涨停股票解析 | 已停用 |
 | `POST /api/v1/action/list` | 历史上用于某字段下的分页列表 | 已停用；不应作为当前可靠能力 |
 
 `action/field` 的主要结构为题材数组，每个题材包含 `name`、`date`、`count` 和股票 `list`。股票数据中当前关注：
@@ -79,15 +81,15 @@ token     = 661abae951887c634a4f51b0f333bec1
 
 ## 4. AlphaPredator 对外接口
 
-以下是本项目自己的 FastAPI 路由，不是韭研上游路径：
+以下是本项目历史上的 FastAPI 路由，不是韭研上游路径；当前均未挂载：
 
-| 项目接口 | 作用 |
-|---|---|
-| `POST /api/jygs/login` | 弹出浏览器登录、捕获 SESSION 并立即校验 |
-| `PUT /api/jygs/session` | 手动保存 SESSION |
-| `POST /api/jygs/check` | 使用探针检查 SESSION |
-| `GET /api/jygs/status` | 查询本地配置及最近校验状态 |
-| `GET /api/stocks/{symbol}/limit-up-history` | 查询本地已同步的个股涨停历史 |
+| 项目接口 | 作用 | 当前状态 |
+|---|---|---|
+| `POST /api/jygs/login` | 弹出浏览器登录、捕获 SESSION 并立即校验 | 404，已停用 |
+| `PUT /api/jygs/session` | 手动保存 SESSION | 404，已停用 |
+| `POST /api/jygs/check` | 使用探针检查 SESSION | 404，已停用 |
+| `GET /api/jygs/status` | 查询本地配置及最近校验状态 | 404，已停用 |
+| `GET /api/stocks/{symbol}/limit-up-history` | 查询本地已同步的个股涨停历史 | 404，已停用 |
 
 数据同步已接入后台任务框架，具体任务范围和状态以对应 Feature 文档及当前代码为准。
 

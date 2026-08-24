@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.router import api_router
-from app.database.models import JygsCredential, Stock
+from app.database.models import Stock
 from app.database.session import get_session
 from app.market_data.schemas import Quote, StockSummary
 from app.main import main
@@ -46,17 +46,11 @@ def test_daily_bars_rejects_incomplete_date_range(db):
     assert "必须同时提供" in response.json()["detail"]
 
 
-def test_jygs_browser_login_captures_and_validates_session(db, monkeypatch):
-    monkeypatch.setattr("app.jygs.routes.login_and_capture_session", lambda _timeout: {"session": "captured-session"})
-    monkeypatch.setattr("app.jygs.client._post", lambda *_args, **_kwargs: {"errCode": "0"})
-
-    response = make_client(db).post("/api/jygs/login", json={"timeout_seconds": 300})
-
-    assert response.status_code == 200
-    assert response.json() == {"is_valid": True}
-    credential = db.get(JygsCredential, 1)
-    assert credential.session == "captured-session"
-    assert credential.is_valid is True
+def test_jygs_api_is_disabled(db):
+    client = make_client(db)
+    assert client.get("/api/jygs/status").status_code == 404
+    assert client.post("/api/jygs/login", json={"timeout_seconds": 300}).status_code == 404
+    assert client.get("/api/stocks/600519.SH/limit-up-history").status_code == 404
 
 
 def test_watchlist_api_round_trip(db):

@@ -8,17 +8,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.database.models import JygsCredential, Stock
+from app.database.models import Stock
 from app.database.session import get_session
 
-from .handlers.jygs import TASK_TYPE as JYGS_TASK_TYPE
 from .handlers.market_daily_bars import TASK_TYPE as MARKET_DAILY_BARS_TASK_TYPE
 from .handlers.stock_directory import TASK_TYPE as STOCK_DIRECTORY_TASK_TYPE
 from .models import SchedulingPolicy, Task, TaskItem, TaskItemStatus, TaskStatus
 from .process import start_worker_process
 from .schemas import (
     ActiveTaskCount,
-    JygsLimitUpTaskCreate,
     MarketDailyBarsCoverage,
     MarketDailyBarsTaskCreate,
     TaskItemPage,
@@ -143,30 +141,9 @@ def _create_update_task(
             raise HTTPException(400, str(exc)) from exc
 
 
-@router.post(
-    "/jygs-limit-up-sync",
-    response_model=TaskRead,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def create_jygs_limit_up_task(
-    payload: JygsLimitUpTaskCreate,
-    db: Session = Depends(get_session),
-):
-    if payload.end_date < payload.start_date:
-        raise HTTPException(400, "结束日期不能早于开始日期")
-    _raise_if_active_task_exists(db, JYGS_TASK_TYPE)
-    if db.get(JygsCredential, 1) is None:
-        raise HTTPException(400, "尚未配置韭研公社 SESSION")
-    task = _create_update_task(
-        db,
-        task_type=JYGS_TASK_TYPE,
-        title=f"同步韭研涨停数据 {payload.start_date} 至 {payload.end_date}",
-        input={
-            "start_date": payload.start_date.isoformat(),
-            "end_date": payload.end_date.isoformat(),
-        },
-    )
-    return task_read(task)
+@router.post("/jygs-limit-up-sync", include_in_schema=False)
+def disabled_jygs_limit_up_task():
+    raise HTTPException(404, "韭研同步能力已暂时停用")
 
 
 @router.post(

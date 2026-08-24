@@ -1,6 +1,6 @@
-import { CloudSyncOutlined, DatabaseOutlined, LineChartOutlined } from '@ant-design/icons'
+import { CloudSyncOutlined, LineChartOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Card, Col, DatePicker, Input, Row, Select, Space, Table, Typography, message } from 'antd'
+import { Alert, Button, Card, Col, Input, Row, Select, Space, Table, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useState } from 'react'
@@ -16,8 +16,6 @@ const statusOptions = [
 
 export default function TasksPage() {
   const navigate = useNavigate(); const client = useQueryClient(); const [page, setPage] = useState(1); const [status, setStatus] = useState(''); const [taskType, setTaskType] = useState('')
-  const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>([dayjs().subtract(30, 'day'), dayjs()])
-  const jygsStatus = useQuery({ queryKey: ['jygs-status'], queryFn: api.jygsStatus })
   const marketCoverage = useQuery({ queryKey: ['market-daily-bars-coverage'], queryFn: api.marketDailyBarsCoverage })
   const createTask = useMutation<Task, Error, () => Promise<Task>>({
     mutationFn: factory => factory(),
@@ -51,17 +49,11 @@ export default function TasksPage() {
   return <div className="stack-lg tasks-page">
     <div><Typography.Title>任务</Typography.Title><Typography.Text type="secondary">统一创建和查看后台任务，任务按照调度规则串行执行。</Typography.Text></div>
     <Card title="创建任务"><Row gutter={[16, 16]}>
-      <Col xs={24} xl={8}><Card type="inner" title="同步韭研涨停数据" extra={<DatabaseOutlined />}>
-        <Typography.Paragraph type="secondary">按自然日增量同步；历史成功日期会自动跳过。</Typography.Paragraph>
-        <Space wrap><DatePicker.RangePicker value={range} onChange={value => value?.[0] && value[1] && setRange([value[0], value[1]])} />
-          <Button type="primary" disabled={!jygsStatus.data?.is_configured} loading={createTask.isPending} onClick={() => createTask.mutate(() => api.createJygsSyncTask(range[0].format('YYYY-MM-DD'), range[1].format('YYYY-MM-DD')))}>创建同步任务</Button></Space>
-        {!jygsStatus.isLoading && !jygsStatus.data?.is_configured && <Alert type="warning" showIcon message="请先在设置页登录韭研公社" className="mt-16" />}
-      </Card></Col>
-      <Col xs={24} xl={8}><Card type="inner" title="刷新股票搜索目录" extra={<CloudSyncOutlined />}>
+      <Col xs={24} xl={12}><Card type="inner" title="刷新股票搜索目录" extra={<CloudSyncOutlined />}>
         <Typography.Paragraph type="secondary">从 thsdk 获取完整 A 股目录，更新本地代码、名称和拼音索引。</Typography.Paragraph>
         <Button type="primary" loading={createTask.isPending} onClick={() => createTask.mutate(api.createStockDirectoryTask)}>创建刷新任务</Button>
       </Card></Col>
-      <Col xs={24} xl={8}><Card type="inner" title="更新股票日线" extra={<LineChartOutlined />}>
+      <Col xs={24} xl={12}><Card type="inner" title="更新股票日线" extra={<LineChartOutlined />}>
         <Typography.Paragraph type="secondary">保存从 2025-01-01 开始的前复权日线；15:45 后包含今天，否则截至昨天。</Typography.Paragraph>
         <Typography.Paragraph>
           当前已有数据：{marketCoverage.isLoading

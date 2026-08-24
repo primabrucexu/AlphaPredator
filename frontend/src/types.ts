@@ -12,10 +12,6 @@ export interface DailyBar {
 export interface Tag { id: number; name: string; sort_order: number; stock_sort_order?: number }
 export interface GlobalTag extends Tag { stock_count: number }
 export interface WatchItem { id: number; symbol: string; code: string; name: string; tags: Tag[] }
-export interface LimitUpRecord { trade_date: string; limit_up_time: string; streak_text: string; hot_theme: string; reason: string }
-export interface JygsStatus {
-  is_configured: boolean; is_valid: boolean; updated_at: string | null; last_checked_at: string | null; last_error: string
-}
 export interface Task {
   id: number; task_type: string; scheduling_policy: 'COMPUTE' | 'EXCLUSIVE_UPDATE'; title: string; status: string
   total_items: number; completed_items: number; failed_items: number; progress: number | null

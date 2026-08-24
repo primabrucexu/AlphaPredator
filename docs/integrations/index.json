@@ -10,8 +10,8 @@
     },
     {
       "id": "jygs",
-      "summary": "韭研公社登录鉴权、涨停数据接口和项目接入说明",
-      "status": "已接入",
+      "summary": "韭研公社历史登录鉴权与涨停数据接入说明；当前暂时停用",
+      "status": "已停用",
       "documents": [
         "jygs.md",
         "jygs-api.yaml"

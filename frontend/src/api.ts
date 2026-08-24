@@ -1,4 +1,4 @@
-import type { DailyBar, GlobalTag, JygsStatus, LimitUpRecord, Page, Quote, StockSummary, Tag, Task, TaskItem, WatchItem } from './types'
+import type { DailyBar, GlobalTag, Page, Quote, StockSummary, Tag, Task, TaskItem, WatchItem } from './types'
 
 export interface ApiErrorBody {
   detail?: string | { message?: string; existing_task_id?: number }
@@ -41,10 +41,6 @@ export const api = {
   deleteGlobalTag: (id: number) => request(`/api/tags/${id}`, { method: 'DELETE' }),
   reorderTags: (tagIds: number[]) => request<{ tag_ids: number[] }>('/api/tags/order', { method: 'PUT', body: JSON.stringify({ tag_ids: tagIds }) }),
   reorderTagStocks: (tagId: number, symbols: string[]) => request<{ symbols: string[] }>(`/api/tags/${tagId}/stocks/order`, { method: 'PUT', body: JSON.stringify({ symbols }) }),
-  limitUps: (symbol: string) => request<LimitUpRecord[]>(`/api/stocks/${encodeURIComponent(symbol)}/limit-up-history?limit=10`),
-  jygsStatus: () => request<JygsStatus>('/api/jygs/status'),
-  loginJygs: () => request<{ is_valid: boolean }>('/api/jygs/login', { method: 'POST', body: JSON.stringify({ timeout_seconds: 300 }) }),
-  createJygsSyncTask: (start_date: string, end_date: string) => request<Task>('/api/tasks/jygs-limit-up-sync', { method: 'POST', body: JSON.stringify({ start_date, end_date }) }),
   createStockDirectoryTask: () => request<Task>('/api/tasks/stock-directory-refresh', { method: 'POST' }),
   createMarketDailyBarsTask: (mode: 'incremental' | 'full') => request<Task>('/api/tasks/market-daily-bars-update', { method: 'POST', body: JSON.stringify({ mode }) }),
   marketDailyBarsCoverage: () => request<{ start_date: string | null; end_date: string | null }>('/api/tasks/market-daily-bars-coverage'),

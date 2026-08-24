@@ -1,6 +1,6 @@
 import { StarOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Card, Empty, Space, Table, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Empty, Space, Tag, Typography, message } from 'antd'
 import dayjs from 'dayjs'
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
@@ -8,7 +8,7 @@ import { api } from '../api'
 import KlineChart from '../components/KlineChart'
 import QuoteCard from '../components/QuoteCard'
 import TagPicker from '../components/TagPicker'
-import type { DailyBar, LimitUpRecord } from '../types'
+import type { DailyBar } from '../types'
 
 export default function StockDetailPage() {
   const { symbol = '' } = useParams(); const client = useQueryClient()
@@ -17,7 +17,6 @@ export default function StockDetailPage() {
   const tags = useQuery({ queryKey: ['tags', symbol], queryFn: () => api.tags(symbol) })
   const catalog = useQuery({ queryKey: ['tag-catalog'], queryFn: api.tagCatalog })
   const watchlist = useQuery({ queryKey: ['watchlist'], queryFn: api.watchlist })
-  const limitUps = useQuery({ queryKey: ['limit-ups', symbol], queryFn: () => api.limitUps(symbol) })
   const mutate = useMutation({ mutationFn: (fn: () => Promise<unknown>) => fn(), onSuccess: () => message.success('已保存'), onError: e => message.error(e.message) })
   const earlier = useMutation({ mutationFn: async () => {
     const earliest = history[0]?.date
@@ -46,12 +45,5 @@ export default function StockDetailPage() {
     {bars.error && <Alert type="error" showIcon message="K 线获取失败" description={(bars.error as Error).message} />}
     {history.length > 0 && <KlineChart key={symbol} bars={history} hasEarlier={hasEarlier} isLoadingEarlier={earlier.isPending} onLoadEarlier={() => { if (hasEarlier && !earlier.isPending) earlier.mutate() }} />}
     {bars.data && bars.data.bars.length === 0 && <Card><Empty description="行情源没有返回日 K 数据" /></Card>}
-    <Card title="最近涨停记录" extra={<Typography.Text type="secondary">来源：韭研公社，最近 10 条</Typography.Text>}>
-      {limitUps.error ? <Alert type="error" message="涨停记录读取失败" description={(limitUps.error as Error).message} /> : <Table<LimitUpRecord> rowKey={row => `${row.trade_date}-${row.limit_up_time}`} loading={limitUps.isLoading} dataSource={limitUps.data} pagination={false} locale={{ emptyText: '尚未同步到该股票的涨停记录' }} columns={[
-        { title: '日期', dataIndex: 'trade_date', width: 110 }, { title: '封板时间', dataIndex: 'limit_up_time', width: 100 },
-        { title: '连板', dataIndex: 'streak_text', width: 90 }, { title: '题材', dataIndex: 'hot_theme', width: 180 },
-        { title: '涨停原因', dataIndex: 'reason' },
-      ]} />}
-    </Card>
   </div>
 }

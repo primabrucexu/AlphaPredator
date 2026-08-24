@@ -62,11 +62,6 @@ class ActiveTaskCount(BaseModel):
     count: int
 
 
-class JygsLimitUpTaskCreate(BaseModel):
-    start_date: date
-    end_date: date
-
-
 class MarketDailyBarsTaskCreate(BaseModel):
     mode: Literal["incremental", "full"]
 
