@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from fastmcp import FastMCP
 
+from app.mcp_tools import register_mcp_tools
+
 
 mcp = FastMCP("AlphaPredator")
+register_mcp_tools(mcp)
 mcp_app = mcp.http_app(
     path="/",
     host_origin_protection=True,

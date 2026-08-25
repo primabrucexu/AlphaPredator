@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 class TaskRead(BaseModel):
     id: int
+    uuid: str
     task_type: str
     scheduling_policy: str
     title: str

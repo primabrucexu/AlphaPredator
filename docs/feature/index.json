@@ -4,35 +4,35 @@
       "id": "F001",
       "summary": "个人 A 股行情与技术指标展示、自选标签管理；韭研涨停历史暂时停用",
       "status": "部分停用",
-      "mcp_status": "待确认",
+      "mcp_status": "客户端已验证",
       "document": "F001-market-watchlist.md"
     },
     {
       "id": "F002",
       "summary": "通用任务处理、总任务进度与子任务进度管理",
       "status": "完成",
-      "mcp_status": "待确认",
+      "mcp_status": "客户端已验证",
       "document": "F002-task-processing.md"
     },
     {
       "id": "F002.1",
       "summary": "股票搜索目录刷新任务可用；韭研增量同步暂时停用",
       "status": "部分停用",
-      "mcp_status": "待确认",
+      "mcp_status": "客户端已验证",
       "document": "F002.1-data-update-tasks.md"
     },
     {
       "id": "F003",
       "summary": "持久化全市场前复权日线并提供增量与强制全量更新任务",
       "status": "完成",
-      "mcp_status": "待确认",
+      "mcp_status": "客户端已验证",
       "document": "F003-market-data-storage.md"
     },
     {
       "id": "F004",
       "summary": "同花顺登录",
       "status": "完成",
-      "mcp_status": "待确认",
+      "mcp_status": "不接入",
       "document": "F004-ths-login.md"
     },
     {
@@ -46,8 +46,8 @@
     {
       "id": "F005.1",
       "summary": "将来源 Feature 已确认的业务能力接入为 MCP Tool",
-      "status": "设计",
-      "mcp_status": "待确认",
+      "status": "完成",
+      "mcp_status": "客户端已验证",
       "document": "F005.1-mcp-tools.md"
     },
     {

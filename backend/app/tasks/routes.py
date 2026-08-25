@@ -1,19 +1,23 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
-from threading import Lock
-from zoneinfo import ZoneInfo
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.database.models import Stock
 from app.database.session import get_session
 
 from .handlers.market_daily_bars import TASK_TYPE as MARKET_DAILY_BARS_TASK_TYPE
-from .handlers.stock_directory import TASK_TYPE as STOCK_DIRECTORY_TASK_TYPE
-from .models import SchedulingPolicy, Task, TaskItem, TaskItemStatus, TaskStatus
+from .models import Task, TaskItem, TaskItemStatus
+from .operations import (
+    TaskOperationConflict,
+    TaskOperationError,
+    create_market_daily_bars_update_task as create_market_daily_bars_update,
+    create_stock_directory_refresh_task as create_stock_directory_refresh,
+    market_target_end_date as _market_target_end_date,
+    retry_failed_market_daily_bars_task as retry_failed_market_daily_bars,
+)
 from .process import start_worker_process
 from .schemas import (
     ActiveTaskCount,
@@ -27,33 +31,21 @@ from .schemas import (
 from .service import (
     TERMINAL_TASK_STATUSES,
     active_task_count,
-    create_task,
-    get_active_task_by_type,
     get_task,
     list_task_items,
     list_tasks,
     load_json,
     request_cancel,
-    TaskPlanningError,
 )
 
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
-_creation_lock = Lock()
-_shanghai_timezone = ZoneInfo("Asia/Shanghai")
-_same_day_cutoff = time(15, 45)
-
-
-def _market_target_end_date(now: datetime | None = None) -> date:
-    local_now = now.astimezone(_shanghai_timezone) if now is not None else datetime.now(_shanghai_timezone)
-    if local_now.time() > _same_day_cutoff:
-        return local_now.date()
-    return local_now.date() - timedelta(days=1)
 
 
 def task_read(task: Task) -> TaskRead:
     return TaskRead(
         id=task.id,
+        uuid=task.uuid,
         task_type=task.task_type,
         scheduling_policy=task.scheduling_policy,
         title=task.title,
@@ -110,35 +102,17 @@ def task_active_count(db: Session = Depends(get_session)):
     return ActiveTaskCount(count=active_task_count(db))
 
 
-def _raise_if_active_task_exists(db: Session, task_type: str) -> None:
-    existing = get_active_task_by_type(db, task_type)
-    if existing is not None:
+def _raise_operation_error(exc: TaskOperationError) -> None:
+    if isinstance(exc, TaskOperationConflict):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            detail={"message": "同类型任务正在等待或执行", "existing_task_id": existing.id},
-        )
-
-
-def _create_update_task(
-    db: Session,
-    *,
-    task_type: str,
-    title: str,
-    input: dict | None = None,
-) -> Task:
-    with _creation_lock:
-        _raise_if_active_task_exists(db, task_type)
-        try:
-            return create_task(
-                db,
-                task_type=task_type,
-                scheduling_policy=SchedulingPolicy.EXCLUSIVE_UPDATE,
-                title=title,
-                input=input,
-                start_worker=start_worker_process,
-            )
-        except TaskPlanningError as exc:
-            raise HTTPException(400, str(exc)) from exc
+            detail={
+                "message": str(exc),
+                "existing_task_id": exc.existing_task.id,
+                "existing_task_uuid": exc.existing_task.uuid,
+            },
+        ) from exc
+    raise HTTPException(400, str(exc)) from exc
 
 
 @router.post("/jygs-limit-up-sync", include_in_schema=False)
@@ -152,11 +126,10 @@ def disabled_jygs_limit_up_task():
     status_code=status.HTTP_202_ACCEPTED,
 )
 def create_stock_directory_task(db: Session = Depends(get_session)):
-    return task_read(_create_update_task(
-        db,
-        task_type=STOCK_DIRECTORY_TASK_TYPE,
-        title="刷新股票搜索目录",
-    ))
+    try:
+        return task_read(create_stock_directory_refresh(db, start_worker=start_worker_process))
+    except TaskOperationError as exc:
+        _raise_operation_error(exc)
 
 
 @router.post(
@@ -168,16 +141,14 @@ def create_market_daily_bars_task(
     payload: MarketDailyBarsTaskCreate,
     db: Session = Depends(get_session),
 ):
-    if db.scalar(select(Stock.symbol).limit(1)) is None:
-        raise HTTPException(400, "本地股票目录为空，请先刷新股票搜索目录")
-    target_end_date = _market_target_end_date().isoformat()
-    title = "自动增量更新股票日线" if payload.mode == "incremental" else "强制全量更新股票日线"
-    return task_read(_create_update_task(
-        db,
-        task_type=MARKET_DAILY_BARS_TASK_TYPE,
-        title=f"{title}（截至 {target_end_date}）",
-        input={"mode": payload.mode, "target_end_date": target_end_date},
-    ))
+    try:
+        return task_read(create_market_daily_bars_update(
+            db,
+            payload.mode,
+            start_worker=start_worker_process,
+        ))
+    except TaskOperationError as exc:
+        _raise_operation_error(exc)
 
 
 @router.get(
@@ -229,30 +200,14 @@ def retry_failed_market_daily_bars_task(task_id: int, db: Session = Depends(get_
     original = get_task(db, task_id)
     if original is None:
         raise HTTPException(404, "任务不存在")
-    if original.task_type != MARKET_DAILY_BARS_TASK_TYPE:
-        raise HTTPException(400, "该任务不支持失败股票重试")
-    if original.status != TaskStatus.PARTIALLY_SUCCEEDED.value:
-        raise HTTPException(400, "只有部分成功的行情任务可以重试失败股票")
-    failed_items = list(db.scalars(select(TaskItem).where(
-        TaskItem.task_id == task_id,
-        TaskItem.status == TaskItemStatus.FAILED.value,
-    ).order_by(TaskItem.sequence)).all())
-    symbols = [str(load_json(item.input_json).get("symbol") or "") for item in failed_items]
-    symbols = [symbol for symbol in symbols if symbol]
-    if not symbols:
-        raise HTTPException(400, "原任务没有可重试的失败股票")
-    original_input = load_json(original.input_json)
-    return task_read(_create_update_task(
-        db,
-        task_type=MARKET_DAILY_BARS_TASK_TYPE,
-        title=f"重试任务 #{task_id} 的失败股票",
-        input={
-            "mode": original_input["mode"],
-            "target_end_date": original_input["target_end_date"],
-            "symbols": symbols,
-            "retry_of_task_id": task_id,
-        },
-    ))
+    try:
+        return task_read(retry_failed_market_daily_bars(
+            db,
+            original,
+            start_worker=start_worker_process,
+        ))
+    except TaskOperationError as exc:
+        _raise_operation_error(exc)
 
 
 @router.get("/{task_id}", response_model=TaskRead)

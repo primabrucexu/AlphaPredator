@@ -63,7 +63,9 @@
 
 ## MCP
 
-> 接入状态：待确认。F005.1 完成后更新。
+> 接入状态：不接入
+
+同花顺账号密码只允许通过本机 JSON 文件配置，不提供 MCP 查询或写入能力。
 
 ## Acceptance Criteria
 - [x] AC1: 用户按照 README 手工创建只包含 `username`、`password` 两个非空字符串字段的 `data/ths_credentials.json` 后，正式账号能够用于 thsdk 登录。

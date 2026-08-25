@@ -259,7 +259,9 @@ backend/app/tasks/
 
 ## MCP
 
-> 接入状态：待确认。F005.1 完成后更新。
+> 接入状态：客户端已验证
+
+F005.1 已为允许创建的任务增加公开 UUID，并提供按 UUID 查询总任务进度和分页查询子任务详细输出的 Tool。MCP 不提供阻塞等待、任务列表或取消任务。
 
 ## Acceptance Criteria
 

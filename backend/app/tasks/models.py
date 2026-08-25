@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import StrEnum
+from uuid import uuid4
 
 from sqlalchemy import ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
@@ -41,6 +42,7 @@ class Task(Base):
     __tablename__ = "tasks"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    uuid: Mapped[str] = mapped_column(String(36), unique=True, index=True, default=lambda: str(uuid4()))
     task_type: Mapped[str] = mapped_column(String(64), index=True)
     scheduling_policy: Mapped[str] = mapped_column(String(32), index=True)
     title: Mapped[str] = mapped_column(String(256))

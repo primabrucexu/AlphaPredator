@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from typing import Any, Callable
+from uuid import UUID
 
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
@@ -110,6 +111,18 @@ def create_task(
 
 def get_task(db: Session, task_id: int) -> Task | None:
     return db.get(Task, task_id)
+
+
+def normalize_task_uuid(value: str) -> str:
+    try:
+        return str(UUID(value))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("任务 UUID 格式无效") from exc
+
+
+def get_task_by_uuid(db: Session, task_uuid: str) -> Task | None:
+    public_uuid = normalize_task_uuid(task_uuid)
+    return db.scalar(select(Task).where(Task.uuid == public_uuid))
 
 
 def list_tasks(

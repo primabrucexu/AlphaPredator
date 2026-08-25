@@ -118,7 +118,7 @@ README 只记录 MCP Server 名称、Streamable HTTP 类型和完整本机 URL�
 
 ## MCP
 
-F005 负责 MCP 基础连接、传输、安全边界和目标客户端注册验证，本身不暴露业务能力，因此其 `mcp_status` 为“不适用”。所有业务 Tool 由 F005.1 管理；其他业务 Feature 在 F005.1 完成前保持“待确认”，完成后再同步更新。
+F005 负责 MCP 基础连接、传输、安全边界和目标客户端注册验证，本身不暴露业务能力，因此其 `mcp_status` 为“不适用”。所有业务 Tool 由 F005.1 管理；F005.1 已完成的来源 Feature 状态由各自 `MCP` 小节维护。
 
 ## Acceptance Criteria
 

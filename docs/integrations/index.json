@@ -19,8 +19,8 @@
     },
     {
       "id": "mcp",
-      "summary": "MCP 基础接入、Tool 和目标客户端验证状态汇总",
-      "status": "设计",
+      "summary": "MCP 基础接入、Tool、Hermes 任务结果插件和客户端验证状态汇总",
+      "status": "已接入",
       "documents": [
         "mcp.md"
       ]

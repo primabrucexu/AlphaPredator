@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from uuid import UUID
 
 import pytest
 from fastapi import FastAPI
@@ -13,7 +14,7 @@ from app.api.router import api_router
 from app.database.session import Base, get_session
 from app.tasks import process as task_process
 from app.tasks.handlers import TaskItemSkipped, TaskItemSpec, register_handler, unregister_handler
-from app.tasks.migrations import migrate_task_tables
+from app.tasks.migrations import migrate_task_public_uuids, migrate_task_tables
 from app.tasks.models import SchedulingPolicy, Task, TaskItem, TaskItemStatus, TaskStatus
 from app.tasks.runner import (
     acquire_worker_lease,
@@ -134,6 +135,23 @@ def test_task_migration_is_repeatable():
     assert {"tasks", "task_items", "task_worker_lease"} <= set(inspect(engine).get_table_names())
     with engine.connect() as connection:
         assert connection.exec_driver_sql("SELECT value FROM existing_data").scalar_one() == "kept"
+
+
+def test_task_public_uuid_migration_backfills_existing_rows_and_is_repeatable():
+    engine = create_engine("sqlite://")
+    with engine.begin() as connection:
+        connection.exec_driver_sql("CREATE TABLE tasks (id INTEGER PRIMARY KEY, title TEXT)")
+        connection.exec_driver_sql("INSERT INTO tasks (id, title) VALUES (1, 'old'), (2, 'older')")
+
+    assert migrate_task_public_uuids(engine) is True
+    assert migrate_task_public_uuids(engine) is False
+
+    columns = {column["name"]: column for column in inspect(engine).get_columns("tasks")}
+    assert columns["uuid"]["nullable"] is False
+    with engine.connect() as connection:
+        values = connection.exec_driver_sql("SELECT uuid FROM tasks ORDER BY id").scalars().all()
+    assert len(set(values)) == 2
+    assert [str(UUID(value)) for value in values] == values
 
 
 def test_worker_process_uses_dedicated_module(monkeypatch):
