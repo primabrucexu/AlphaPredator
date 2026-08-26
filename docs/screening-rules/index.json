@@ -1,0 +1,14 @@
+{
+  "screening_rule": [
+    {
+      "id": "SR001",
+      "name": "趋势反转",
+      "summary": "筛选下跌趋势结束并出现向上反转信号的股票，具体公式和参数待确认",
+      "definition_status": "设计",
+      "implementation_status": "未实现",
+      "revision": null,
+      "feature": "F006",
+      "document": "SR001-trend-reversal.md"
+    }
+  ]
+}

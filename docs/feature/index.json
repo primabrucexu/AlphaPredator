@@ -52,10 +52,10 @@
     },
     {
       "id": "F006",
-      "summary": "趋势反转筛选",
+      "summary": "提供通用选股规则执行能力，首条内置规则为 SR001 趋势反转",
       "status": "设计",
       "mcp_status": "待确认",
-      "document": "F006-trend-reversal-screening.md"
+      "document": "F006-screening-rule-executor.md"
     }
   ]
 }
