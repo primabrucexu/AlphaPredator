@@ -25,3 +25,4 @@ conf/*.local.toml
 backend/jygs_auth_sniff_result.json
 tmp/
 logs/
+out/
