@@ -3,11 +3,11 @@
     {
       "id": "SR001",
       "name": "趋势反转",
-      "summary": "筛选下跌趋势结束并出现向上反转信号的股票，具体公式和参数待确认",
+      "summary": "以 MACD 柱连续不下降识别趋势反转，并按 TP1、EX1、SL1 执行回测",
       "definition_status": "设计",
       "implementation_status": "未实现",
       "revision": null,
-      "feature": "F006",
+      "feature": "F006.3",
       "document": "SR001-trend-reversal.md"
     }
   ]
