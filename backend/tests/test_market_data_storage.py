@@ -55,6 +55,9 @@ def test_incremental_append_is_idempotent(tmp_path):
         assert store.append_new("000001.SZ", fetched) == 1
         assert store.append_new("000001.SZ", fetched) == 0
         assert len(store.recent_bars("000001.SZ", 10)) == 3
+        assert [row.trade_date for row in store.daily_bars(
+            "000001.SZ", end_date=date(2025, 1, 3)
+        )] == [date(2025, 1, 2), date(2025, 1, 3)]
         assert store.coverage() == (date(2025, 1, 2), date(2025, 1, 4))
 
 

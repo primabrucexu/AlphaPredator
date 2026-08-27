@@ -53,21 +53,21 @@
     {
       "id": "F006",
       "summary": "选股规则执行、历史回测和具体战法的功能总览",
-      "status": "设计",
+      "status": "部分完成",
       "mcp_status": "不适用",
       "document": "F006-stock-screening-and-backtest.md"
     },
     {
       "id": "F006.1",
       "summary": "按已注册规则和指定日期执行通用选股计算",
-      "status": "设计",
+      "status": "部分完成",
       "mcp_status": "待确认",
       "document": "F006.1-screening-rule-executor.md"
     },
     {
       "id": "F006.2",
       "summary": "按个股和全市场组合两种模式执行历史买卖回测",
-      "status": "设计",
+      "status": "部分完成",
       "mcp_status": "待确认",
       "document": "F006.2-historical-backtest-engine.md"
     },

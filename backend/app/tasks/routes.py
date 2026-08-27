@@ -13,7 +13,9 @@ from .models import Task, TaskItem, TaskItemStatus
 from .operations import (
     TaskOperationConflict,
     TaskOperationError,
+    create_individual_backtest_task as create_individual_backtest,
     create_market_daily_bars_update_task as create_market_daily_bars_update,
+    create_screening_rule_task as create_screening_rule,
     create_stock_directory_refresh_task as create_stock_directory_refresh,
     market_target_end_date as _market_target_end_date,
     retry_failed_market_daily_bars_task as retry_failed_market_daily_bars,
@@ -21,8 +23,10 @@ from .operations import (
 from .process import start_worker_process
 from .schemas import (
     ActiveTaskCount,
+    IndividualBacktestTaskCreate,
     MarketDailyBarsCoverage,
     MarketDailyBarsTaskCreate,
+    ScreeningRuleTaskCreate,
     TaskItemPage,
     TaskItemRead,
     TaskPage,
@@ -145,6 +149,53 @@ def create_market_daily_bars_task(
         return task_read(create_market_daily_bars_update(
             db,
             payload.mode,
+            start_worker=start_worker_process,
+        ))
+    except TaskOperationError as exc:
+        _raise_operation_error(exc)
+
+
+@router.post(
+    "/screening-rule-execute",
+    response_model=TaskRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def create_screening_task(
+    payload: ScreeningRuleTaskCreate,
+    db: Session = Depends(get_session),
+):
+    try:
+        return task_read(create_screening_rule(
+            db,
+            rule_id=payload.rule_id,
+            rule_revision=payload.rule_revision,
+            parameters=payload.parameters,
+            as_of_date=payload.as_of_date,
+            symbols=payload.symbols,
+            start_worker=start_worker_process,
+        ))
+    except TaskOperationError as exc:
+        _raise_operation_error(exc)
+
+
+@router.post(
+    "/individual-backtest",
+    response_model=TaskRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def create_individual_backtest_task(
+    payload: IndividualBacktestTaskCreate,
+    db: Session = Depends(get_session),
+):
+    try:
+        return task_read(create_individual_backtest(
+            db,
+            rule_id=payload.rule_id,
+            rule_revision=payload.rule_revision,
+            parameters=payload.parameters,
+            symbol=payload.symbol,
+            start_date=payload.start_date,
+            end_date=payload.end_date,
             start_worker=start_worker_process,
         ))
     except TaskOperationError as exc:

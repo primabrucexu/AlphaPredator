@@ -70,3 +70,20 @@ class MarketDailyBarsTaskCreate(BaseModel):
 class MarketDailyBarsCoverage(BaseModel):
     start_date: date | None
     end_date: date | None
+
+
+class ScreeningRuleTaskCreate(BaseModel):
+    rule_id: str = Field(min_length=1)
+    rule_revision: int = Field(ge=1)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    as_of_date: date
+    symbols: list[str] | None = Field(default=None, min_length=1)
+
+
+class IndividualBacktestTaskCreate(BaseModel):
+    rule_id: str = Field(min_length=1)
+    rule_revision: int = Field(ge=1)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    symbol: str = Field(min_length=1)
+    start_date: date
+    end_date: date

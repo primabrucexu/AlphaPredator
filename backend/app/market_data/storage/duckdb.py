@@ -203,6 +203,18 @@ class DuckDbMarketDataStore:
         ).fetchall()
         return [StoredDailyBar(*row) for row in reversed(rows)]
 
+    def daily_bars(self, symbol: str, *, end_date: date) -> list[StoredDailyBar]:
+        rows = self.connection.execute(
+            """
+            SELECT trade_date, open, high, low, close, volume, amount
+            FROM daily_bars
+            WHERE symbol = ? AND trade_date <= ?
+            ORDER BY trade_date
+            """,
+            [symbol, end_date],
+        ).fetchall()
+        return [StoredDailyBar(*row) for row in rows]
+
     def coverage(self) -> tuple[date | None, date | None]:
         first_date, last_date = self.connection.execute(
             "SELECT min(trade_date), max(trade_date) FROM daily_bars"

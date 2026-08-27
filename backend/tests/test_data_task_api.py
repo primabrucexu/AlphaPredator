@@ -59,6 +59,8 @@ def test_production_registration_exposes_all_handlers():
     assert get_handler("jygs_limit_up_sync") is None
     assert get_handler("stock_directory_refresh") is not None
     assert get_handler("market_daily_bars_update") is not None
+    assert get_handler("screening_rule_execute") is not None
+    assert get_handler("individual_backtest") is not None
 
 
 def test_disabled_jygs_task_history_remains_readable(db):
