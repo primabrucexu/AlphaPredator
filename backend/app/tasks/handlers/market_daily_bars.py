@@ -19,7 +19,7 @@ from . import TaskItemSkipped, TaskItemSpec
 
 
 TASK_TYPE = "market_daily_bars_update"
-FULL_START_DATE = date(2025, 1, 1)
+FULL_START_DATE = date(2024, 6, 1)
 VALID_MODES = {"incremental", "full"}
 
 

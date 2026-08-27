@@ -54,7 +54,7 @@ export default function TasksPage() {
         <Button type="primary" loading={createTask.isPending} onClick={() => createTask.mutate(api.createStockDirectoryTask)}>创建刷新任务</Button>
       </Card></Col>
       <Col xs={24} xl={12}><Card type="inner" title="更新股票日线" extra={<LineChartOutlined />}>
-        <Typography.Paragraph type="secondary">保存从 2025-01-01 开始的前复权日线；15:45 后包含今天，否则截至昨天。</Typography.Paragraph>
+        <Typography.Paragraph type="secondary">保存从 2024-06-01 开始的前复权日线；15:45 后包含今天，否则截至昨天。</Typography.Paragraph>
         <Typography.Paragraph>
           当前已有数据：{marketCoverage.isLoading
             ? '读取中…'

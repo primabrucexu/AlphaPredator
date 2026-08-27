@@ -93,6 +93,9 @@ def test_initial_full_then_unchanged_overlap_appends_only_new_bar(tmp_path):
             assert load_json(second.result_json)["written_rows"] == 1
             assert load_json(second.result_json)["data_start_date"] == "2025-01-02"
             assert load_json(second.result_json)["data_end_date"] == "2025-01-04"
+            assert provider.calls[0] == (
+                "000001.SZ", date(2024, 6, 1), date(2025, 1, 4)
+            )
         with DuckDbMarketDataStore(path) as store:
             assert len(store.recent_bars("000001.SZ", 10)) == 3
     finally:
@@ -129,6 +132,9 @@ def test_changed_overlap_queries_actions_and_rebuilds_full_history(tmp_path):
             assert result["corporate_action_count"] == 1
             assert result["corporate_action_summary"] == [{"日期": "2025-01-03", "方案": "分红"}]
         assert provider.action_calls == ["000001.SZ"]
+        assert provider.calls[-1] == (
+            "000001.SZ", date(2024, 6, 1), date(2025, 1, 4)
+        )
     finally:
         unregister_handler(TASK_TYPE)
 
