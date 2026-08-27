@@ -31,6 +31,7 @@ interface TradeRow {
 
 const text = (value: unknown) => value === null || value === undefined || value === '' ? '—' : String(value)
 const percent = (value: unknown) => {
+  if (value === null || value === undefined || value === '') return '—'
   const number = Number(value)
   return Number.isFinite(number) ? `${(number * 100).toFixed(2)}%` : '—'
 }
@@ -39,9 +40,8 @@ const decimal3 = (value: unknown) => {
   return Number.isFinite(number) ? number.toFixed(3) : '—'
 }
 const evidence = (row: ModeScreeningStockResult, conditionId: string) => row.evidence.find(item => item.condition_id === conditionId)
-const backtestStatus: Record<string, string> = {
-  completed: '历史交易已结束', no_trade: '历史无交易', pending_entry: '等待买入', open_position: '仍有持仓',
-}
+type ResultSortField = 'win_rate' | 'average_return' | 'maximum_return'
+type ResultSortOrder = 'asc' | 'desc'
 
 function TradeDetails({ taskId, result }: { taskId: number; result: ModeScreeningStockResult }) {
   const [page, setPage] = useState(1)
@@ -85,16 +85,17 @@ function TradeDetails({ taskId, result }: { taskId: number; result: ModeScreenin
 
 export default function ModeScreeningAnalysisResult({ task }: { task: Task }) {
   const [page, setPage] = useState(1)
+  const [sortBy, setSortBy] = useState<ResultSortField | ''>('')
+  const [sortOrder, setSortOrder] = useState<ResultSortOrder | ''>('')
   const results = useQuery({
-    queryKey: ['mode-screening-results', task.id, page],
-    queryFn: () => api.modeScreeningResults(task.id, page, 20),
+    queryKey: ['mode-screening-results', task.id, page, sortBy, sortOrder],
+    queryFn: () => api.modeScreeningResults(task.id, page, 20, sortBy, sortOrder),
     refetchInterval: activeTaskStatuses.has(task.status) ? 2000 : false,
   })
   const summary = task.result
   const columns: ColumnsType<ModeScreeningStockResult> = [
     { title: '股票', fixed: 'left', width: 150, render: (_, row) => <><Typography.Text strong>{row.code}</Typography.Text><br /><Typography.Text type="secondary">{row.name}</Typography.Text></> },
     { title: '信号日', dataIndex: 'signal_date', width: 115, render: text },
-    { title: '历史数据区间', width: 210, render: (_, row) => `${text(row.data_start_date)} 至 ${text(row.data_end_date)}` },
     { title: '三根 MACD 柱', width: 270, render: (_, row) => {
       const values = evidence(row, 'C1')?.values ?? {}
       return <Typography.Text code>{[values.h_s_minus_2, values.h_s_minus_1, values.h_s].map(decimal3).join(' → ')}</Typography.Text>
@@ -104,15 +105,15 @@ export default function ModeScreeningAnalysisResult({ task }: { task: Task }) {
     })}</Space> },
     { title: '完成交易', dataIndex: 'completed_trades', width: 90 },
     { title: '盈/亏/平', width: 100, render: (_, row) => `${row.winning_trades}/${row.losing_trades}/${row.flat_trades}` },
-    { title: '胜率', dataIndex: 'win_rate', width: 90, render: percent },
-    { title: '平均收益', dataIndex: 'average_return', width: 100, render: percent },
-    { title: '最大收益', dataIndex: 'maximum_return', width: 100, render: percent },
+    { title: '胜率', dataIndex: 'win_rate', width: 90, render: percent, sorter: true, sortDirections: ['descend', 'ascend'], sortOrder: sortBy === 'win_rate' ? sortOrder === 'desc' ? 'descend' : 'ascend' : null },
+    { title: '平均收益', dataIndex: 'average_return', width: 100, render: percent, sorter: true, sortDirections: ['descend', 'ascend'], sortOrder: sortBy === 'average_return' ? sortOrder === 'desc' ? 'descend' : 'ascend' : null },
+    { title: '最大收益', dataIndex: 'maximum_return', width: 100, render: percent, sorter: true, sortDirections: ['descend', 'ascend'], sortOrder: sortBy === 'maximum_return' ? sortOrder === 'desc' ? 'descend' : 'ascend' : null },
     { title: '最小收益', dataIndex: 'minimum_return', width: 100, render: percent },
-    { title: '当前状态', width: 140, render: (_, row) => <Space direction="vertical" size={2}><Tag color={row.open_trade || row.pending_orders.length ? 'warning' : 'success'}>{backtestStatus[row.backtest_status] ?? row.backtest_status}</Tag>{row.insufficient_history && <Tag color="warning">不足 100 根</Tag>}</Space> },
   ]
   return <Card title="SR001 模式选股分析结果">
     <Descriptions column={{ xs: 1, sm: 2, lg: 4 }} items={[
       { key: 'date', label: '扫描日期', children: text(summary.as_of_date) },
+      { key: 'range', label: '历史数据区间', children: `各股票本地最早可用行情 至 ${text(summary.as_of_date)}` },
       { key: 'total', label: '候选股票', children: text(summary.stock_count) },
       { key: 'matched', label: '命中', children: text(summary.matched_stocks) },
       { key: 'not-matched', label: '未命中', children: text(summary.not_matched_stocks) },
@@ -120,9 +121,17 @@ export default function ModeScreeningAnalysisResult({ task }: { task: Task }) {
       { key: 'failed', label: '失败', children: text(summary.failed_stocks) },
     ]} />
     {results.error && <Alert className="mt-16" type="error" showIcon message="命中股票读取失败" description={(results.error as Error).message} />}
-    <Table<ModeScreeningStockResult> className="mt-16" rowKey="id" loading={results.isLoading} dataSource={results.data?.items} columns={columns} scroll={{ x: 1630 }}
+    <Table<ModeScreeningStockResult> className="mt-16" rowKey="id" loading={results.isLoading} dataSource={results.data?.items} columns={columns} scroll={{ x: 1280 }}
       expandable={{ expandedRowRender: row => <TradeDetails taskId={task.id} result={row} /> }}
-      pagination={{ current: page, pageSize: 20, total: results.data?.total, showSizeChanger: false, onChange: setPage }}
+      pagination={{ current: page, pageSize: 20, total: results.data?.total, showSizeChanger: false }}
+      onChange={(pagination, _filters, sorter) => {
+        const activeSorter = Array.isArray(sorter) ? sorter[0] : sorter
+        const field = activeSorter.order && ['win_rate', 'average_return', 'maximum_return'].includes(String(activeSorter.field))
+          ? activeSorter.field as ResultSortField : ''
+        const order: ResultSortOrder | '' = activeSorter.order === 'ascend' ? 'asc' : activeSorter.order === 'descend' ? 'desc' : ''
+        const sortingChanged = field !== sortBy || order !== sortOrder
+        setSortBy(field); setSortOrder(order); setPage(sortingChanged ? 1 : pagination.current ?? 1)
+      }}
       locale={{ emptyText: activeTaskStatuses.has(task.status) ? '正在扫描，暂无命中结果' : '本次没有命中股票' }} />
   </Card>
 }

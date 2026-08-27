@@ -62,7 +62,11 @@ export const api = {
   },
   task: (id: number) => request<Task>(`/api/tasks/${id}`),
   taskItems: (id: number, page = 1, pageSize = 50) => request<Page<TaskItem>>(`/api/tasks/${id}/items?page=${page}&page_size=${pageSize}`),
-  modeScreeningResults: (id: number, page = 1, pageSize = 20) => request<Page<ModeScreeningStockResult>>(`/api/tasks/${id}/mode-screening-results?page=${page}&page_size=${pageSize}`),
+  modeScreeningResults: (id: number, page = 1, pageSize = 20, sortBy = '', sortOrder = '') => {
+    const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+    if (sortBy && sortOrder) { query.set('sort_by', sortBy); query.set('sort_order', sortOrder) }
+    return request<Page<ModeScreeningStockResult>>(`/api/tasks/${id}/mode-screening-results?${query}`)
+  },
   modeScreeningTrades: (taskId: number, resultId: number, page = 1, pageSize = 20) => request<Page<ModeScreeningTradeResult>>(`/api/tasks/${taskId}/mode-screening-results/${resultId}/trades?page=${page}&page_size=${pageSize}`),
   cancelTask: (id: number) => request<Task>(`/api/tasks/${id}/cancel`, { method: 'POST' }),
   retryFailedMarketDailyBarsTask: (id: number) => request<Task>(`/api/tasks/${id}/retry-failed`, { method: 'POST' }),

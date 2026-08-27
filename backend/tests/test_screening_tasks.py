@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from decimal import Decimal
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -291,6 +292,65 @@ def test_mode_screening_statistics_include_flats_in_win_rate_denominator():
         "maximum_return": "0.1",
         "minimum_return": "-0.2",
     }
+
+
+@pytest.mark.parametrize("sort_by", ["win_rate", "average_return", "maximum_return"])
+def test_mode_screening_result_sorting_is_global_and_keeps_nulls_last(sort_by):
+    factory = make_factory()
+    with factory() as db:
+        task = Task(
+            task_type="mode_screening_analysis",
+            scheduling_policy=SchedulingPolicy.COMPUTE.value,
+            title="sortable results",
+            status=TaskStatus.SUCCEEDED.value,
+        )
+        db.add(task)
+        db.flush()
+        values = [
+            ("000001.SZ", "0.5"),
+            ("000002.SZ", "0.7"),
+            ("000003.SZ", None),
+        ]
+        for sequence, (symbol, value) in enumerate(values):
+            item = TaskItem(task_id=task.id, sequence=sequence, title=symbol)
+            db.add(item)
+            db.flush()
+            db.add(ModeScreeningStockResult(
+                task_id=task.id,
+                task_item_id=item.id,
+                symbol=symbol,
+                code=symbol[:6],
+                name=symbol,
+                as_of_date="2026-01-03",
+                backtest_status="completed",
+                win_rate=value if sort_by == "win_rate" else "0.1",
+                average_return=value if sort_by == "average_return" else "0.1",
+                maximum_return=value if sort_by == "maximum_return" else "0.1",
+            ))
+        db.commit()
+        task_id = task.id
+
+    client = make_client(factory)
+    first_page = client.get(
+        f"/api/tasks/{task_id}/mode-screening-results",
+        params={"page": 1, "page_size": 2, "sort_by": sort_by, "sort_order": "desc"},
+    )
+    assert first_page.status_code == 200
+    assert [item["symbol"] for item in first_page.json()["items"]] == [
+        "000002.SZ", "000001.SZ",
+    ]
+    second_page = client.get(
+        f"/api/tasks/{task_id}/mode-screening-results",
+        params={"page": 2, "page_size": 2, "sort_by": sort_by, "sort_order": "desc"},
+    )
+    assert [item["symbol"] for item in second_page.json()["items"]] == ["000003.SZ"]
+    ascending = client.get(
+        f"/api/tasks/{task_id}/mode-screening-results",
+        params={"page": 1, "page_size": 3, "sort_by": sort_by, "sort_order": "asc"},
+    )
+    assert [item["symbol"] for item in ascending.json()["items"]] == [
+        "000001.SZ", "000002.SZ", "000003.SZ",
+    ]
 
 
 def test_rest_entries_only_plan_compute_tasks_and_normalize_symbols(monkeypatch):

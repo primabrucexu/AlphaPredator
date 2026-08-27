@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 from datetime import date
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import Float, case, cast, func, select
 from sqlalchemy.orm import Session
 
 from app.database.session import get_session
@@ -335,6 +336,8 @@ def mode_screening_results(
     task_id: int,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    sort_by: Literal["win_rate", "average_return", "maximum_return"] | None = None,
+    sort_order: Literal["asc", "desc"] | None = None,
     db: Session = Depends(get_session),
 ):
     task = get_task(db, task_id)
@@ -342,11 +345,26 @@ def mode_screening_results(
         raise HTTPException(404, "任务不存在")
     if task.task_type != MODE_SCREENING_TASK_TYPE:
         raise HTTPException(400, "该任务不是模式选股分析任务")
+    if (sort_by is None) != (sort_order is None):
+        raise HTTPException(400, "sort_by 和 sort_order 必须同时提供")
     filters = [ModeScreeningStockResult.task_id == task_id]
     total = db.scalar(select(func.count()).select_from(ModeScreeningStockResult).where(*filters)) or 0
+    order_by = [ModeScreeningStockResult.symbol]
+    if sort_by is not None and sort_order is not None:
+        column = {
+            "win_rate": ModeScreeningStockResult.win_rate,
+            "average_return": ModeScreeningStockResult.average_return,
+            "maximum_return": ModeScreeningStockResult.maximum_return,
+        }[sort_by]
+        numeric_value = cast(column, Float)
+        order_by = [
+            case((column.is_(None), 1), else_=0),
+            numeric_value.desc() if sort_order == "desc" else numeric_value.asc(),
+            ModeScreeningStockResult.symbol,
+        ]
     rows = db.scalars(
         select(ModeScreeningStockResult).where(*filters)
-        .order_by(ModeScreeningStockResult.symbol)
+        .order_by(*order_by)
         .offset((page - 1) * page_size).limit(page_size)
     ).all()
     return ModeScreeningStockResultPage(
