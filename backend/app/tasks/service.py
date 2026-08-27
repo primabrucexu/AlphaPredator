@@ -132,12 +132,15 @@ def list_tasks(
     page_size: int,
     status: str | None = None,
     task_type: str | None = None,
+    scheduling_policy: str | None = None,
 ) -> tuple[list[Task], int]:
     filters = []
     if status:
         filters.append(Task.status == status)
     if task_type:
         filters.append(Task.task_type == task_type)
+    if scheduling_policy:
+        filters.append(Task.scheduling_policy == scheduling_policy)
     total = db.scalar(select(func.count()).select_from(Task).where(*filters)) or 0
     rows = list(db.scalars(
         select(Task).where(*filters).order_by(Task.created_at.desc(), Task.id.desc())
@@ -155,8 +158,15 @@ def list_task_items(db: Session, task_id: int, *, page: int, page_size: int) -> 
     return rows, total
 
 
-def active_task_count(db: Session) -> int:
-    return db.scalar(select(func.count()).select_from(Task).where(Task.status.in_(ACTIVE_TASK_STATUSES))) or 0
+def active_task_count(
+    db: Session,
+    *,
+    scheduling_policy: str | None = None,
+) -> int:
+    filters = [Task.status.in_(ACTIVE_TASK_STATUSES)]
+    if scheduling_policy:
+        filters.append(Task.scheduling_policy == scheduling_policy)
+    return db.scalar(select(func.count()).select_from(Task).where(*filters)) or 0
 
 
 def get_active_task_by_type(db: Session, task_type: str) -> Task | None:

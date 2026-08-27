@@ -148,9 +148,13 @@ class ScreeningRuleExecuteHandler:
                 "matches": [
                     {
                         "symbol": result.get("symbol"),
+                        "code": result.get("code"),
                         "name": result.get("name"),
                         "data_end_date": result.get("data_end_date"),
                         "signal_date": result.get("signal_date"),
+                        "evidence": result.get("evidence", []),
+                        "metrics": result.get("metrics", {}),
+                        "insufficient_history": result.get("insufficient_history", False),
                     }
                     for result in matched
                 ],

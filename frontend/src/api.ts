@@ -43,16 +43,27 @@ export const api = {
   reorderTagStocks: (tagId: number, symbols: string[]) => request<{ symbols: string[] }>(`/api/tags/${tagId}/stocks/order`, { method: 'PUT', body: JSON.stringify({ symbols }) }),
   createStockDirectoryTask: () => request<Task>('/api/tasks/stock-directory-refresh', { method: 'POST' }),
   createMarketDailyBarsTask: (mode: 'incremental' | 'full') => request<Task>('/api/tasks/market-daily-bars-update', { method: 'POST', body: JSON.stringify({ mode }) }),
+  createSR001ScreeningTask: (asOfDate: string, symbols?: string[]) => request<Task>('/api/tasks/screening-rule-execute', {
+    method: 'POST', body: JSON.stringify({ rule_id: 'SR001', rule_revision: 1, parameters: {}, as_of_date: asOfDate, ...(symbols?.length ? { symbols } : {}) }),
+  }),
+  createSR001IndividualBacktestTask: (symbol: string, startDate: string, endDate: string) => request<Task>('/api/tasks/individual-backtest', {
+    method: 'POST', body: JSON.stringify({ rule_id: 'SR001', rule_revision: 1, parameters: {}, symbol, start_date: startDate, end_date: endDate }),
+  }),
   marketDailyBarsCoverage: () => request<{ start_date: string | null; end_date: string | null }>('/api/tasks/market-daily-bars-coverage'),
-  tasks: (page = 1, pageSize = 20, status = '', taskType = '') => {
+  tasks: (page = 1, pageSize = 20, status = '', taskType = '', schedulingPolicy = '') => {
     const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
     if (status) query.set('status', status)
     if (taskType) query.set('task_type', taskType)
+    if (schedulingPolicy) query.set('scheduling_policy', schedulingPolicy)
     return request<Page<Task>>(`/api/tasks?${query}`)
   },
   task: (id: number) => request<Task>(`/api/tasks/${id}`),
   taskItems: (id: number, page = 1, pageSize = 50) => request<Page<TaskItem>>(`/api/tasks/${id}/items?page=${page}&page_size=${pageSize}`),
   cancelTask: (id: number) => request<Task>(`/api/tasks/${id}/cancel`, { method: 'POST' }),
   retryFailedMarketDailyBarsTask: (id: number) => request<Task>(`/api/tasks/${id}/retry-failed`, { method: 'POST' }),
-  activeTaskCount: () => request<{ count: number }>('/api/tasks/active-count'),
+  activeTaskCount: (schedulingPolicy = '') => {
+    const query = new URLSearchParams()
+    if (schedulingPolicy) query.set('scheduling_policy', schedulingPolicy)
+    return request<{ count: number }>(`/api/tasks/active-count${query.size ? `?${query}` : ''}`)
+  },
 }

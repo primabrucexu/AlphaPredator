@@ -514,10 +514,15 @@ def test_worker_recovery_marks_interrupted_tasks_failed():
 
 def test_task_api_lists_details_items_and_cancels(db):
     register_handler("api-test", RecordingHandler([]))
+    register_handler("api-other", RecordingHandler([]))
     try:
         task = create_task(
             db, task_type="api-test", scheduling_policy=SchedulingPolicy.COMPUTE,
             title="API test", input=item_input("first"), start_worker=lambda: None,
+        )
+        other_task = create_task(
+            db, task_type="api-other", scheduling_policy=SchedulingPolicy.EXCLUSIVE_UPDATE,
+            title="Other API test", input=item_input("second"), start_worker=lambda: None,
         )
         app = FastAPI()
         app.include_router(api_router)
@@ -529,9 +534,17 @@ def test_task_api_lists_details_items_and_cancels(db):
         client = TestClient(app)
 
         listing = client.get("/api/tasks").json()
-        assert listing["total"] == 1
-        assert listing["items"][0]["id"] == task.id
-        assert client.get("/api/tasks/active-count").json() == {"count": 1}
+        assert listing["total"] == 2
+        assert listing["items"][0]["id"] == other_task.id
+        compute = client.get("/api/tasks", params={"scheduling_policy": "COMPUTE"}).json()
+        assert compute["total"] == 1
+        assert compute["items"][0]["id"] == task.id
+        updates = client.get("/api/tasks", params={"scheduling_policy": "EXCLUSIVE_UPDATE"}).json()
+        assert updates["total"] == 1
+        assert updates["items"][0]["id"] == other_task.id
+        assert client.get("/api/tasks/active-count").json() == {"count": 2}
+        assert client.get("/api/tasks/active-count", params={"scheduling_policy": "COMPUTE"}).json() == {"count": 1}
+        assert client.get("/api/tasks/active-count", params={"scheduling_policy": "EXCLUSIVE_UPDATE"}).json() == {"count": 1}
         assert client.get(f"/api/tasks/{task.id}/items").json()["items"][0]["title"] == "first"
         cancelled = client.post(f"/api/tasks/{task.id}/cancel")
         assert cancelled.status_code == 200
@@ -539,3 +552,4 @@ def test_task_api_lists_details_items_and_cancels(db):
         assert client.get("/api/tasks/99999").status_code == 404
     finally:
         unregister_handler("api-test")
+        unregister_handler("api-other")

@@ -3,9 +3,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Card, Descriptions, Modal, Space, Table, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
-import { useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Navigate, useNavigate, useParams } from 'react-router-dom'
 import { ApiError, api } from '../api'
+import SR001TaskResult from '../components/SR001TaskResult'
 import { activeTaskStatuses, TaskProgress, TaskStatusTag } from '../components/TaskStatusTag'
 import type { Task, TaskItem } from '../types'
 
@@ -25,11 +26,16 @@ function resultItems(task: Task) {
   }))
 }
 
-export default function TaskDetailPage() {
+export default function TaskDetailPage({ section = 'tasks' }: { section?: 'tasks' | 'screening' }) {
   const navigate = useNavigate(); const client = useQueryClient(); const taskId = Number(useParams().taskId); const [page, setPage] = useState(1)
   const [modal, modalContext] = Modal.useModal()
   const task = useQuery({ queryKey: ['task', taskId], queryFn: () => api.task(taskId), enabled: Number.isInteger(taskId), refetchInterval: query => activeTaskStatuses.has(query.state.data?.status ?? '') ? 2000 : false })
   const items = useQuery({ queryKey: ['task-items', taskId, page], queryFn: () => api.taskItems(taskId, page, 50), enabled: Number.isInteger(taskId), refetchInterval: () => activeTaskStatuses.has(task.data?.status ?? '') ? 2000 : false })
+  useEffect(() => {
+    if (task.data && !activeTaskStatuses.has(task.data.status)) {
+      void client.invalidateQueries({ queryKey: ['task-items', taskId] })
+    }
+  }, [client, task.data?.status, taskId])
   const isMarketDailyBarsTask = task.data?.task_type === 'market_daily_bars_update'
   const cancel = useMutation({ mutationFn: () => api.cancelTask(taskId), onSuccess: () => { message.success('已提交取消请求'); client.invalidateQueries({ queryKey: ['task', taskId] }); client.invalidateQueries({ queryKey: ['tasks'] }) }, onError: error => message.error(error.message) })
   const retry = useMutation({
@@ -56,9 +62,12 @@ export default function TaskDetailPage() {
     { title: '错误', dataIndex: 'error', render: value => value || '—' },
   ]
   if (task.error) return <Alert type="error" showIcon message="任务详情读取失败" description={(task.error as Error).message} />
+  if (task.data && section === 'tasks' && task.data.scheduling_policy === 'COMPUTE') return <Navigate replace to={`/screening/tasks/${taskId}`} />
+  if (task.data && section === 'screening' && task.data.scheduling_policy !== 'COMPUTE') return <Navigate replace to={`/tasks/${taskId}`} />
   const summaryItems = task.data ? resultItems(task.data) : []
+  const isSR001Task = task.data?.input.rule_id === 'SR001'
   return <div className="stack-lg task-detail-page">{modalContext}
-    <div><Button type="link" icon={<ArrowLeftOutlined />} onClick={() => navigate('/tasks')}>返回任务列表</Button></div>
+    <div><Button type="link" icon={<ArrowLeftOutlined />} onClick={() => navigate(section === 'screening' ? '/screening' : '/tasks')}>{section === 'screening' ? '返回模式选股' : '返回任务列表'}</Button></div>
     <Card loading={task.isLoading} title={task.data?.title ?? '任务详情'} extra={task.data && ['PENDING', 'RUNNING'].includes(task.data.status)
       ? <Button danger icon={<StopOutlined />} loading={cancel.isPending} onClick={confirmCancel}>取消任务</Button>
       : task.data?.task_type === 'market_daily_bars_update' && task.data.status === 'PARTIALLY_SUCCEEDED'
@@ -77,7 +86,8 @@ export default function TaskDetailPage() {
         {task.data.error && <Alert type="error" showIcon message="任务错误" description={task.data.error} />}
       </Space>}
     </Card>
-    {summaryItems.length > 0 && <Card title="执行结果"><Descriptions column={{ xs: 1, sm: 2, lg: 3 }} items={summaryItems} /></Card>}
+    {task.data && isSR001Task && <SR001TaskResult task={task.data} />}
+    {!isSR001Task && summaryItems.length > 0 && <Card title="执行结果"><Descriptions column={{ xs: 1, sm: 2, lg: 3 }} items={summaryItems} /></Card>}
     <Card title="子任务">
       {items.error && <Alert type="error" showIcon message="子任务读取失败" description={(items.error as Error).message} className="mb-16" />}
       <Table<TaskItem> rowKey="id" loading={items.isLoading} dataSource={items.data?.items} columns={columns} pagination={{ current: page, pageSize: 50, total: items.data?.total, showSizeChanger: false, onChange: setPage }} locale={{ emptyText: '该任务没有子任务' }} />

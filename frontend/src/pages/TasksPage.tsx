@@ -31,7 +31,7 @@ export default function TasksPage() {
     },
   })
   const tasks = useQuery({
-    queryKey: ['tasks', page, status, taskType], queryFn: () => api.tasks(page, 20, status, taskType.trim()),
+    queryKey: ['tasks', page, status, taskType], queryFn: () => api.tasks(page, 20, status, taskType.trim(), 'EXCLUSIVE_UPDATE'),
     refetchInterval: query => query.state.data?.items.some(task => activeTaskStatuses.has(task.status)) ? 2000 : false,
   })
   const columns: ColumnsType<Task> = [

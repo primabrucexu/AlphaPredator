@@ -141,7 +141,18 @@ def test_screening_task_uses_one_stable_item_per_stock_and_worker_store():
         with factory() as db:
             task = db.get(Task, task_id)
             assert task.status == TaskStatus.SUCCEEDED.value
-            assert load_json(task.result_json)["matched_stocks"] == 1
+            result = load_json(task.result_json)
+            assert result["matched_stocks"] == 1
+            assert result["matches"] == [{
+                "symbol": "000001.SZ",
+                "code": "000001",
+                "name": "平安银行",
+                "data_end_date": "2026-01-03",
+                "signal_date": "2026-01-03",
+                "evidence": [],
+                "metrics": {"bar_count": 3},
+                "insufficient_history": False,
+            }]
         assert store.closed
     finally:
         register_production_handlers()

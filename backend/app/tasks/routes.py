@@ -95,15 +95,24 @@ def task_list(
     page_size: int = Query(20, ge=1, le=100),
     status: str | None = None,
     task_type: str | None = None,
+    scheduling_policy: str | None = None,
     db: Session = Depends(get_session),
 ):
-    tasks, total = list_tasks(db, page=page, page_size=page_size, status=status, task_type=task_type)
+    tasks, total = list_tasks(
+        db, page=page, page_size=page_size, status=status, task_type=task_type,
+        scheduling_policy=scheduling_policy,
+    )
     return TaskPage(items=[task_read(task) for task in tasks], total=total, page=page, page_size=page_size)
 
 
 @router.get("/active-count", response_model=ActiveTaskCount)
-def task_active_count(db: Session = Depends(get_session)):
-    return ActiveTaskCount(count=active_task_count(db))
+def task_active_count(
+    scheduling_policy: str | None = None,
+    db: Session = Depends(get_session),
+):
+    return ActiveTaskCount(count=active_task_count(
+        db, scheduling_policy=scheduling_policy,
+    ))
 
 
 def _raise_operation_error(exc: TaskOperationError) -> None:
