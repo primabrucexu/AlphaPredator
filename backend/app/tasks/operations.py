@@ -13,6 +13,7 @@ from app.market_data.provider.base import normalize_symbol
 
 from .handlers.individual_backtest import TASK_TYPE as INDIVIDUAL_BACKTEST_TASK_TYPE
 from .handlers.market_daily_bars import TASK_TYPE as MARKET_DAILY_BARS_TASK_TYPE
+from .handlers.mode_screening import TASK_TYPE as MODE_SCREENING_TASK_TYPE
 from .handlers.screening import TASK_TYPE as SCREENING_RULE_TASK_TYPE
 from .handlers.stock_directory import TASK_TYPE as STOCK_DIRECTORY_TASK_TYPE
 from .models import SchedulingPolicy, Task, TaskItem, TaskItemStatus, TaskStatus
@@ -116,6 +117,39 @@ def create_individual_backtest_task(
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
         },
+        start_worker=start_worker,
+    )
+
+
+def create_mode_screening_analysis_task(
+    db: Session,
+    *,
+    rule_id: str,
+    rule_revision: int,
+    parameters: dict,
+    as_of_date: date,
+    symbols: list[str] | None = None,
+    start_worker: Callable[[], None] = start_worker_process,
+) -> Task:
+    normalized_symbols = None
+    if symbols is not None:
+        try:
+            normalized_symbols = sorted({normalize_symbol(symbol) for symbol in symbols})
+        except ValueError as exc:
+            raise TaskOperationError(str(exc)) from exc
+    task_input = {
+        "rule_id": rule_id,
+        "rule_revision": rule_revision,
+        "parameters": parameters,
+        "as_of_date": as_of_date.isoformat(),
+    }
+    if normalized_symbols is not None:
+        task_input["symbols"] = normalized_symbols
+    return _create_compute_task(
+        db,
+        task_type=MODE_SCREENING_TASK_TYPE,
+        title=f"模式选股分析 {rule_id} v{rule_revision}（{as_of_date.isoformat()}）",
+        input=task_input,
         start_worker=start_worker,
     )
 

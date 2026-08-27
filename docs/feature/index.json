@@ -77,6 +77,13 @@
       "status": "部分完成",
       "mcp_status": "待确认",
       "document": "F006.3-trend-reversal-strategy.md"
+    },
+    {
+      "id": "F006.4",
+      "summary": "扫描当前规则信号并为每只命中股票联动展示历史个股回测表现",
+      "status": "WIP",
+      "mcp_status": "待确认",
+      "document": "F006.4-mode-screening-with-backtest-analysis.md"
     }
   ]
 }

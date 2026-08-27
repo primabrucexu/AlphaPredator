@@ -4,7 +4,14 @@ from uuid import uuid4
 
 from sqlalchemy import Engine, inspect
 
-from .models import Task, TaskItem, TaskWorkerLease
+from .models import (
+    ModeScreeningSaleResult,
+    ModeScreeningStockResult,
+    ModeScreeningTradeResult,
+    Task,
+    TaskItem,
+    TaskWorkerLease,
+)
 
 
 def migrate_task_tables(engine: Engine) -> bool:
@@ -52,3 +59,18 @@ def migrate_task_public_uuids(engine: Engine) -> bool:
             "CREATE UNIQUE INDEX IF NOT EXISTS ix_tasks_uuid ON tasks (uuid)"
         )
     return changed
+
+
+def migrate_mode_screening_results(engine: Engine) -> bool:
+    """Create additive F006.4 result tables without changing existing tasks."""
+    created = False
+    with engine.begin() as connection:
+        for table in (
+            ModeScreeningStockResult.__table__,
+            ModeScreeningTradeResult.__table__,
+            ModeScreeningSaleResult.__table__,
+        ):
+            if not inspect(connection).has_table(table.name):
+                table.create(connection)
+                created = True
+    return created

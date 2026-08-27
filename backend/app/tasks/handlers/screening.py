@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from datetime import date
+from threading import Lock, local
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -60,7 +61,9 @@ class ScreeningRuleExecuteHandler:
         self.registry = registry
         self.session_factory = session_factory
         self.store_factory = store_factory
-        self._store: DuckDbMarketDataStore | None = None
+        self._thread_state = local()
+        self._stores: list[DuckDbMarketDataStore] = []
+        self._stores_lock = Lock()
 
     def build_items(self, task_input: dict) -> list[TaskItemSpec]:
         rule_id, revision, parameters, as_of_date = _parse_rule_input(task_input, self.registry)
@@ -100,9 +103,21 @@ class ScreeningRuleExecuteHandler:
         ]
 
     def _market_store(self) -> DuckDbMarketDataStore:
-        if self._store is None:
-            self._store = self.store_factory()
-        return self._store
+        store = getattr(self._thread_state, "market_store", None)
+        if store is None:
+            store = self.store_factory()
+            self._thread_state.market_store = store
+            with self._stores_lock:
+                self._stores.append(store)
+        return store
+
+    def _close_market_stores(self) -> None:
+        with self._stores_lock:
+            stores, self._stores = self._stores, []
+        for store in stores:
+            store.close()
+        if hasattr(self._thread_state, "market_store"):
+            del self._thread_state.market_store
 
     def run_item(self, task: Task, item: TaskItem, context: TaskContext) -> dict:
         item_input = _json(item.input_json)
@@ -160,6 +175,4 @@ class ScreeningRuleExecuteHandler:
                 ],
             }
         finally:
-            if self._store is not None:
-                self._store.close()
-                self._store = None
+            self._close_market_stores()

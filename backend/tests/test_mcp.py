@@ -176,6 +176,7 @@ def _patch_main_startup(monkeypatch, main_module) -> list[str]:
         "migrate_stock_tag_order",
         "migrate_task_tables",
         "migrate_task_public_uuids",
+        "migrate_mode_screening_results",
         "sync_tagged_stocks_to_watchlist",
     ):
         monkeypatch.setattr(main_module, name, lambda *_args, _name=name: events.append(_name))
@@ -223,6 +224,7 @@ def test_main_mounts_mcp_and_preserves_lifespan(monkeypatch) -> None:
         "migrate_stock_tag_order",
         "migrate_task_tables",
         "migrate_task_public_uuids",
+        "migrate_mode_screening_results",
         "create_all",
         "sync_tagged_stocks_to_watchlist",
         "session",

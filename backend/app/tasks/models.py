@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from uuid import uuid4
 
-from sqlalchemy import ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.session import Base
@@ -90,3 +90,70 @@ class TaskWorkerLease(Base):
     owner_id: Mapped[str] = mapped_column(String(64), default="")
     acquired_at: Mapped[datetime | None]
     heartbeat_at: Mapped[datetime | None]
+
+
+class ModeScreeningStockResult(Base):
+    __tablename__ = "mode_screening_stock_results"
+    __table_args__ = (
+        UniqueConstraint("task_id", "symbol"),
+        UniqueConstraint("task_item_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
+    task_item_id: Mapped[int] = mapped_column(
+        ForeignKey("task_items.id", ondelete="CASCADE"), index=True
+    )
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    code: Mapped[str] = mapped_column(String(6))
+    name: Mapped[str] = mapped_column(String(64))
+    as_of_date: Mapped[str] = mapped_column(String(10))
+    data_start_date: Mapped[str | None] = mapped_column(String(10))
+    data_end_date: Mapped[str | None] = mapped_column(String(10))
+    signal_date: Mapped[str | None] = mapped_column(String(10))
+    insufficient_history: Mapped[bool] = mapped_column(Boolean, default=False)
+    evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    metrics_json: Mapped[str] = mapped_column(Text, default="{}")
+    backtest_status: Mapped[str] = mapped_column(String(32))
+    completed_trades: Mapped[int] = mapped_column(default=0)
+    winning_trades: Mapped[int] = mapped_column(default=0)
+    losing_trades: Mapped[int] = mapped_column(default=0)
+    flat_trades: Mapped[int] = mapped_column(default=0)
+    win_rate: Mapped[str | None] = mapped_column(String(64))
+    average_return: Mapped[str | None] = mapped_column(String(64))
+    maximum_return: Mapped[str | None] = mapped_column(String(64))
+    minimum_return: Mapped[str | None] = mapped_column(String(64))
+    open_trade_json: Mapped[str] = mapped_column(Text, default="null")
+    pending_orders_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(default=utc_now)
+
+
+class ModeScreeningTradeResult(Base):
+    __tablename__ = "mode_screening_trade_results"
+    __table_args__ = (UniqueConstraint("stock_result_id", "sequence"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    stock_result_id: Mapped[int] = mapped_column(
+        ForeignKey("mode_screening_stock_results.id", ondelete="CASCADE"), index=True
+    )
+    sequence: Mapped[int]
+    signal_date: Mapped[str] = mapped_column(String(10))
+    buy_date: Mapped[str] = mapped_column(String(10))
+    buy_price: Mapped[str] = mapped_column(String(64))
+    realized_return: Mapped[str] = mapped_column(String(64))
+
+
+class ModeScreeningSaleResult(Base):
+    __tablename__ = "mode_screening_sale_results"
+    __table_args__ = (UniqueConstraint("trade_result_id", "sequence"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    trade_result_id: Mapped[int] = mapped_column(
+        ForeignKey("mode_screening_trade_results.id", ondelete="CASCADE"), index=True
+    )
+    sequence: Mapped[int]
+    trade_date: Mapped[str] = mapped_column(String(10))
+    reason_id: Mapped[str] = mapped_column(String(32))
+    price: Mapped[str] = mapped_column(String(64))
+    fraction_of_original: Mapped[str] = mapped_column(String(64))
+    return_rate: Mapped[str] = mapped_column(String(64))

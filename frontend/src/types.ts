@@ -24,3 +24,22 @@ export interface TaskItem {
   result: Record<string, unknown>; error: string; started_at: string | null; finished_at: string | null; updated_at: string
 }
 export interface Page<T> { items: T[]; total: number; page: number; page_size: number }
+
+export interface ModeScreeningStockResult {
+  id: number; symbol: string; code: string; name: string; as_of_date: string
+  data_start_date: string | null; data_end_date: string | null; signal_date: string | null
+  insufficient_history: boolean; evidence: Array<{ condition_id: string; passed: boolean; values: Record<string, unknown> }>
+  metrics: Record<string, unknown>; backtest_status: string; completed_trades: number
+  winning_trades: number; losing_trades: number; flat_trades: number; win_rate: string | null
+  average_return: string | null; maximum_return: string | null; minimum_return: string | null
+  open_trade: Record<string, unknown> | null; pending_orders: Array<Record<string, unknown>>
+}
+
+export interface ModeScreeningSaleResult {
+  date: string; reason_id: string; price: string; fraction_of_original: string; return_rate: string
+}
+
+export interface ModeScreeningTradeResult {
+  id: number; sequence: number; signal_date: string; buy_date: string; buy_price: string
+  realized_return: string; sells: ModeScreeningSaleResult[]
+}

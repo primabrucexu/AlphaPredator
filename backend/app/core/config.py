@@ -12,3 +12,7 @@ DATABASE_URL = os.getenv(
     "ALPHAPREDATOR_DATABASE_URL",
     f"sqlite:///{(DATA_DIR / 'alphapredator.db').as_posix()}",
 )
+COMPUTE_TASK_PARALLELISM = max(
+    1,
+    int(os.getenv("ALPHAPREDATOR_COMPUTE_TASK_PARALLELISM", "1")),
+)

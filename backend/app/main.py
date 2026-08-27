@@ -12,7 +12,11 @@ from app.database.migrations import migrate_legacy_tags, migrate_legacy_watchlis
 from app.database.session import Base, SessionLocal, engine
 from app.market_data.provider import close_process_market_provider, get_process_market_provider
 from app.mcp_server import mcp_app
-from app.tasks.migrations import migrate_task_public_uuids, migrate_task_tables
+from app.tasks.migrations import (
+    migrate_mode_screening_results,
+    migrate_task_public_uuids,
+    migrate_task_tables,
+)
 from app.tasks.handlers.production import register_production_handlers
 from app.tasks.process import start_worker_process
 from app.tasks.service import next_pending_task
@@ -28,6 +32,7 @@ async def lifespan(app: FastAPI):
     migrate_stock_tag_order(engine)
     migrate_task_tables(engine)
     migrate_task_public_uuids(engine)
+    migrate_mode_screening_results(engine)
     Base.metadata.create_all(engine)
     sync_tagged_stocks_to_watchlist(engine)
     with SessionLocal() as session:

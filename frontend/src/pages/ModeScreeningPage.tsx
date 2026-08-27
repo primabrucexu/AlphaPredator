@@ -1,6 +1,6 @@
-import { FundOutlined, LineChartOutlined, RiseOutlined } from '@ant-design/icons'
+import { FundOutlined, RiseOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Card, Col, DatePicker, Radio, Row, Select, Space, Table, Typography, message } from 'antd'
+import { Alert, Button, Card, DatePicker, Radio, Select, Space, Table, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs, { type Dayjs } from 'dayjs'
 import { useEffect, useState } from 'react'
@@ -17,26 +17,19 @@ const statusOptions = [
 const taskTypeOptions = [
   { value: 'screening_rule_execute', label: '信号扫描' },
   { value: 'individual_backtest', label: '个股历史回测' },
+  { value: 'mode_screening_analysis', label: '模式选股分析' },
 ]
 
 export default function ModeScreeningPage() {
   const navigate = useNavigate(); const client = useQueryClient(); const [page, setPage] = useState(1); const [status, setStatus] = useState(''); const [taskType, setTaskType] = useState('')
   const [screeningScope, setScreeningScope] = useState<'market' | 'symbols'>('market')
   const [screeningDate, setScreeningDate] = useState<Dayjs | null>(null); const [screeningSearch, setScreeningSearch] = useState(''); const [screeningStocks, setScreeningStocks] = useState<Array<{ value: string; label: string }>>([])
-  const [backtestSearch, setBacktestSearch] = useState(''); const [backtestStock, setBacktestStock] = useState<{ value: string; label: string } | null>(null); const [backtestRange, setBacktestRange] = useState<[Dayjs, Dayjs] | null>(null)
   const marketCoverage = useQuery({ queryKey: ['market-daily-bars-coverage'], queryFn: api.marketDailyBarsCoverage })
   const screeningStockOptions = useQuery({ queryKey: ['sr001-screening-stock-search', screeningSearch], queryFn: () => api.searchStocks(screeningSearch), enabled: screeningSearch.trim().length > 0 })
-  const backtestStockOptions = useQuery({ queryKey: ['sr001-backtest-stock-search', backtestSearch], queryFn: () => api.searchStocks(backtestSearch), enabled: backtestSearch.trim().length > 0 })
   useEffect(() => {
     const coverage = marketCoverage.data
     if (!coverage?.end_date) return
     setScreeningDate(current => current ?? dayjs(coverage.end_date))
-    setBacktestRange(current => {
-      if (current) return current
-      const end = dayjs(coverage.end_date); const first = coverage.start_date ? dayjs(coverage.start_date) : end
-      const candidate = end.subtract(3, 'month')
-      return [candidate.isBefore(first) ? first : candidate, end]
-    })
   }, [marketCoverage.data])
   const createTask = useMutation<Task, Error, () => Promise<Task>>({
     mutationFn: factory => factory(),
@@ -60,7 +53,7 @@ export default function ModeScreeningPage() {
   })
   const columns: ColumnsType<Task> = [
     { title: '任务', dataIndex: 'title', render: (value, row) => <><Typography.Text strong>{value}</Typography.Text><br /><Typography.Text type="secondary">{row.task_type}</Typography.Text></> },
-    { title: '模式', dataIndex: 'task_type', width: 140, render: value => value === 'screening_rule_execute' ? '信号扫描' : '个股历史回测' },
+    { title: '模式', dataIndex: 'task_type', width: 140, render: value => value === 'mode_screening_analysis' ? '模式选股分析' : value === 'screening_rule_execute' ? '信号扫描' : '个股历史回测' },
     { title: '状态', dataIndex: 'status', width: 110, render: value => <TaskStatusTag status={value} /> },
     { title: '进度', dataIndex: 'progress', width: 190, render: (value, row) => <TaskProgress progress={value} status={row.status} /> },
     { title: '子任务', width: 110, render: (_, row) => `${row.completed_items}/${row.total_items}` },
@@ -68,24 +61,17 @@ export default function ModeScreeningPage() {
   ]
   const stockOptions = (stocks: StockSummary[] = []) => stocks.map(stock => ({ value: stock.symbol, label: `${stock.code} ${stock.name}` }))
   const screeningOptions = [...screeningStocks, ...stockOptions(screeningStockOptions.data).filter(option => !screeningStocks.some(selected => selected.value === option.value))]
-  const backtestOptions = [...(backtestStock ? [backtestStock] : []), ...stockOptions(backtestStockOptions.data).filter(option => option.value !== backtestStock?.value)]
   const createScreening = () => {
     if (!screeningDate) return message.error('请选择选股基准日期')
     if (screeningScope === 'symbols' && !screeningStocks.length) return message.error('请至少选择一只股票')
-    createTask.mutate(() => api.createSR001ScreeningTask(
+    createTask.mutate(() => api.createSR001ModeScreeningTask(
       screeningDate.format('YYYY-MM-DD'), screeningScope === 'symbols' ? screeningStocks.map(stock => stock.value) : undefined,
     ))
   }
-  const createBacktest = () => {
-    if (!backtestStock) return message.error('请选择回测股票')
-    if (!backtestRange) return message.error('请选择回测日期范围')
-    createTask.mutate(() => api.createSR001IndividualBacktestTask(backtestStock.value, backtestRange[0].format('YYYY-MM-DD'), backtestRange[1].format('YYYY-MM-DD')))
-  }
   return <div className="stack-lg tasks-page">
-    <div><Typography.Title>模式选股</Typography.Title><Typography.Text type="secondary">创建并查看选股规则执行和历史回测结果。</Typography.Text></div>
-    <Card title="SR001 趋势反转" extra={<RiseOutlined />}><Row gutter={[16, 16]}>
-      <Col xs={24} xl={12}><Card type="inner" title="信号扫描" extra={<FundOutlined />}>
-        <Typography.Paragraph type="secondary">按 SR001 revision 1 扫描指定日期，找出出现对应信号的股票。</Typography.Paragraph>
+    <div><Typography.Title>模式选股</Typography.Title><Typography.Text type="secondary">扫描当前出现信号的股票，并直接查看其历史回测表现。</Typography.Text></div>
+    <Card title="SR001 趋势反转" extra={<RiseOutlined />}><Card type="inner" title="扫描并分析历史表现" extra={<FundOutlined />}>
+        <Typography.Paragraph type="secondary">按 SR001 revision 1 扫描指定日期；只对命中股票自动回测其本地最早行情至扫描日的历史表现。</Typography.Paragraph>
         <Space direction="vertical" className="w-full" size="middle">
           <DatePicker value={screeningDate} onChange={setScreeningDate} allowClear={false} format="YYYY-MM-DD" className="w-full" placeholder="选股基准日期" />
           <Radio.Group value={screeningScope} onChange={event => setScreeningScope(event.target.value)} options={[
@@ -96,20 +82,9 @@ export default function ModeScreeningPage() {
             : <Select mode="multiple" labelInValue allowClear showSearch filterOption={false} value={screeningStocks} onChange={setScreeningStocks}
               onSearch={setScreeningSearch} options={screeningOptions} loading={screeningStockOptions.isFetching}
               className="w-full" placeholder="搜索并选择股票" notFoundContent={screeningSearch && !screeningStockOptions.isFetching ? '未找到股票' : null} />}
-          <Button type="primary" loading={createTask.isPending} onClick={createScreening}>{screeningScope === 'market' ? '扫描全市场信号' : '扫描指定股票'}</Button>
+          <Button type="primary" loading={createTask.isPending} onClick={createScreening}>{screeningScope === 'market' ? '扫描全市场并分析' : '扫描指定股票并分析'}</Button>
         </Space>
-      </Card></Col>
-      <Col xs={24} xl={12}><Card type="inner" title="个股历史回测" extra={<LineChartOutlined />}>
-        <Typography.Paragraph type="secondary">选择一只股票和历史区间，按 SR001 的买入、TP1、EX1、SL1 规则执行确定性回测。</Typography.Paragraph>
-        <Space direction="vertical" className="w-full" size="middle">
-          <Select labelInValue allowClear showSearch filterOption={false} value={backtestStock} onChange={setBacktestStock} onSearch={setBacktestSearch}
-            options={backtestOptions} loading={backtestStockOptions.isFetching} className="w-full" placeholder="搜索并选择股票"
-            notFoundContent={backtestSearch && !backtestStockOptions.isFetching ? '未找到股票' : null} />
-          <DatePicker.RangePicker value={backtestRange} onChange={value => setBacktestRange(value?.[0] && value[1] ? [value[0], value[1]] : null)} allowClear={false} format="YYYY-MM-DD" className="w-full" />
-          <Button type="primary" loading={createTask.isPending} onClick={createBacktest}>创建个股回测任务</Button>
-        </Space>
-      </Card></Col>
-    </Row></Card>
+      </Card></Card>
     <Card title="选股任务记录" extra={<Space wrap>
       <Select allowClear placeholder="全部模式" options={taskTypeOptions} value={taskType || undefined} onChange={value => { setTaskType(value ?? ''); setPage(1) }} />
       <Select allowClear placeholder="全部状态" options={statusOptions} value={status || undefined} onChange={value => { setStatus(value ?? ''); setPage(1) }} />

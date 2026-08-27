@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from threading import Event, Lock, Thread
+from time import sleep
 from uuid import UUID
 
 import pytest
@@ -14,7 +16,11 @@ from app.api.router import api_router
 from app.database.session import Base, get_session
 from app.tasks import process as task_process
 from app.tasks.handlers import TaskItemSkipped, TaskItemSpec, register_handler, unregister_handler
-from app.tasks.migrations import migrate_task_public_uuids, migrate_task_tables
+from app.tasks.migrations import (
+    migrate_mode_screening_results,
+    migrate_task_public_uuids,
+    migrate_task_tables,
+)
 from app.tasks.models import SchedulingPolicy, Task, TaskItem, TaskItemStatus, TaskStatus
 from app.tasks.runner import (
     acquire_worker_lease,
@@ -29,6 +35,15 @@ from app.tasks.worker import run_worker
 def make_factory():
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    return engine, sessionmaker(engine, expire_on_commit=False)
+
+
+def make_file_factory(tmp_path):
+    engine = create_engine(
+        f"sqlite:///{(tmp_path / 'tasks.db').as_posix()}",
+        connect_args={"check_same_thread": False},
     )
     Base.metadata.create_all(engine)
     return engine, sessionmaker(engine, expire_on_commit=False)
@@ -124,6 +139,47 @@ class CancellingFailingSummaryHandler(CancellingHandler):
         raise RuntimeError("summary failed after cancel")
 
 
+class ConcurrencyHandler(RecordingHandler):
+    def __init__(self):
+        super().__init__([])
+        self.lock = Lock()
+        self.active = 0
+        self.maximum_active = 0
+
+    def run_item(self, task, item, context):
+        with self.lock:
+            self.active += 1
+            self.maximum_active = max(self.maximum_active, self.active)
+        try:
+            sleep(0.05)
+            return {"item": item.title}
+        finally:
+            with self.lock:
+                self.active -= 1
+
+
+class BlockingConcurrencyHandler(ConcurrencyHandler):
+    def __init__(self, expected_starts: int):
+        super().__init__()
+        self.expected_starts = expected_starts
+        self.all_started = Event()
+        self.release = Event()
+
+    def run_item(self, task, item, context):
+        with self.lock:
+            self.calls.append(item.title)
+            self.active += 1
+            self.maximum_active = max(self.maximum_active, self.active)
+            if len(self.calls) == self.expected_starts:
+                self.all_started.set()
+        try:
+            assert self.release.wait(2)
+            return {"item": item.title}
+        finally:
+            with self.lock:
+                self.active -= 1
+
+
 def test_task_migration_is_repeatable():
     engine = create_engine("sqlite://")
     with engine.begin() as connection:
@@ -135,6 +191,18 @@ def test_task_migration_is_repeatable():
     assert {"tasks", "task_items", "task_worker_lease"} <= set(inspect(engine).get_table_names())
     with engine.connect() as connection:
         assert connection.exec_driver_sql("SELECT value FROM existing_data").scalar_one() == "kept"
+
+
+def test_mode_screening_result_migration_is_additive_and_repeatable():
+    engine = create_engine("sqlite://", poolclass=StaticPool)
+    assert migrate_task_tables(engine) is True
+    assert migrate_mode_screening_results(engine) is True
+    assert migrate_mode_screening_results(engine) is False
+    assert {
+        "mode_screening_stock_results",
+        "mode_screening_trade_results",
+        "mode_screening_sale_results",
+    } <= set(inspect(engine).get_table_names())
 
 
 def test_task_public_uuid_migration_backfills_existing_rows_and_is_repeatable():
@@ -230,6 +298,103 @@ def test_update_tasks_are_selected_before_compute_tasks_and_items_are_serial():
             assert db.get(Task, compute_id).status == TaskStatus.SUCCEEDED.value
     finally:
         unregister_handler("record")
+
+
+def test_compute_items_run_up_to_configured_parallelism(tmp_path):
+    _engine, factory = make_file_factory(tmp_path)
+    handler = ConcurrencyHandler()
+    register_handler("parallel-compute", handler)
+    try:
+        with factory() as db:
+            task = create_task(
+                db,
+                task_type="parallel-compute",
+                scheduling_policy=SchedulingPolicy.COMPUTE,
+                title="parallel compute",
+                input=item_input("one", "two", "three", "four"),
+                start_worker=lambda: None,
+            )
+            task_id = task.id
+
+        assert run_next_task(factory, compute_parallelism=3) is True
+        with factory() as db:
+            task = db.get(Task, task_id)
+            items = list(db.scalars(
+                select(TaskItem).where(TaskItem.task_id == task_id).order_by(TaskItem.sequence)
+            ))
+            assert task.status == TaskStatus.SUCCEEDED.value
+            assert [item.status for item in items] == [TaskItemStatus.SUCCEEDED.value] * 4
+            assert [load_json(item.result_json)["item"] for item in items] == [
+                "one", "two", "three", "four"
+            ]
+        assert handler.maximum_active == 3
+    finally:
+        unregister_handler("parallel-compute")
+
+
+def test_exclusive_update_items_remain_serial_with_compute_parallelism(tmp_path):
+    _engine, factory = make_file_factory(tmp_path)
+    handler = ConcurrencyHandler()
+    register_handler("serial-update", handler)
+    try:
+        with factory() as db:
+            create_task(
+                db,
+                task_type="serial-update",
+                scheduling_policy=SchedulingPolicy.EXCLUSIVE_UPDATE,
+                title="serial update",
+                input=item_input("one", "two", "three"),
+                start_worker=lambda: None,
+            )
+
+        assert run_next_task(factory, compute_parallelism=4) is True
+        assert handler.maximum_active == 1
+    finally:
+        unregister_handler("serial-update")
+
+
+def test_parallel_compute_cancellation_does_not_start_remaining_items(tmp_path):
+    _engine, factory = make_file_factory(tmp_path)
+    handler = BlockingConcurrencyHandler(expected_starts=2)
+    register_handler("parallel-cancel", handler)
+    runner = None
+    try:
+        with factory() as db:
+            task = create_task(
+                db,
+                task_type="parallel-cancel",
+                scheduling_policy=SchedulingPolicy.COMPUTE,
+                title="parallel cancel",
+                input=item_input("one", "two", "three", "four"),
+                start_worker=lambda: None,
+            )
+            task_id = task.id
+
+        runner = Thread(
+            target=run_next_task,
+            kwargs={"session_factory": factory, "compute_parallelism": 2},
+        )
+        runner.start()
+        assert handler.all_started.wait(2)
+        with factory() as db:
+            request_cancel(db, db.get(Task, task_id))
+        handler.release.set()
+        runner.join(3)
+
+        assert not runner.is_alive()
+        assert set(handler.calls) == {"one", "two"}
+        with factory() as db:
+            task = db.get(Task, task_id)
+            items = list(db.scalars(
+                select(TaskItem).where(TaskItem.task_id == task_id).order_by(TaskItem.sequence)
+            ))
+            assert task.status == TaskStatus.CANCELLED.value
+            assert [item.status for item in items] == [TaskItemStatus.CANCELLED.value] * 4
+    finally:
+        handler.release.set()
+        if runner is not None:
+            runner.join(3)
+        unregister_handler("parallel-cancel")
 
 
 def test_failed_item_allows_partial_success_and_preserves_error():

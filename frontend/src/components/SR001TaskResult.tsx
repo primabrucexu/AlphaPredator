@@ -1,6 +1,7 @@
 import { Alert, Card, Descriptions, Space, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type { Task } from '../types'
+import ModeScreeningAnalysisResult from './ModeScreeningAnalysisResult'
 
 interface Evidence {
   condition_id: string
@@ -137,6 +138,7 @@ function BacktestResult({ task }: { task: Task }) {
 
 export default function SR001TaskResult({ task }: { task: Task }) {
   if (task.input.rule_id !== 'SR001' || Object.keys(task.result).length === 0) return null
+  if (task.task_type === 'mode_screening_analysis') return <ModeScreeningAnalysisResult task={task} />
   if (task.task_type === 'screening_rule_execute') return <ScreeningResult task={task} />
   if (task.task_type === 'individual_backtest') return <BacktestResult task={task} />
   return null

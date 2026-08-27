@@ -1,20 +1,30 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database.session import get_session
 
 from .handlers.market_daily_bars import TASK_TYPE as MARKET_DAILY_BARS_TASK_TYPE
-from .models import Task, TaskItem, TaskItemStatus
+from .handlers.mode_screening import TASK_TYPE as MODE_SCREENING_TASK_TYPE
+from .models import (
+    ModeScreeningSaleResult,
+    ModeScreeningStockResult,
+    ModeScreeningTradeResult,
+    Task,
+    TaskItem,
+    TaskItemStatus,
+)
 from .operations import (
     TaskOperationConflict,
     TaskOperationError,
     create_individual_backtest_task as create_individual_backtest,
     create_market_daily_bars_update_task as create_market_daily_bars_update,
+    create_mode_screening_analysis_task as create_mode_screening_analysis,
     create_screening_rule_task as create_screening_rule,
     create_stock_directory_refresh_task as create_stock_directory_refresh,
     market_target_end_date as _market_target_end_date,
@@ -26,6 +36,11 @@ from .schemas import (
     IndividualBacktestTaskCreate,
     MarketDailyBarsCoverage,
     MarketDailyBarsTaskCreate,
+    ModeScreeningSaleResultRead,
+    ModeScreeningStockResultPage,
+    ModeScreeningStockResultRead,
+    ModeScreeningTradeResultPage,
+    ModeScreeningTradeResultRead,
     ScreeningRuleTaskCreate,
     TaskItemPage,
     TaskItemRead,
@@ -86,6 +101,44 @@ def task_item_read(item: TaskItem) -> TaskItemRead:
         started_at=item.started_at,
         finished_at=item.finished_at,
         updated_at=item.updated_at,
+    )
+
+
+def _load_json_value(value: str, fallback):
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return fallback
+
+
+def mode_screening_stock_read(result: ModeScreeningStockResult) -> ModeScreeningStockResultRead:
+    evidence = _load_json_value(result.evidence_json, [])
+    metrics = _load_json_value(result.metrics_json, {})
+    open_trade = _load_json_value(result.open_trade_json, None)
+    pending_orders = _load_json_value(result.pending_orders_json, [])
+    return ModeScreeningStockResultRead(
+        id=result.id,
+        symbol=result.symbol,
+        code=result.code,
+        name=result.name,
+        as_of_date=result.as_of_date,
+        data_start_date=result.data_start_date,
+        data_end_date=result.data_end_date,
+        signal_date=result.signal_date,
+        insufficient_history=result.insufficient_history,
+        evidence=evidence if isinstance(evidence, list) else [],
+        metrics=metrics if isinstance(metrics, dict) else {},
+        backtest_status=result.backtest_status,
+        completed_trades=result.completed_trades,
+        winning_trades=result.winning_trades,
+        losing_trades=result.losing_trades,
+        flat_trades=result.flat_trades,
+        win_rate=result.win_rate,
+        average_return=result.average_return,
+        maximum_return=result.maximum_return,
+        minimum_return=result.minimum_return,
+        open_trade=open_trade if isinstance(open_trade, dict) else None,
+        pending_orders=pending_orders if isinstance(pending_orders, list) else [],
     )
 
 
@@ -188,6 +241,29 @@ def create_screening_task(
 
 
 @router.post(
+    "/mode-screening-analysis",
+    response_model=TaskRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def create_mode_screening_task(
+    payload: ScreeningRuleTaskCreate,
+    db: Session = Depends(get_session),
+):
+    try:
+        return task_read(create_mode_screening_analysis(
+            db,
+            rule_id=payload.rule_id,
+            rule_revision=payload.rule_revision,
+            parameters=payload.parameters,
+            as_of_date=payload.as_of_date,
+            symbols=payload.symbols,
+            start_worker=start_worker_process,
+        ))
+    except TaskOperationError as exc:
+        _raise_operation_error(exc)
+
+
+@router.post(
     "/individual-backtest",
     response_model=TaskRead,
     status_code=status.HTTP_202_ACCEPTED,
@@ -249,6 +325,87 @@ def market_daily_bars_coverage(db: Session = Depends(get_session)):
     if first_dates and last_dates:
         return MarketDailyBarsCoverage(start_date=min(first_dates), end_date=max(last_dates))
     return MarketDailyBarsCoverage(start_date=None, end_date=None)
+
+
+@router.get(
+    "/{task_id}/mode-screening-results",
+    response_model=ModeScreeningStockResultPage,
+)
+def mode_screening_results(
+    task_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_session),
+):
+    task = get_task(db, task_id)
+    if task is None:
+        raise HTTPException(404, "任务不存在")
+    if task.task_type != MODE_SCREENING_TASK_TYPE:
+        raise HTTPException(400, "该任务不是模式选股分析任务")
+    filters = [ModeScreeningStockResult.task_id == task_id]
+    total = db.scalar(select(func.count()).select_from(ModeScreeningStockResult).where(*filters)) or 0
+    rows = db.scalars(
+        select(ModeScreeningStockResult).where(*filters)
+        .order_by(ModeScreeningStockResult.symbol)
+        .offset((page - 1) * page_size).limit(page_size)
+    ).all()
+    return ModeScreeningStockResultPage(
+        items=[mode_screening_stock_read(row) for row in rows],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get(
+    "/{task_id}/mode-screening-results/{result_id}/trades",
+    response_model=ModeScreeningTradeResultPage,
+)
+def mode_screening_trades(
+    task_id: int,
+    result_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_session),
+):
+    stock_result = db.get(ModeScreeningStockResult, result_id)
+    if stock_result is None or stock_result.task_id != task_id:
+        raise HTTPException(404, "命中股票结果不存在")
+    filters = [ModeScreeningTradeResult.stock_result_id == result_id]
+    total = db.scalar(select(func.count()).select_from(ModeScreeningTradeResult).where(*filters)) or 0
+    trades = list(db.scalars(
+        select(ModeScreeningTradeResult).where(*filters)
+        .order_by(ModeScreeningTradeResult.sequence)
+        .offset((page - 1) * page_size).limit(page_size)
+    ).all())
+    sales = list(db.scalars(
+        select(ModeScreeningSaleResult).where(
+            ModeScreeningSaleResult.trade_result_id.in_([trade.id for trade in trades])
+        ).order_by(ModeScreeningSaleResult.trade_result_id, ModeScreeningSaleResult.sequence)
+    ).all()) if trades else []
+    sales_by_trade: dict[int, list[ModeScreeningSaleResultRead]] = {}
+    for sale in sales:
+        sales_by_trade.setdefault(sale.trade_result_id, []).append(ModeScreeningSaleResultRead(
+            date=sale.trade_date,
+            reason_id=sale.reason_id,
+            price=sale.price,
+            fraction_of_original=sale.fraction_of_original,
+            return_rate=sale.return_rate,
+        ))
+    return ModeScreeningTradeResultPage(
+        items=[ModeScreeningTradeResultRead(
+            id=trade.id,
+            sequence=trade.sequence,
+            signal_date=trade.signal_date,
+            buy_date=trade.buy_date,
+            buy_price=trade.buy_price,
+            realized_return=trade.realized_return,
+            sells=sales_by_trade.get(trade.id, []),
+        ) for trade in trades],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.post(

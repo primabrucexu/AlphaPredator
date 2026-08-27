@@ -87,3 +87,60 @@ class IndividualBacktestTaskCreate(BaseModel):
     symbol: str = Field(min_length=1)
     start_date: date
     end_date: date
+
+
+class ModeScreeningStockResultRead(BaseModel):
+    id: int
+    symbol: str
+    code: str
+    name: str
+    as_of_date: date
+    data_start_date: date | None
+    data_end_date: date | None
+    signal_date: date | None
+    insufficient_history: bool
+    evidence: list[dict[str, Any]]
+    metrics: dict[str, Any]
+    backtest_status: str
+    completed_trades: int
+    winning_trades: int
+    losing_trades: int
+    flat_trades: int
+    win_rate: str | None
+    average_return: str | None
+    maximum_return: str | None
+    minimum_return: str | None
+    open_trade: dict[str, Any] | None
+    pending_orders: list[dict[str, Any]]
+
+
+class ModeScreeningStockResultPage(BaseModel):
+    items: list[ModeScreeningStockResultRead]
+    total: int
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1)
+
+
+class ModeScreeningSaleResultRead(BaseModel):
+    date: date
+    reason_id: str
+    price: str
+    fraction_of_original: str
+    return_rate: str
+
+
+class ModeScreeningTradeResultRead(BaseModel):
+    id: int
+    sequence: int
+    signal_date: date
+    buy_date: date
+    buy_price: str
+    realized_return: str
+    sells: list[ModeScreeningSaleResultRead]
+
+
+class ModeScreeningTradeResultPage(BaseModel):
+    items: list[ModeScreeningTradeResultRead]
+    total: int
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1)
