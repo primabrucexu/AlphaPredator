@@ -4,9 +4,9 @@
       "id": "SR001",
       "name": "趋势反转",
       "summary": "以 MACD 柱连续不下降识别趋势反转，并按 TP1、EX1、SL1 执行回测",
-      "definition_status": "设计",
-      "implementation_status": "未实现",
-      "revision": null,
+      "definition_status": "已确认",
+      "implementation_status": "已实现",
+      "revision": 1,
       "feature": "F006.3",
       "document": "SR001-trend-reversal.md"
     }

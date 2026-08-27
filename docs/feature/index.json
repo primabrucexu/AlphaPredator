@@ -74,7 +74,7 @@
     {
       "id": "F006.3",
       "summary": "接入 SR001 MACD 柱连续不下降选股及 TP1、EX1、SL1 回测战法",
-      "status": "设计",
+      "status": "部分完成",
       "mcp_status": "待确认",
       "document": "F006.3-trend-reversal-strategy.md"
     }

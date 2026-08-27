@@ -1,0 +1,282 @@
+from __future__ import annotations
+
+from datetime import date, timedelta
+from decimal import Decimal
+
+import pytest
+
+from app.market_data.storage import StoredDailyBar
+from app.screening.backtest import run_individual_backtest
+from app.screening.executor import execute_screening_rule
+from app.screening.models import ScreeningOutcome, StockIdentity
+from app.screening.registry import RuleRegistry
+from app.screening.rules import register_production_rules
+from app.screening.rules.sr001 import (
+    FIXED_PARAMETERS,
+    MacdPoint,
+    SR001Rule,
+    create_sr001_backtest_session,
+)
+
+
+STOCK = StockIdentity("000021.SZ", "000021", "深科技")
+START = date(2026, 1, 1)
+
+
+def bar(
+    day: int,
+    *,
+    open: str,
+    high: str | None = None,
+    low: str | None = None,
+    close: str | None = None,
+    volume: int = 100,
+) -> StoredDailyBar:
+    open_price = Decimal(open)
+    close_price = Decimal(close if close is not None else open)
+    high_price = Decimal(high) if high is not None else max(open_price, close_price) + Decimal("0.2")
+    low_price = Decimal(low) if low is not None else min(open_price, close_price) - Decimal("0.2")
+    return StoredDailyBar(
+        trade_date=START + timedelta(days=day),
+        open=open_price,
+        high=high_price,
+        low=low_price,
+        close=close_price,
+        volume=volume,
+        amount=Decimal("1000"),
+    )
+
+
+def close_bars(values: list[str]) -> list[StoredDailyBar]:
+    return [bar(index, open=value) for index, value in enumerate(values)]
+
+
+def histograms(*values: str) -> tuple[MacdPoint, ...]:
+    return tuple(
+        MacdPoint(dif=Decimal(0), dea=Decimal(0), histogram=Decimal(value))
+        for value in values
+    )
+
+
+def test_sr001_evaluator_matches_c1_and_records_fixed_parameters():
+    result = execute_screening_rule(
+        SR001Rule(),
+        stock=STOCK,
+        source_bars=close_bars(["10", "9", "8", "7", "8", "9"]),
+        as_of_date=START + timedelta(days=5),
+        parameters={},
+    )
+    assert result.outcome == ScreeningOutcome.MATCHED
+    assert result.signal_date == START + timedelta(days=5)
+    assert result.parameters == FIXED_PARAMETERS
+    assert result.insufficient_history
+    assert [(item.condition_id, item.passed) for item in result.evidence] == [
+        ("U1", True),
+        ("U2", True),
+        ("C1", True),
+    ]
+    assert Decimal(str(result.evidence[-1].values["h_s_minus_2"])) < Decimal(
+        str(result.evidence[-1].values["h_s_minus_1"])
+    ) < Decimal(str(result.evidence[-1].values["h_s"]))
+
+
+def test_sr001_evaluator_rejects_scope_and_non_continuous_histogram():
+    not_continuous = execute_screening_rule(
+        SR001Rule(),
+        stock=STOCK,
+        source_bars=close_bars(["10", "9", "8", "8", "8"]),
+        as_of_date=START + timedelta(days=4),
+        parameters={},
+    )
+    assert not_continuous.outcome == ScreeningOutcome.NOT_MATCHED
+    assert not_continuous.evidence[-1].passed is False
+
+    out_of_scope = execute_screening_rule(
+        SR001Rule(),
+        stock=StockIdentity("300001.SZ", "300001", "特锐德ST"),
+        source_bars=close_bars(["10", "9", "8", "7", "8", "9"]),
+        as_of_date=START + timedelta(days=5),
+        parameters={},
+    )
+    assert out_of_scope.outcome == ScreeningOutcome.NOT_MATCHED
+    assert [(item.condition_id, item.passed) for item in out_of_scope.evidence[:2]] == [
+        ("U1", False),
+        ("U2", False),
+    ]
+
+
+def test_sr001_marks_short_history_and_rejects_parameter_overrides():
+    result = execute_screening_rule(
+        SR001Rule(),
+        stock=STOCK,
+        source_bars=close_bars(["10", "9"]),
+        as_of_date=START + timedelta(days=1),
+        parameters={},
+    )
+    assert result.outcome == ScreeningOutcome.NOT_MATCHED
+    assert result.insufficient_history
+    assert result.evidence[-1].values == {"available_bars": 2, "required_bars": 3}
+    with pytest.raises(ValueError, match="固定参数"):
+        SR001Rule().validate_parameters({"macd_fast": 9})
+    with pytest.raises(ValueError, match="股票名称缺失"):
+        execute_screening_rule(
+            SR001Rule(),
+            stock=StockIdentity("000021.SZ", "000021", ""),
+            source_bars=close_bars(["10", "9", "8"]),
+            as_of_date=START + timedelta(days=2),
+            parameters={},
+        )
+
+
+def test_sr001_production_registration_is_idempotent():
+    registry = RuleRegistry()
+    register_production_rules(registry)
+    register_production_rules(registry)
+    assert isinstance(registry.get("SR001", 1), SR001Rule)
+    assert registry.get_backtest_factory("SR001", 1) is create_sr001_backtest_session
+
+
+def _fake_macd_for_entry_and(monkeypatch, overrides: dict[int, tuple[MacdPoint, ...]]):
+    default = histograms("-3", "-3", "-3")
+
+    def fake(history):
+        day = (history[-1].trade_date - START).days
+        return overrides.get(day, default)
+
+    monkeypatch.setattr("app.screening.rules.sr001.calculate_macd", fake)
+
+
+def _run(bars: list[StoredDailyBar]):
+    return run_individual_backtest(
+        rule_id="SR001",
+        rule_revision=1,
+        parameters=FIXED_PARAMETERS,
+        stock=STOCK,
+        source_bars=bars,
+        start_date=START + timedelta(days=2),
+        end_date=bars[-1].trade_date,
+        session=create_sr001_backtest_session(STOCK, FIXED_PARAMETERS),
+    )
+
+
+def test_sr001_buy_waits_through_one_price_limit_up(monkeypatch):
+    _fake_macd_for_entry_and(monkeypatch, {2: histograms("-3", "-2", "-1")})
+    result = _run([
+        bar(0, open="10"),
+        bar(1, open="10"),
+        bar(2, open="10"),
+        bar(3, open="11", high="11", low="11", close="11"),
+        bar(4, open="10.8", high="11", low="10.5", close="10.9"),
+    ])
+    assert result.status == "open_position"
+    assert result.open_trade["signal_date"] == "2026-01-03"
+    assert result.open_trade["buy_date"] == "2026-01-05"
+    assert result.open_trade["buy_price"] == "10.8"
+
+
+def test_sr001_ex1_wins_over_tp1_and_sells_on_next_bar(monkeypatch):
+    _fake_macd_for_entry_and(
+        monkeypatch,
+        {
+            2: histograms("-3", "-2", "-1"),
+            4: histograms("0.5", "1", "0.5"),
+        },
+    )
+    result = _run([
+        bar(0, open="10"),
+        bar(1, open="10"),
+        bar(2, open="10"),
+        bar(3, open="10", high="10.2", low="9.8", close="10"),
+        bar(4, open="10", high="10.8", low="9.8", close="10.6"),
+        bar(5, open="10.4", high="10.6", low="10.2", close="10.5"),
+    ])
+    assert result.status == "completed"
+    assert [sale["reason_id"] for sale in result.trades[0]["sells"]] == ["EX1"]
+    assert result.trades[0]["sells"][0]["date"] == "2026-01-06"
+    assert result.trades[0]["sells"][0]["price"] == "10.4"
+
+
+def test_sr001_tp1_is_strict_and_executes_only_once(monkeypatch):
+    _fake_macd_for_entry_and(monkeypatch, {2: histograms("-3", "-2", "-1")})
+    result = _run([
+        bar(0, open="10"),
+        bar(1, open="10"),
+        bar(2, open="10"),
+        bar(3, open="10", high="10.2", low="9.8", close="10"),
+        bar(4, open="10", high="10.6", low="9.8", close="10.5"),
+        bar(5, open="10.2", high="10.8", low="10", close="10.6"),
+        bar(6, open="10.4", high="11", low="10.2", close="10.8"),
+    ])
+    assert result.status == "open_position"
+    assert result.open_trade["remaining_fraction"] == "0.5"
+    assert [(sale["date"], sale["reason_id"]) for sale in result.open_trade["sells"]] == [
+        ("2026-01-06", "TP1")
+    ]
+
+
+def test_sr001_tp1_executes_on_one_price_limit_down(monkeypatch):
+    _fake_macd_for_entry_and(monkeypatch, {2: histograms("-3", "-2", "-1")})
+    result = _run([
+        bar(0, open="10"),
+        bar(1, open="10"),
+        bar(2, open="10"),
+        bar(3, open="10", high="12", low="9.8", close="12"),
+        bar(4, open="11", high="11", low="11", close="11"),
+    ])
+    assert result.status == "open_position"
+    assert result.open_trade["remaining_fraction"] == "0.5"
+    assert result.open_trade["sells"][0]["reason_id"] == "TP1"
+    assert result.open_trade["sells"][0]["price"] == "11"
+
+
+def test_sr001_sl1_locks_on_limit_down_and_sells_when_tradable(monkeypatch):
+    _fake_macd_for_entry_and(monkeypatch, {2: histograms("-3", "-2", "-1")})
+    result = _run([
+        bar(0, open="10"),
+        bar(1, open="10"),
+        bar(2, open="10"),
+        bar(3, open="10", high="10.2", low="9.8", close="10"),
+        bar(4, open="9.4", high="9.4", low="9.4", close="9.4"),
+        bar(5, open="9.3", high="9.3", low="9.3", close="9.3"),
+        bar(6, open="9.2", high="9.4", low="9", close="9.2"),
+    ])
+    assert result.status == "completed"
+    sale = result.trades[0]["sells"][0]
+    assert sale["reason_id"] == "SL1"
+    assert sale["date"] == "2026-01-07"
+    assert sale["price"] == "9.2"
+
+
+def test_sr001_intraday_sl1_uses_stop_price(monkeypatch):
+    _fake_macd_for_entry_and(monkeypatch, {2: histograms("-3", "-2", "-1")})
+    result = _run([
+        bar(0, open="10"),
+        bar(1, open="10"),
+        bar(2, open="10"),
+        bar(3, open="10", high="10.2", low="9.8", close="10"),
+        bar(4, open="9.8", high="10", low="9.4", close="9.7"),
+    ])
+    sale = result.trades[0]["sells"][0]
+    assert sale["reason_id"] == "SL1"
+    assert sale["price"] == "9.5"
+
+
+def test_sr001_ignores_repeated_entry_signals_while_position_is_active(monkeypatch):
+    _fake_macd_for_entry_and(
+        monkeypatch,
+        {
+            2: histograms("-3", "-2", "-1"),
+            3: histograms("-3", "-2", "-1"),
+            4: histograms("-3", "-2", "-1"),
+        },
+    )
+    result = _run([
+        bar(0, open="10"),
+        bar(1, open="10"),
+        bar(2, open="10"),
+        bar(3, open="10"),
+        bar(4, open="10"),
+    ])
+    assert result.status == "open_position"
+    assert result.pending_orders == ()
+    assert result.open_trade["buy_date"] == "2026-01-04"
