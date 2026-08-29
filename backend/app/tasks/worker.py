@@ -6,7 +6,6 @@ from threading import Event
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.core.config import COMPUTE_TASK_PARALLELISM
 from app.database.session import SessionLocal
 from app.market_data.provider import close_process_market_provider
 
@@ -26,7 +25,6 @@ def run_worker(
     idle_timeout_seconds: float = 60,
     poll_interval_seconds: float = 1,
     lease_wait_seconds: float = 2,
-    compute_parallelism: int = COMPUTE_TASK_PARALLELISM,
 ) -> bool:
     owner_id = str(uuid.uuid4())
     lease_deadline = time.monotonic() + lease_wait_seconds
@@ -43,7 +41,7 @@ def run_worker(
         while True:
             if stop.is_set():
                 return False
-            if run_next_task(session_factory, compute_parallelism=compute_parallelism):
+            if run_next_task(session_factory):
                 idle_since = time.monotonic()
                 continue
             if time.monotonic() - idle_since >= idle_timeout_seconds:

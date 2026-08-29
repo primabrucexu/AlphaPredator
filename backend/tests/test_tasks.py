@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from threading import Event, Lock, Thread
-from time import sleep
 from uuid import UUID
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, func, inspect, select
+from sqlalchemy import create_engine, event, func, inspect, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -35,15 +33,6 @@ from app.tasks.worker import run_worker
 def make_factory():
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
-    )
-    Base.metadata.create_all(engine)
-    return engine, sessionmaker(engine, expire_on_commit=False)
-
-
-def make_file_factory(tmp_path):
-    engine = create_engine(
-        f"sqlite:///{(tmp_path / 'tasks.db').as_posix()}",
-        connect_args={"check_same_thread": False},
     )
     Base.metadata.create_all(engine)
     return engine, sessionmaker(engine, expire_on_commit=False)
@@ -137,47 +126,6 @@ class FailingSummaryHandler(RecordingHandler):
 class CancellingFailingSummaryHandler(CancellingHandler):
     def summarize(self, task, items):
         raise RuntimeError("summary failed after cancel")
-
-
-class ConcurrencyHandler(RecordingHandler):
-    def __init__(self):
-        super().__init__([])
-        self.lock = Lock()
-        self.active = 0
-        self.maximum_active = 0
-
-    def run_item(self, task, item, context):
-        with self.lock:
-            self.active += 1
-            self.maximum_active = max(self.maximum_active, self.active)
-        try:
-            sleep(0.05)
-            return {"item": item.title}
-        finally:
-            with self.lock:
-                self.active -= 1
-
-
-class BlockingConcurrencyHandler(ConcurrencyHandler):
-    def __init__(self, expected_starts: int):
-        super().__init__()
-        self.expected_starts = expected_starts
-        self.all_started = Event()
-        self.release = Event()
-
-    def run_item(self, task, item, context):
-        with self.lock:
-            self.calls.append(item.title)
-            self.active += 1
-            self.maximum_active = max(self.maximum_active, self.active)
-            if len(self.calls) == self.expected_starts:
-                self.all_started.set()
-        try:
-            assert self.release.wait(2)
-            return {"item": item.title}
-        finally:
-            with self.lock:
-                self.active -= 1
 
 
 def test_task_migration_is_repeatable():
@@ -300,23 +248,33 @@ def test_update_tasks_are_selected_before_compute_tasks_and_items_are_serial():
         unregister_handler("record")
 
 
-def test_compute_items_run_up_to_configured_parallelism(tmp_path):
-    _engine, factory = make_file_factory(tmp_path)
-    handler = ConcurrencyHandler()
-    register_handler("parallel-compute", handler)
+def test_progress_aggregation_does_not_query_sibling_items_per_report():
+    engine, factory = make_factory()
+    handler = RecordingHandler([])
+    register_handler("progress-aggregation", handler)
     try:
         with factory() as db:
             task = create_task(
                 db,
-                task_type="parallel-compute",
+                task_type="progress-aggregation",
                 scheduling_policy=SchedulingPolicy.COMPUTE,
-                title="parallel compute",
+                title="progress aggregation",
                 input=item_input("one", "two", "three", "four"),
                 start_worker=lambda: None,
             )
             task_id = task.id
 
-        assert run_next_task(factory, compute_parallelism=3) is True
+        item_selects = []
+
+        def record_item_selects(_connection, _cursor, statement, _parameters, _context, _many):
+            normalized = " ".join(statement.lower().split())
+            if normalized.startswith("select") and " from task_items " in normalized:
+                item_selects.append(normalized)
+
+        event.listen(engine, "before_cursor_execute", record_item_selects)
+        assert run_next_task(factory) is True
+        event.remove(engine, "before_cursor_execute", record_item_selects)
+
         with factory() as db:
             task = db.get(Task, task_id)
             items = list(db.scalars(
@@ -324,77 +282,47 @@ def test_compute_items_run_up_to_configured_parallelism(tmp_path):
             ))
             assert task.status == TaskStatus.SUCCEEDED.value
             assert [item.status for item in items] == [TaskItemStatus.SUCCEEDED.value] * 4
-            assert [load_json(item.result_json)["item"] for item in items] == [
-                "one", "two", "three", "four"
-            ]
-        assert handler.maximum_active == 3
+        assert len(item_selects) == 2
     finally:
-        unregister_handler("parallel-compute")
+        unregister_handler("progress-aggregation")
 
 
-def test_exclusive_update_items_remain_serial_with_compute_parallelism(tmp_path):
-    _engine, factory = make_file_factory(tmp_path)
-    handler = ConcurrencyHandler()
-    register_handler("serial-update", handler)
+def test_progress_snapshot_is_persisted_from_in_memory_aggregation(monkeypatch):
+    _engine, factory = make_factory()
+    observations = []
+
+    class ObservingHandler(RecordingHandler):
+        def run_item(self, task, item, context):
+            context.report_progress(1, 2, "处理中")
+            with factory() as observer:
+                observed_task = observer.get(Task, task.id)
+                observed_item = observer.get(TaskItem, item.id)
+                observations.append((
+                    observed_task.progress,
+                    observed_task.status_message,
+                    observed_item.progress,
+                ))
+            context.report_progress(2, 2, "处理完成")
+            return {"item": item.title}
+
+    times = iter((0.0, 2.0, 4.0, 6.0))
+    monkeypatch.setattr("app.tasks.runner.monotonic", lambda: next(times))
+    register_handler("progress-snapshot", ObservingHandler([]))
     try:
         with factory() as db:
             create_task(
                 db,
-                task_type="serial-update",
-                scheduling_policy=SchedulingPolicy.EXCLUSIVE_UPDATE,
-                title="serial update",
-                input=item_input("one", "two", "three"),
-                start_worker=lambda: None,
-            )
-
-        assert run_next_task(factory, compute_parallelism=4) is True
-        assert handler.maximum_active == 1
-    finally:
-        unregister_handler("serial-update")
-
-
-def test_parallel_compute_cancellation_does_not_start_remaining_items(tmp_path):
-    _engine, factory = make_file_factory(tmp_path)
-    handler = BlockingConcurrencyHandler(expected_starts=2)
-    register_handler("parallel-cancel", handler)
-    runner = None
-    try:
-        with factory() as db:
-            task = create_task(
-                db,
-                task_type="parallel-cancel",
+                task_type="progress-snapshot",
                 scheduling_policy=SchedulingPolicy.COMPUTE,
-                title="parallel cancel",
-                input=item_input("one", "two", "three", "four"),
+                title="progress snapshot",
+                input=item_input("one"),
                 start_worker=lambda: None,
             )
-            task_id = task.id
 
-        runner = Thread(
-            target=run_next_task,
-            kwargs={"session_factory": factory, "compute_parallelism": 2},
-        )
-        runner.start()
-        assert handler.all_started.wait(2)
-        with factory() as db:
-            request_cancel(db, db.get(Task, task_id))
-        handler.release.set()
-        runner.join(3)
-
-        assert not runner.is_alive()
-        assert set(handler.calls) == {"one", "two"}
-        with factory() as db:
-            task = db.get(Task, task_id)
-            items = list(db.scalars(
-                select(TaskItem).where(TaskItem.task_id == task_id).order_by(TaskItem.sequence)
-            ))
-            assert task.status == TaskStatus.CANCELLED.value
-            assert [item.status for item in items] == [TaskItemStatus.CANCELLED.value] * 4
+        assert run_next_task(factory) is True
+        assert observations == [(50, "处理中", 50)]
     finally:
-        handler.release.set()
-        if runner is not None:
-            runner.join(3)
-        unregister_handler("parallel-cancel")
+        unregister_handler("progress-snapshot")
 
 
 def test_failed_item_allows_partial_success_and_preserves_error():

@@ -8,13 +8,15 @@ import pytest
 from app.market_data.storage import StoredDailyBar
 from app.screening.backtest import run_individual_backtest
 from app.screening.executor import execute_screening_rule
-from app.screening.models import ScreeningOutcome, StockIdentity
+from app.screening.models import ScreeningOutcome, StockIdentity, valid_daily_bars
 from app.screening.registry import RuleRegistry
 from app.screening.rules import register_production_rules
 from app.screening.rules.sr001 import (
     FIXED_PARAMETERS,
     MacdPoint,
     SR001Rule,
+    _MacdAccumulator,
+    calculate_macd,
     create_sr001_backtest_session,
 )
 
@@ -136,14 +138,41 @@ def test_sr001_production_registration_is_idempotent():
     assert registry.get_backtest_factory("SR001", 1) is create_sr001_backtest_session
 
 
+def test_sr001_incremental_macd_matches_reference_for_every_prefix():
+    bars = valid_daily_bars(close_bars([
+        "10", "9.5", "9.8", "9.2", "10.1", "10.6", "10.3", "11.2", "10.9",
+    ]))
+    fast_alpha = Decimal(2) / Decimal(9)
+    slow_alpha = Decimal(2) / Decimal(18)
+    signal_alpha = Decimal(2) / Decimal(7)
+    fast_ema = bars[0].close
+    slow_ema = bars[0].close
+    dea = Decimal(0)
+    expected = []
+    for index, current in enumerate(bars):
+        if index:
+            fast_ema = fast_alpha * current.close + (Decimal(1) - fast_alpha) * fast_ema
+            slow_ema = slow_alpha * current.close + (Decimal(1) - slow_alpha) * slow_ema
+        dif = fast_ema - slow_ema
+        if index:
+            dea = signal_alpha * dif + (Decimal(1) - signal_alpha) * dea
+        expected.append(MacdPoint(dif=dif, dea=dea, histogram=Decimal(2) * (dif - dea)))
+
+    accumulator = _MacdAccumulator()
+    incremental = tuple(accumulator.update(current) for current in bars)
+    assert incremental == tuple(expected)
+    for end in range(1, len(bars) + 1):
+        assert calculate_macd(bars[:end]) == tuple(expected[:end])
+
+
 def _fake_macd_for_entry_and(monkeypatch, overrides: dict[int, tuple[MacdPoint, ...]]):
     default = histograms("-3", "-3", "-3")
 
-    def fake(history):
+    def fake(_session, history):
         day = (history[-1].trade_date - START).days
         return overrides.get(day, default)
 
-    monkeypatch.setattr("app.screening.rules.sr001.calculate_macd", fake)
+    monkeypatch.setattr("app.screening.rules.sr001.SR001BacktestSession._update_macd", fake)
 
 
 def _run(bars: list[StoredDailyBar]):
@@ -157,6 +186,22 @@ def _run(bars: list[StoredDailyBar]):
         end_date=bars[-1].trade_date,
         session=create_sr001_backtest_session(STOCK, FIXED_PARAMETERS),
     )
+
+
+def test_sr001_backtest_updates_macd_once_per_bar(monkeypatch):
+    calls = 0
+    original = _MacdAccumulator.update
+
+    def counted(accumulator, current):
+        nonlocal calls
+        calls += 1
+        return original(accumulator, current)
+
+    monkeypatch.setattr(_MacdAccumulator, "update", counted)
+    bars = close_bars(["10"] * 500)
+    result = _run(bars)
+    assert result.status == "no_trade"
+    assert calls == len(bars)
 
 
 def test_sr001_buy_waits_through_one_price_limit_up(monkeypatch):

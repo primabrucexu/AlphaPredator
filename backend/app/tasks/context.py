@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from collections.abc import Callable
+
 from sqlalchemy.orm import Session
 
 from .models import Task, TaskItem, TaskStatus
@@ -11,13 +12,22 @@ class TaskCancelled(Exception):
 
 
 class TaskContext:
-    def __init__(self, db: Session, task: Task, item: TaskItem | None = None):
+    def __init__(
+        self,
+        db: Session,
+        task: Task,
+        item: TaskItem | None = None,
+        progress_callback: Callable[[TaskItem, int | None, str], None] | None = None,
+    ):
         self.db = db
         self.task = task
         self.item = item
+        self.last_message = ""
+        self.progress_callback = progress_callback
 
     def check_cancelled(self) -> None:
-        self.db.refresh(self.task)
+        with self.db.no_autoflush:
+            self.db.refresh(self.task)
         if self.task.status == TaskStatus.CANCEL_REQUESTED.value:
             raise TaskCancelled()
 
@@ -38,13 +48,9 @@ class TaskContext:
             progress = max(previous, progress)
         target.progress = progress
         target.status_message = message
+        self.last_message = message
         if self.item is not None:
             self.item.current = current
             self.item.total = total
-            self.db.flush()
-            progresses = list(self.db.scalars(
-                select(TaskItem.progress).where(TaskItem.task_id == self.task.id)
-            ).all())
-            self.task.progress = round(sum(value or 0 for value in progresses) / len(progresses))
-            self.task.status_message = message
-        self.db.commit()
+            if self.progress_callback is not None:
+                self.progress_callback(self.item, progress, message)

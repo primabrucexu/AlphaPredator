@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from dataclasses import dataclass
 from datetime import timedelta
 from threading import Event, Thread
+from time import monotonic
 from typing import Any
 
 from sqlalchemy import or_, select, update
@@ -13,7 +14,6 @@ from sqlalchemy.orm import Session, sessionmaker
 from .context import TaskCancelled, TaskContext
 from .handlers import TaskItemSkipped, get_handler
 from .models import (
-    SchedulingPolicy,
     Task,
     TaskItem,
     TaskItemStatus,
@@ -25,6 +25,72 @@ from .service import next_pending_task
 
 
 logger = logging.getLogger(__name__)
+PROGRESS_SNAPSHOT_INTERVAL_SECONDS = 1.0
+
+
+@dataclass
+class TaskProgressTracker:
+    total_items: int
+    completed_items: int
+    failed_items: int
+    progress_total: int
+    item_progresses: dict[int, int]
+    last_persisted_at: float
+    status_message: str = ""
+
+    @classmethod
+    def from_items(cls, items: list[TaskItem]) -> TaskProgressTracker:
+        return cls(
+            total_items=len(items),
+            completed_items=sum(
+                item.status == TaskItemStatus.SUCCEEDED.value for item in items
+            ),
+            failed_items=sum(
+                item.status == TaskItemStatus.FAILED.value for item in items
+            ),
+            progress_total=sum(item.progress or 0 for item in items),
+            item_progresses={item.id: item.progress or 0 for item in items},
+            last_persisted_at=monotonic(),
+        )
+
+    def report_progress(
+        self,
+        db: Session,
+        task: Task,
+        item: TaskItem,
+        progress: int | None,
+        message: str,
+    ) -> None:
+        previous = self.item_progresses[item.id]
+        current = progress or 0
+        self.item_progresses[item.id] = current
+        self.progress_total += current - previous
+        self.status_message = message
+        self.persist_if_due(db, task)
+
+    def record(self, item: TaskItem, message: str) -> None:
+        if item.status == TaskItemStatus.SUCCEEDED.value:
+            self.completed_items += 1
+        elif item.status == TaskItemStatus.FAILED.value:
+            self.failed_items += 1
+        previous = self.item_progresses[item.id]
+        current = item.progress or 0
+        self.item_progresses[item.id] = current
+        self.progress_total += current - previous
+        self.status_message = message or item.status_message
+
+    def persist_if_due(self, db: Session, task: Task) -> None:
+        now = monotonic()
+        if now - self.last_persisted_at < PROGRESS_SNAPSHOT_INTERVAL_SECONDS:
+            return
+        task.completed_items = self.completed_items
+        task.failed_items = self.failed_items
+        if self.total_items:
+            task.progress = round(self.progress_total / self.total_items)
+        if self.status_message:
+            task.status_message = self.status_message
+        db.commit()
+        self.last_persisted_at = now
 
 
 def _dump(value: dict[str, Any] | None) -> str:
@@ -178,19 +244,32 @@ def _finish_from_items(db: Session, task: Task, handler: Any) -> None:
     db.commit()
 
 
-def _run_item(db: Session, task: Task, item: TaskItem, handler: Any) -> None:
+def _run_item(
+    db: Session,
+    task: Task,
+    item: TaskItem,
+    handler: Any,
+    progress: TaskProgressTracker,
+) -> str:
     db.refresh(task)
     if task.status == TaskStatus.CANCEL_REQUESTED.value:
         item.status = TaskItemStatus.CANCELLED.value
         item.status_message = "子任务已取消"
         item.finished_at = utc_now()
         db.commit()
-        return
+        return item.status_message
     item.status = TaskItemStatus.RUNNING.value
     item.started_at = utc_now()
     item.status_message = "子任务执行中"
     db.commit()
-    context = TaskContext(db, task, item)
+    context = TaskContext(
+        db,
+        task,
+        item,
+        progress_callback=lambda current_item, current, message: progress.report_progress(
+            db, task, current_item, current, message
+        ),
+    )
     try:
         result = handler.run_item(task, item, context)
         context.check_cancelled()
@@ -219,23 +298,11 @@ def _run_item(db: Session, task: Task, item: TaskItem, handler: Any) -> None:
         item.error = str(exc)
     item.finished_at = utc_now()
     db.commit()
-
-
-def _run_item_in_session(
-    session_factory: sessionmaker[Session],
-    handler: Any,
-    task_id: int,
-    item_id: int,
-) -> None:
-    with session_factory() as db:
-        task = db.get(Task, task_id)
-        item = db.get(TaskItem, item_id)
-        if task is None or item is None or item.status != TaskItemStatus.PENDING.value:
-            return
-        _run_item(db, task, item, handler)
+    return context.last_message or item.status_message
 
 
 def _run_items_serial(db: Session, task: Task, items: list[TaskItem], handler: Any) -> None:
+    progress = TaskProgressTracker.from_items(items)
     for item in items:
         db.refresh(task)
         if task.status == TaskStatus.CANCEL_REQUESTED.value:
@@ -243,77 +310,17 @@ def _run_items_serial(db: Session, task: Task, items: list[TaskItem], handler: A
             break
         if item.status != TaskItemStatus.PENDING.value:
             continue
-        _run_item(db, task, item, handler)
-        _update_task_counts(db, task)
-        db.commit()
+        message = _run_item(db, task, item, handler, progress)
+        progress.record(item, message)
+        progress.persist_if_due(db, task)
         if item.status == TaskItemStatus.CANCELLED.value:
             _mark_remaining_cancelled(db, task.id)
             break
 
 
-def _run_items_parallel(
-    db: Session,
-    session_factory: sessionmaker[Session],
-    task: Task,
-    items: list[TaskItem],
-    handler: Any,
-    parallelism: int,
-) -> None:
-    pending_ids = [item.id for item in items if item.status == TaskItemStatus.PENDING.value]
-    running: dict[Future[None], int] = {}
-
-    with ThreadPoolExecutor(max_workers=parallelism, thread_name_prefix="compute-item") as executor:
-        while pending_ids or running:
-            db.expire_all()
-            current_task = db.get(Task, task.id)
-            cancelled = current_task.status == TaskStatus.CANCEL_REQUESTED.value
-            if cancelled:
-                _mark_remaining_cancelled(db, task.id)
-                pending_ids.clear()
-            else:
-                while pending_ids and len(running) < parallelism:
-                    item_id = pending_ids.pop(0)
-                    future = executor.submit(
-                        _run_item_in_session,
-                        session_factory,
-                        handler,
-                        task.id,
-                        item_id,
-                    )
-                    running[future] = item_id
-            if not running:
-                break
-            done, _ = wait(running, return_when=FIRST_COMPLETED)
-            for future in done:
-                item_id = running.pop(future)
-                try:
-                    future.result()
-                except Exception as exc:
-                    logger.exception("任务 %s 的并行子任务 %s 异常退出", task.id, item_id)
-                    with session_factory() as item_db:
-                        item = item_db.get(TaskItem, item_id)
-                        if item is not None and item.status in {
-                            TaskItemStatus.PENDING.value,
-                            TaskItemStatus.RUNNING.value,
-                        }:
-                            item.status = TaskItemStatus.FAILED.value
-                            item.status_message = "子任务执行失败"
-                            item.error = f"并行执行器异常退出：{exc}"
-                            item.finished_at = utc_now()
-                            item_db.commit()
-            db.expire_all()
-            task = db.get(Task, task.id)
-            _update_task_counts(db, task)
-            db.commit()
-
-
 def run_next_task(
     session_factory: sessionmaker[Session],
-    *,
-    compute_parallelism: int = 1,
 ) -> bool:
-    if compute_parallelism < 1:
-        raise ValueError("计算任务并行度必须大于等于 1")
     with session_factory() as db:
         task = next_pending_task(db)
         if task is None:
@@ -336,16 +343,7 @@ def run_next_task(
             select(TaskItem).where(TaskItem.task_id == task.id).order_by(TaskItem.sequence)
         ).all())
 
-        if (
-            task.scheduling_policy == SchedulingPolicy.COMPUTE.value
-            and compute_parallelism > 1
-            and len(items) > 1
-        ):
-            _run_items_parallel(
-                db, session_factory, task, items, handler, compute_parallelism
-            )
-        else:
-            _run_items_serial(db, task, items, handler)
+        _run_items_serial(db, task, items, handler)
 
         db.expire_all()
         task = db.get(Task, task.id)

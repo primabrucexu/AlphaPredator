@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -45,30 +46,46 @@ class MacdPoint:
     histogram: Decimal
 
 
+class _MacdAccumulator:
+    def __init__(self) -> None:
+        self.fast_alpha = Decimal(2) / Decimal(FAST_PERIOD + 1)
+        self.slow_alpha = Decimal(2) / Decimal(SLOW_PERIOD + 1)
+        self.signal_alpha = Decimal(2) / Decimal(SIGNAL_PERIOD + 1)
+        self.fast_ema: Decimal | None = None
+        self.slow_ema: Decimal | None = None
+        self.dea = Decimal(0)
+
+    def update(self, bar: ValidDailyBar) -> MacdPoint:
+        is_first = self.fast_ema is None or self.slow_ema is None
+        if is_first:
+            self.fast_ema = bar.close
+            self.slow_ema = bar.close
+        else:
+            self.fast_ema = (
+                self.fast_alpha * bar.close
+                + (Decimal(1) - self.fast_alpha) * self.fast_ema
+            )
+            self.slow_ema = (
+                self.slow_alpha * bar.close
+                + (Decimal(1) - self.slow_alpha) * self.slow_ema
+            )
+        dif = self.fast_ema - self.slow_ema
+        if not is_first:
+            self.dea = (
+                self.signal_alpha * dif
+                + (Decimal(1) - self.signal_alpha) * self.dea
+            )
+        histogram = Decimal(2) * (dif - self.dea)
+        return MacdPoint(dif=dif, dea=self.dea, histogram=histogram)
+
+
 def _decimal_text(value: Decimal) -> str:
     return format(value.normalize(), "f")
 
 
 def calculate_macd(bars: tuple[ValidDailyBar, ...]) -> tuple[MacdPoint, ...]:
-    if not bars:
-        return ()
-    fast_alpha = Decimal(2) / Decimal(FAST_PERIOD + 1)
-    slow_alpha = Decimal(2) / Decimal(SLOW_PERIOD + 1)
-    signal_alpha = Decimal(2) / Decimal(SIGNAL_PERIOD + 1)
-    fast_ema = bars[0].close
-    slow_ema = bars[0].close
-    dea = Decimal(0)
-    result: list[MacdPoint] = []
-    for index, bar in enumerate(bars):
-        if index:
-            fast_ema = fast_alpha * bar.close + (Decimal(1) - fast_alpha) * fast_ema
-            slow_ema = slow_alpha * bar.close + (Decimal(1) - slow_alpha) * slow_ema
-        dif = fast_ema - slow_ema
-        if index:
-            dea = signal_alpha * dif + (Decimal(1) - signal_alpha) * dea
-        histogram = Decimal(2) * (dif - dea)
-        result.append(MacdPoint(dif=dif, dea=dea, histogram=histogram))
-    return tuple(result)
+    accumulator = _MacdAccumulator()
+    return tuple(accumulator.update(bar) for bar in bars)
 
 
 def _scope_evidence(stock: StockIdentity) -> tuple[RuleEvidence, RuleEvidence]:
@@ -150,9 +167,9 @@ def _is_one_price_limit_down(history: tuple[ValidDailyBar, ...]) -> bool:
     return bar.open == bar.high == bar.low == bar.close and bar.close < history[-2].close
 
 
-def _has_entry_signal(stock: StockIdentity, history: tuple[ValidDailyBar, ...]) -> bool:
-    evaluation = SR001Rule().evaluate(stock, history, FIXED_PARAMETERS)
-    return evaluation.matched
+def _has_entry_signal(stock: StockIdentity, points: tuple[MacdPoint, ...]) -> bool:
+    u1, u2 = _scope_evidence(stock)
+    return u1.passed and u2.passed and _signal_evidence(points).passed
 
 
 def _has_ex1(points: tuple[MacdPoint, ...]) -> bool:
@@ -168,9 +185,22 @@ class SR001BacktestSession:
         self.entry_signal_date: date | None = None
         self.exit_order: BacktestPendingOrder | None = None
         self.take_profit_executed = False
+        self._macd = _MacdAccumulator()
+        self._processed_bars = 0
+        self._recent_points: deque[MacdPoint] = deque(maxlen=3)
 
-    def _capture_entry_signal(self, history: tuple[ValidDailyBar, ...]) -> None:
-        if _has_entry_signal(self.stock, history):
+    def _update_macd(self, history: tuple[ValidDailyBar, ...]) -> tuple[MacdPoint, ...]:
+        for bar in history[self._processed_bars:]:
+            self._recent_points.append(self._macd.update(bar))
+        self._processed_bars = len(history)
+        return tuple(self._recent_points)
+
+    def _capture_entry_signal(
+        self,
+        history: tuple[ValidDailyBar, ...],
+        points: tuple[MacdPoint, ...],
+    ) -> None:
+        if _has_entry_signal(self.stock, points):
             self.entry_signal_date = history[-1].trade_date
 
     def _close_position_and_capture_signal(
@@ -180,16 +210,17 @@ class SR001BacktestSession:
         price: Decimal,
         reason_id: str,
         signal_date: date,
+        points: tuple[MacdPoint, ...],
     ) -> list[BacktestInstruction]:
         self.exit_order = None
         self.take_profit_executed = False
-        self._capture_entry_signal(context.history)
+        self._capture_entry_signal(context.history, points)
         return [BacktestInstruction(BacktestAction.SELL, price, reason_id, signal_date)]
 
     def on_bar(self, context: BacktestContext) -> list[BacktestInstruction]:
         history = context.history
         bar = context.bar
-        points = calculate_macd(history)
+        points = self._update_macd(history)
 
         if context.position is None:
             if self.entry_signal_date is not None:
@@ -201,7 +232,7 @@ class SR001BacktestSession:
                 if _has_ex1(points):
                     self.exit_order = BacktestPendingOrder(BacktestAction.SELL, "EX1", bar.trade_date)
                 return [BacktestInstruction(BacktestAction.BUY, bar.open, "B1", signal_date)]
-            self._capture_entry_signal(history)
+            self._capture_entry_signal(history, points)
             return []
 
         if self.exit_order is not None:
@@ -212,6 +243,7 @@ class SR001BacktestSession:
                 price=bar.open,
                 reason_id=self.exit_order.reason_id,
                 signal_date=self.exit_order.signal_date,
+                points=points,
             )
 
         stop_price = context.position.buy_price * (Decimal(1) - STOP_LOSS_RATE)
@@ -220,11 +252,19 @@ class SR001BacktestSession:
                 self.exit_order = BacktestPendingOrder(BacktestAction.SELL, "SL1", bar.trade_date)
                 return []
             return self._close_position_and_capture_signal(
-                context, price=bar.open, reason_id="SL1", signal_date=bar.trade_date
+                context,
+                price=bar.open,
+                reason_id="SL1",
+                signal_date=bar.trade_date,
+                points=points,
             )
         if bar.low <= stop_price:
             return self._close_position_and_capture_signal(
-                context, price=stop_price, reason_id="SL1", signal_date=bar.trade_date
+                context,
+                price=stop_price,
+                reason_id="SL1",
+                signal_date=bar.trade_date,
+                points=points,
             )
 
         if _has_ex1(points):
