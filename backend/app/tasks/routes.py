@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -62,6 +62,14 @@ from .service import (
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
+def _utc_timestamp(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def task_read(task: Task) -> TaskRead:
     return TaskRead(
         id=task.id,
@@ -78,11 +86,11 @@ def task_read(task: Task) -> TaskRead:
         input=load_json(task.input_json),
         result=load_json(task.result_json),
         error=task.error,
-        created_at=task.created_at,
-        started_at=task.started_at,
-        finished_at=task.finished_at,
-        updated_at=task.updated_at,
-        cancel_requested_at=task.cancel_requested_at,
+        created_at=_utc_timestamp(task.created_at),
+        started_at=_utc_timestamp(task.started_at),
+        finished_at=_utc_timestamp(task.finished_at),
+        updated_at=_utc_timestamp(task.updated_at),
+        cancel_requested_at=_utc_timestamp(task.cancel_requested_at),
     )
 
 
@@ -99,9 +107,9 @@ def task_item_read(item: TaskItem) -> TaskItemRead:
         status_message=item.status_message,
         result=load_json(item.result_json),
         error=item.error,
-        started_at=item.started_at,
-        finished_at=item.finished_at,
-        updated_at=item.updated_at,
+        started_at=_utc_timestamp(item.started_at),
+        finished_at=_utc_timestamp(item.finished_at),
+        updated_at=_utc_timestamp(item.updated_at),
     )
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -617,6 +617,17 @@ def test_task_api_lists_details_items_and_cancels(db):
             db, task_type="api-other", scheduling_policy=SchedulingPolicy.EXCLUSIVE_UPDATE,
             title="Other API test", input=item_input("second"), start_worker=lambda: None,
         )
+        stored_utc = datetime(2026, 8, 29, 8, 0, 0)
+        task.created_at = stored_utc
+        task.started_at = stored_utc
+        task.finished_at = stored_utc
+        task.updated_at = stored_utc
+        task.cancel_requested_at = stored_utc
+        task_item = db.scalar(select(TaskItem).where(TaskItem.task_id == task.id))
+        task_item.started_at = stored_utc
+        task_item.finished_at = stored_utc
+        task_item.updated_at = stored_utc
+        db.commit()
         app = FastAPI()
         app.include_router(api_router)
 
@@ -632,13 +643,23 @@ def test_task_api_lists_details_items_and_cancels(db):
         compute = client.get("/api/tasks", params={"scheduling_policy": "COMPUTE"}).json()
         assert compute["total"] == 1
         assert compute["items"][0]["id"] == task.id
+        assert compute["items"][0]["created_at"] == "2026-08-29T08:00:00Z"
+        detail = client.get(f"/api/tasks/{task.id}").json()
+        assert detail["started_at"] == "2026-08-29T08:00:00Z"
+        assert detail["finished_at"] == "2026-08-29T08:00:00Z"
+        assert detail["updated_at"] == "2026-08-29T08:00:00Z"
+        assert detail["cancel_requested_at"] == "2026-08-29T08:00:00Z"
         updates = client.get("/api/tasks", params={"scheduling_policy": "EXCLUSIVE_UPDATE"}).json()
         assert updates["total"] == 1
         assert updates["items"][0]["id"] == other_task.id
         assert client.get("/api/tasks/active-count").json() == {"count": 2}
         assert client.get("/api/tasks/active-count", params={"scheduling_policy": "COMPUTE"}).json() == {"count": 1}
         assert client.get("/api/tasks/active-count", params={"scheduling_policy": "EXCLUSIVE_UPDATE"}).json() == {"count": 1}
-        assert client.get(f"/api/tasks/{task.id}/items").json()["items"][0]["title"] == "first"
+        item = client.get(f"/api/tasks/{task.id}/items").json()["items"][0]
+        assert item["title"] == "first"
+        assert item["started_at"] == "2026-08-29T08:00:00Z"
+        assert item["finished_at"] == "2026-08-29T08:00:00Z"
+        assert item["updated_at"] == "2026-08-29T08:00:00Z"
         cancelled = client.post(f"/api/tasks/{task.id}/cancel")
         assert cancelled.status_code == 200
         assert cancelled.json()["status"] == TaskStatus.CANCELLED.value
