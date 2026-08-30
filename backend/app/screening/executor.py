@@ -4,6 +4,7 @@ import json
 from datetime import date
 
 from app.market_data.storage import StoredDailyBar
+from app.screening.backtest import IndividualBacktestResult
 
 from .models import (
     RuleNotEvaluable,
@@ -23,6 +24,44 @@ def execute_screening_rule(
     as_of_date: date,
     parameters: dict,
 ) -> ScreeningResult:
+    result, _ = _execute_screening_rule(
+        rule,
+        stock=stock,
+        source_bars=source_bars,
+        as_of_date=as_of_date,
+        parameters=parameters,
+        include_backtest=False,
+    )
+    return result
+
+
+def execute_screening_rule_with_backtest(
+    rule: ScreeningRule,
+    *,
+    stock: StockIdentity,
+    source_bars: list[StoredDailyBar],
+    as_of_date: date,
+    parameters: dict,
+) -> tuple[ScreeningResult, IndividualBacktestResult | None]:
+    return _execute_screening_rule(
+        rule,
+        stock=stock,
+        source_bars=source_bars,
+        as_of_date=as_of_date,
+        parameters=parameters,
+        include_backtest=True,
+    )
+
+
+def _execute_screening_rule(
+    rule: ScreeningRule,
+    *,
+    stock: StockIdentity,
+    source_bars: list[StoredDailyBar],
+    as_of_date: date,
+    parameters: dict,
+    include_backtest: bool,
+) -> tuple[ScreeningResult, IndividualBacktestResult | None]:
     normalized_parameters = rule.validate_parameters(parameters)
     bars = valid_daily_bars([bar for bar in source_bars if bar.trade_date <= as_of_date])
     if not bars:
@@ -37,9 +76,14 @@ def execute_screening_rule(
             outcome=ScreeningOutcome.SKIPPED,
             reason_code="no_valid_daily_bars",
             reason="计算日期及以前没有有效日 K",
-        )
+        ), None
+    backtest = None
     try:
-        evaluation = rule.evaluate(stock, bars, normalized_parameters)
+        evaluate_with_backtest = getattr(rule, "evaluate_with_backtest", None)
+        if include_backtest and callable(evaluate_with_backtest):
+            evaluation, backtest = evaluate_with_backtest(stock, bars, normalized_parameters)
+        else:
+            evaluation = rule.evaluate(stock, bars, normalized_parameters)
     except RuleNotEvaluable as exc:
         return ScreeningResult(
             rule_id=rule.rule_id,
@@ -52,7 +96,7 @@ def execute_screening_rule(
             outcome=ScreeningOutcome.SKIPPED,
             reason_code=exc.reason_code,
             reason=exc.message,
-        )
+        ), None
     condition_ids = [item.condition_id for item in evaluation.evidence]
     if any(not condition_id.strip() for condition_id in condition_ids):
         raise ValueError("规则判定依据编号不能为空")
@@ -86,4 +130,4 @@ def execute_screening_rule(
         evidence=evaluation.evidence,
         metrics=evaluation.metrics,
         insufficient_history=evaluation.insufficient_history,
-    )
+    ), backtest

@@ -137,6 +137,7 @@ def mode_screening_stock_read(result: ModeScreeningStockResult) -> ModeScreening
         evidence=evidence if isinstance(evidence, list) else [],
         metrics=metrics if isinstance(metrics, dict) else {},
         backtest_status=result.backtest_status,
+        current_state=result.current_state,
         completed_trades=result.completed_trades,
         winning_trades=result.winning_trades,
         losing_trades=result.losing_trades,
@@ -345,6 +346,9 @@ def mode_screening_results(
     page_size: int = Query(20, ge=1, le=100),
     sort_by: Literal["win_rate", "average_return", "maximum_return"] | None = None,
     sort_order: Literal["asc", "desc"] | None = None,
+    current_state: list[Literal[
+        "pending_entry", "bought_today", "holding", "take_profit", "pending_exit"
+    ]] | None = Query(None),
     db: Session = Depends(get_session),
 ):
     task = get_task(db, task_id)
@@ -358,6 +362,7 @@ def mode_screening_results(
             page_size=page_size,
             sort_by=sort_by,
             sort_order=sort_order,
+            current_states=current_state,
         )
     except TaskOperationError as exc:
         _raise_operation_error(exc)

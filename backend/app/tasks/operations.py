@@ -26,6 +26,7 @@ from .models import (
     TaskItemStatus,
     TaskStatus,
 )
+from .mode_screening_state import CURRENT_OPPORTUNITY_STATES
 from .process import start_worker_process
 from .service import TaskPlanningError, create_task, get_active_task_by_type, load_json
 
@@ -171,16 +172,24 @@ def list_mode_screening_results(
     page_size: int,
     sort_by: str | None = None,
     sort_order: str | None = None,
+    current_states: list[str] | None = None,
 ) -> tuple[list[ModeScreeningStockResult], int]:
     if task.task_type != MODE_SCREENING_TASK_TYPE:
         raise TaskOperationError("该任务不是模式选股分析任务")
     if (sort_by is None) != (sort_order is None):
         raise TaskOperationError("sort_by 和 sort_order 必须同时提供")
     if sort_by not in {None, "win_rate", "average_return", "maximum_return"}:
-        raise TaskOperationError("sort_by 必须是 win_rate、average_return 或 maximum_return")
+        raise TaskOperationError(
+            "sort_by 必须是 win_rate、average_return 或 maximum_return"
+        )
     if sort_order not in {None, "asc", "desc"}:
         raise TaskOperationError("sort_order 必须是 asc 或 desc")
     filters = [ModeScreeningStockResult.task_id == task.id]
+    if current_states:
+        invalid_states = sorted(set(current_states) - CURRENT_OPPORTUNITY_STATES)
+        if invalid_states:
+            raise TaskOperationError(f"current_state 无效：{', '.join(invalid_states)}")
+        filters.append(ModeScreeningStockResult.current_state.in_(set(current_states)))
     total = db.scalar(
         select(func.count()).select_from(ModeScreeningStockResult).where(*filters)
     ) or 0
@@ -191,10 +200,10 @@ def list_mode_screening_results(
             "average_return": ModeScreeningStockResult.average_return,
             "maximum_return": ModeScreeningStockResult.maximum_return,
         }[sort_by]
-        numeric_value = cast(column, Float)
+        sort_value = cast(column, Float)
         order_by = [
             case((column.is_(None), 1), else_=0),
-            numeric_value.desc() if sort_order == "desc" else numeric_value.asc(),
+            sort_value.desc() if sort_order == "desc" else sort_value.asc(),
             ModeScreeningStockResult.symbol,
         ]
     rows = list(db.scalars(
@@ -242,7 +251,11 @@ def list_mode_screening_trades(
     ) or 0
     trades = list(db.scalars(
         select(ModeScreeningTradeResult).where(*filters)
-        .order_by(ModeScreeningTradeResult.sequence)
+        .order_by(
+            ModeScreeningTradeResult.signal_date.desc(),
+            ModeScreeningTradeResult.sequence.desc(),
+            ModeScreeningTradeResult.id.desc(),
+        )
         .offset((page - 1) * page_size).limit(page_size)
     ).all())
     sales = list(db.scalars(

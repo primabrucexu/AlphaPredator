@@ -4,7 +4,7 @@ import json
 from decimal import Decimal
 
 from app.screening.backtest import run_individual_backtest
-from app.screening.executor import execute_screening_rule
+from app.screening.executor import execute_screening_rule_with_backtest
 from app.screening.models import ScreeningOutcome, StockIdentity, valid_daily_bars
 from app.tasks.context import TaskContext
 from app.tasks.models import (
@@ -15,6 +15,7 @@ from app.tasks.models import (
     TaskItem,
     TaskItemStatus,
 )
+from app.tasks.mode_screening_state import derive_mode_screening_current_state
 
 from . import TaskItemSkipped, TaskItemSpec
 from .screening import ScreeningRuleExecuteHandler, _json, _parse_date, _parse_rule_input
@@ -71,7 +72,7 @@ class ModeScreeningAnalysisHandler(ScreeningRuleExecuteHandler):
         )
         context.report_progress(0, 2, f"正在扫描 {stock.symbol}")
         source_bars = self._market_store().daily_bars(stock.symbol, end_date=as_of_date)
-        screening = execute_screening_rule(
+        screening, evaluated_backtest = execute_screening_rule_with_backtest(
             self.registry.get(rule_id, revision),
             stock=stock,
             source_bars=source_bars,
@@ -88,18 +89,23 @@ class ModeScreeningAnalysisHandler(ScreeningRuleExecuteHandler):
         context.report_progress(1, 2, f"{stock.symbol} 已命中，正在回测")
         valid_bars = valid_daily_bars(source_bars)
         factory = self.registry.get_backtest_factory(rule_id, revision)
-        backtest = run_individual_backtest(
-            rule_id=rule_id,
-            rule_revision=revision,
-            parameters=parameters,
-            stock=stock,
-            source_bars=source_bars,
-            start_date=valid_bars[0].trade_date,
-            end_date=as_of_date,
-            session=factory(stock, parameters),
+        backtest = (
+            evaluated_backtest
+            or run_individual_backtest(
+                rule_id=rule_id,
+                rule_revision=revision,
+                parameters=parameters,
+                stock=stock,
+                source_bars=source_bars,
+                start_date=valid_bars[0].trade_date,
+                end_date=as_of_date,
+                session=factory(stock, parameters),
+            )
         ).to_dict()
         trades = list(backtest["trades"])
         statistics = _trade_statistics(trades)
+        open_trade = backtest.get("open_trade")
+        pending_orders = list(backtest.get("pending_orders", []))
         stock_result = ModeScreeningStockResult(
             task_id=task.id,
             task_item_id=item.id,
@@ -114,8 +120,14 @@ class ModeScreeningAnalysisHandler(ScreeningRuleExecuteHandler):
             evidence_json=json.dumps(screening_payload.get("evidence", []), ensure_ascii=False),
             metrics_json=json.dumps(screening_payload.get("metrics", {}), ensure_ascii=False),
             backtest_status=str(backtest["status"]),
-            open_trade_json=json.dumps(backtest.get("open_trade"), ensure_ascii=False),
-            pending_orders_json=json.dumps(backtest.get("pending_orders", []), ensure_ascii=False),
+            current_state=derive_mode_screening_current_state(
+                backtest_status=str(backtest["status"]),
+                as_of_date=as_of_date.isoformat(),
+                open_trade=open_trade if isinstance(open_trade, dict) else None,
+                pending_orders=pending_orders,
+            ),
+            open_trade_json=json.dumps(open_trade, ensure_ascii=False),
+            pending_orders_json=json.dumps(pending_orders, ensure_ascii=False),
             **statistics,
         )
         context.db.add(stock_result)

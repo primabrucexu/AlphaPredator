@@ -1,4 +1,4 @@
-import type { DailyBar, GlobalTag, ModeScreeningStockResult, ModeScreeningTradeResult, Page, Quote, StockSummary, Tag, Task, TaskItem, WatchItem } from './types'
+import type { DailyBar, GlobalTag, ModeScreeningCurrentState, ModeScreeningStockResult, ModeScreeningTradeResult, Page, Quote, StockSummary, Tag, Task, TaskItem, WatchItem } from './types'
 
 export interface ApiErrorBody {
   detail?: string | { message?: string; existing_task_id?: number }
@@ -44,13 +44,13 @@ export const api = {
   createStockDirectoryTask: () => request<Task>('/api/tasks/stock-directory-refresh', { method: 'POST' }),
   createMarketDailyBarsTask: (mode: 'incremental' | 'full') => request<Task>('/api/tasks/market-daily-bars-update', { method: 'POST', body: JSON.stringify({ mode }) }),
   createSR001ScreeningTask: (asOfDate: string, symbols?: string[]) => request<Task>('/api/tasks/screening-rule-execute', {
-    method: 'POST', body: JSON.stringify({ rule_id: 'SR001', rule_revision: 2, parameters: {}, as_of_date: asOfDate, ...(symbols?.length ? { symbols } : {}) }),
+    method: 'POST', body: JSON.stringify({ rule_id: 'SR001', rule_revision: 3, parameters: {}, as_of_date: asOfDate, ...(symbols?.length ? { symbols } : {}) }),
   }),
   createSR001ModeScreeningTask: (asOfDate: string, symbols?: string[]) => request<Task>('/api/tasks/mode-screening-analysis', {
-    method: 'POST', body: JSON.stringify({ rule_id: 'SR001', rule_revision: 2, parameters: {}, as_of_date: asOfDate, ...(symbols?.length ? { symbols } : {}) }),
+    method: 'POST', body: JSON.stringify({ rule_id: 'SR001', rule_revision: 3, parameters: {}, as_of_date: asOfDate, ...(symbols?.length ? { symbols } : {}) }),
   }),
   createSR001IndividualBacktestTask: (symbol: string, startDate: string, endDate: string) => request<Task>('/api/tasks/individual-backtest', {
-    method: 'POST', body: JSON.stringify({ rule_id: 'SR001', rule_revision: 2, parameters: {}, symbol, start_date: startDate, end_date: endDate }),
+    method: 'POST', body: JSON.stringify({ rule_id: 'SR001', rule_revision: 3, parameters: {}, symbol, start_date: startDate, end_date: endDate }),
   }),
   marketDailyBarsCoverage: () => request<{ start_date: string | null; end_date: string | null }>('/api/tasks/market-daily-bars-coverage'),
   tasks: (page = 1, pageSize = 20, status = '', taskType = '', schedulingPolicy = '') => {
@@ -62,9 +62,10 @@ export const api = {
   },
   task: (id: number) => request<Task>(`/api/tasks/${id}`),
   taskItems: (id: number, page = 1, pageSize = 50) => request<Page<TaskItem>>(`/api/tasks/${id}/items?page=${page}&page_size=${pageSize}`),
-  modeScreeningResults: (id: number, page = 1, pageSize = 20, sortBy = '', sortOrder = '') => {
+  modeScreeningResults: (id: number, page = 1, pageSize = 20, sortBy = '', sortOrder = '', currentStates: ModeScreeningCurrentState[] = []) => {
     const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
     if (sortBy && sortOrder) { query.set('sort_by', sortBy); query.set('sort_order', sortOrder) }
+    currentStates.forEach(state => query.append('current_state', state))
     return request<Page<ModeScreeningStockResult>>(`/api/tasks/${id}/mode-screening-results?${query}`)
   },
   modeScreeningTrades: (taskId: number, resultId: number, page = 1, pageSize = 20) => request<Page<ModeScreeningTradeResult>>(`/api/tasks/${taskId}/mode-screening-results/${resultId}/trades?page=${page}&page_size=${pageSize}`),

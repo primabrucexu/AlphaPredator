@@ -31,6 +31,7 @@ from app.tasks.models import (
     TaskItem,
     TaskStatus,
 )
+from app.tasks.mode_screening_state import derive_mode_screening_current_state
 from app.tasks.runner import run_next_task
 from app.tasks.service import create_task, load_json
 
@@ -52,6 +53,40 @@ def bars():
         )
         for index in range(3)
     ]
+
+
+@pytest.mark.parametrize(
+    ("backtest_status", "open_trade", "pending_orders", "expected"),
+    [
+        ("pending_entry", None, [{"action": "buy"}], "pending_entry"),
+        ("open_position", {"buy_date": "2026-01-03", "sells": []}, [], "bought_today"),
+        ("open_position", {"buy_date": "2026-01-02", "sells": []}, [], "holding"),
+        (
+            "open_position",
+            {"buy_date": "2026-01-02", "sells": [{"reason_id": "TP1"}]},
+            [],
+            "take_profit",
+        ),
+        (
+            "open_position",
+            {"buy_date": "2026-01-02", "sells": [{"reason_id": "TP1"}]},
+            [{"action": "sell", "reason_id": "EX1"}],
+            "pending_exit",
+        ),
+    ],
+)
+def test_mode_screening_current_state_has_stable_priority(
+    backtest_status,
+    open_trade,
+    pending_orders,
+    expected,
+):
+    assert derive_mode_screening_current_state(
+        backtest_status=backtest_status,
+        as_of_date="2026-01-03",
+        open_trade=open_trade,
+        pending_orders=pending_orders,
+    ) == expected
 
 
 class FakeStore:
@@ -350,6 +385,130 @@ def test_mode_screening_result_sorting_is_global_and_keeps_nulls_last(sort_by):
     )
     assert [item["symbol"] for item in ascending.json()["items"]] == [
         "000001.SZ", "000002.SZ", "000003.SZ",
+    ]
+
+
+def test_mode_screening_current_state_filter_is_multi_select_and_precedes_pagination():
+    factory = make_factory()
+    with factory() as db:
+        task = Task(
+            task_type="mode_screening_analysis",
+            scheduling_policy=SchedulingPolicy.COMPUTE.value,
+            title="current state filtering",
+            status=TaskStatus.SUCCEEDED.value,
+        )
+        db.add(task)
+        db.flush()
+        values = [
+            ("000001.SZ", "pending_entry"),
+            ("000002.SZ", "bought_today"),
+            ("000003.SZ", "holding"),
+            ("000004.SZ", "take_profit"),
+            ("000005.SZ", "pending_exit"),
+        ]
+        for sequence, (symbol, current_state) in enumerate(values):
+            item = TaskItem(task_id=task.id, sequence=sequence, title=symbol)
+            db.add(item)
+            db.flush()
+            db.add(ModeScreeningStockResult(
+                task_id=task.id,
+                task_item_id=item.id,
+                symbol=symbol,
+                code=symbol[:6],
+                name=symbol,
+                as_of_date="2026-01-03",
+                signal_date="2026-01-03",
+                backtest_status="open_position",
+                current_state=current_state,
+            ))
+        db.commit()
+        task_id = task.id
+
+    client = make_client(factory)
+    first_page = client.get(
+        f"/api/tasks/{task_id}/mode-screening-results",
+        params=[
+            ("page", 1),
+            ("page_size", 1),
+            ("current_state", "pending_entry"),
+            ("current_state", "take_profit"),
+        ],
+    )
+    assert first_page.status_code == 200
+    assert first_page.json()["total"] == 2
+    assert [item["symbol"] for item in first_page.json()["items"]] == ["000001.SZ"]
+    assert first_page.json()["items"][0]["current_state"] == "pending_entry"
+    second_page = client.get(
+        f"/api/tasks/{task_id}/mode-screening-results",
+        params=[
+            ("page", 2),
+            ("page_size", 1),
+            ("current_state", "pending_entry"),
+            ("current_state", "take_profit"),
+        ],
+    )
+    assert [item["symbol"] for item in second_page.json()["items"]] == ["000004.SZ"]
+    removed_sort = client.get(
+        f"/api/tasks/{task_id}/mode-screening-results",
+        params={"sort_by": "signal_date", "sort_order": "desc"},
+    )
+    assert removed_sort.status_code == 422
+
+
+def test_mode_screening_trades_are_paginated_by_signal_date_descending():
+    factory = make_factory()
+    with factory() as db:
+        task = Task(
+            task_type="mode_screening_analysis",
+            scheduling_policy=SchedulingPolicy.COMPUTE.value,
+            title="trade date ordering",
+            status=TaskStatus.SUCCEEDED.value,
+        )
+        db.add(task)
+        db.flush()
+        item = TaskItem(task_id=task.id, sequence=0, title="000001.SZ")
+        db.add(item)
+        db.flush()
+        stock_result = ModeScreeningStockResult(
+            task_id=task.id,
+            task_item_id=item.id,
+            symbol="000001.SZ",
+            code="000001",
+            name="平安银行",
+            as_of_date="2026-01-10",
+            signal_date="2026-01-10",
+            backtest_status="completed",
+        )
+        db.add(stock_result)
+        db.flush()
+        for sequence, signal_date in enumerate(("2026-01-02", "2026-01-08", "2026-01-05")):
+            db.add(ModeScreeningTradeResult(
+                stock_result_id=stock_result.id,
+                sequence=sequence,
+                signal_date=signal_date,
+                buy_date=signal_date,
+                buy_price="10",
+                realized_return="0.1",
+            ))
+        db.commit()
+        task_id = task.id
+        result_id = stock_result.id
+
+    client = make_client(factory)
+    first_page = client.get(
+        f"/api/tasks/{task_id}/mode-screening-results/{result_id}/trades",
+        params={"page": 1, "page_size": 2},
+    )
+    assert first_page.status_code == 200
+    assert [item["signal_date"] for item in first_page.json()["items"]] == [
+        "2026-01-08", "2026-01-05",
+    ]
+    second_page = client.get(
+        f"/api/tasks/{task_id}/mode-screening-results/{result_id}/trades",
+        params={"page": 2, "page_size": 2},
+    )
+    assert [item["signal_date"] for item in second_page.json()["items"]] == [
+        "2026-01-02",
     ]
 
 

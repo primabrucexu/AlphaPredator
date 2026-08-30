@@ -3,10 +3,10 @@
     {
       "id": "SR001",
       "name": "趋势反转",
-      "summary": "以 MACD 柱从局部低点后连续三个有效日改善识别趋势反转，并按 TP1、EX1、SL1 执行回测",
+      "summary": "以 MACD 柱从局部低点后连续三个有效日改善识别趋势反转，并结合交易生命周期筛选当前机会",
       "definition_status": "已确认",
       "implementation_status": "已实现",
-      "revision": 2,
+      "revision": 3,
       "feature": "F006.3",
       "document": "SR001-trend-reversal.md"
     }

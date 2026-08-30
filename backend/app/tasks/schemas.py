@@ -102,6 +102,7 @@ class ModeScreeningStockResultRead(BaseModel):
     evidence: list[dict[str, Any]]
     metrics: dict[str, Any]
     backtest_status: str
+    current_state: str
     completed_trades: int
     winning_trades: int
     losing_trades: int

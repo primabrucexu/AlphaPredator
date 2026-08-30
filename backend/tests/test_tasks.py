@@ -153,6 +153,54 @@ def test_mode_screening_result_migration_is_additive_and_repeatable():
     } <= set(inspect(engine).get_table_names())
 
 
+def test_mode_screening_result_migration_backfills_current_state():
+    engine = create_engine("sqlite://", poolclass=StaticPool)
+    assert migrate_task_tables(engine) is True
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            """
+            CREATE TABLE mode_screening_stock_results (
+                id INTEGER PRIMARY KEY,
+                task_id INTEGER NOT NULL,
+                backtest_status VARCHAR(32) NOT NULL,
+                as_of_date VARCHAR(10) NOT NULL,
+                open_trade_json TEXT NOT NULL,
+                pending_orders_json TEXT NOT NULL
+            )
+            """
+        )
+        connection.exec_driver_sql(
+            """
+            INSERT INTO mode_screening_stock_results
+                (id, task_id, backtest_status, as_of_date, open_trade_json, pending_orders_json)
+            VALUES
+                (1, 1, 'pending_entry', '2026-01-03', 'null', '[{"action":"buy"}]'),
+                (2, 1, 'open_position', '2026-01-03', '{"buy_date":"2026-01-03","sells":[]}', '[]'),
+                (3, 1, 'open_position', '2026-01-03', '{"buy_date":"2026-01-02","sells":[]}', '[]'),
+                (4, 1, 'open_position', '2026-01-03', '{"buy_date":"2026-01-02","sells":[{"reason_id":"TP1"}]}', '[]'),
+                (5, 1, 'open_position', '2026-01-03', '{"buy_date":"2026-01-02","sells":[]}', '[{"action":"sell"}]')
+            """
+        )
+
+    assert migrate_mode_screening_results(engine) is True
+    assert migrate_mode_screening_results(engine) is False
+    assert "current_state" in {
+        column["name"]
+        for column in inspect(engine).get_columns("mode_screening_stock_results")
+    }
+    with engine.connect() as connection:
+        states = connection.exec_driver_sql(
+            "SELECT current_state FROM mode_screening_stock_results ORDER BY id"
+        ).scalars().all()
+    assert states == [
+        "pending_entry",
+        "bought_today",
+        "holding",
+        "take_profit",
+        "pending_exit",
+    ]
+
+
 def test_task_public_uuid_migration_backfills_existing_rows_and_is_repeatable():
     engine = create_engine("sqlite://")
     with engine.begin() as connection:

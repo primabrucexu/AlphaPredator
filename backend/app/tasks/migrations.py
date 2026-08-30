@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from uuid import uuid4
 
 from sqlalchemy import Engine, inspect
@@ -12,6 +13,7 @@ from .models import (
     TaskItem,
     TaskWorkerLease,
 )
+from .mode_screening_state import derive_mode_screening_current_state
 
 
 def migrate_task_tables(engine: Engine) -> bool:
@@ -63,7 +65,7 @@ def migrate_task_public_uuids(engine: Engine) -> bool:
 
 def migrate_mode_screening_results(engine: Engine) -> bool:
     """Create additive F006.4 result tables without changing existing tasks."""
-    created = False
+    changed = False
     with engine.begin() as connection:
         for table in (
             ModeScreeningStockResult.__table__,
@@ -72,5 +74,44 @@ def migrate_mode_screening_results(engine: Engine) -> bool:
         ):
             if not inspect(connection).has_table(table.name):
                 table.create(connection)
-                created = True
-    return created
+                changed = True
+        columns = {
+            column["name"]
+            for column in inspect(connection).get_columns(ModeScreeningStockResult.__tablename__)
+        }
+        if "current_state" not in columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE mode_screening_stock_results "
+                "ADD COLUMN current_state VARCHAR(32) NOT NULL DEFAULT 'completed'"
+            )
+            rows = connection.exec_driver_sql(
+                """
+                SELECT id, backtest_status, as_of_date, open_trade_json, pending_orders_json
+                FROM mode_screening_stock_results
+                """
+            ).all()
+            for result_id, backtest_status, as_of_date, open_trade_json, pending_orders_json in rows:
+                try:
+                    open_trade = json.loads(open_trade_json)
+                except (json.JSONDecodeError, TypeError):
+                    open_trade = None
+                try:
+                    pending_orders = json.loads(pending_orders_json)
+                except (json.JSONDecodeError, TypeError):
+                    pending_orders = []
+                current_state = derive_mode_screening_current_state(
+                    backtest_status=str(backtest_status),
+                    as_of_date=str(as_of_date),
+                    open_trade=open_trade if isinstance(open_trade, dict) else None,
+                    pending_orders=pending_orders if isinstance(pending_orders, list) else [],
+                )
+                connection.exec_driver_sql(
+                    "UPDATE mode_screening_stock_results SET current_state = ? WHERE id = ?",
+                    (current_state, result_id),
+                )
+            changed = True
+        connection.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_mode_screening_results_task_state "
+            "ON mode_screening_stock_results (task_id, current_state)"
+        )
+    return changed

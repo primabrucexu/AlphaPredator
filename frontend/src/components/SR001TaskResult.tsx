@@ -75,16 +75,17 @@ function ScreeningResult({ task }: { task: Task }) {
   const columns: ColumnsType<ScreeningMatch> = [
     { title: '股票', fixed: 'left', width: 150, render: (_, row) => <><Typography.Text strong>{row.code ?? row.symbol.split('.')[0]}</Typography.Text><br /><Typography.Text type="secondary">{row.name}</Typography.Text></> },
     { title: '行情截止日', dataIndex: 'data_end_date', width: 120, render: text },
-    { title: '信号日', dataIndex: 'signal_date', width: 120, render: text },
-    { title: '条件', width: 190, render: (_, row) => <Space size={4} wrap>{['U1', 'U2', 'C1'].map(id => {
+    { title: '信号日', dataIndex: 'signal_date', width: 120, render: text, sorter: (left, right) => String(left.signal_date ?? '').localeCompare(String(right.signal_date ?? '')), sortDirections: ['descend', 'ascend'] },
+    { title: '条件', width: 230, render: (_, row) => <Space size={4} wrap>{['U1', 'U2', 'C1', ...(evidence(row, 'L1') ? ['L1'] : [])].map(id => {
       const item = evidence(row, id); return <Tag key={id} color={item ? item.passed ? 'success' : 'error' : undefined}>{id} {item ? item.passed ? '通过' : '未通过' : '未记录'}</Tag>
     })}</Space> },
-    { title: 'MACD 柱窗口', width: 410, render: (_, row) => <Typography.Text code>{macdWindow(row).map(decimal3).join(' → ')}</Typography.Text> },
+    { title: 'MACD 柱窗口', width: 340, render: (_, row) => <Typography.Text code>{macdWindow(row).map(decimal3).join(' → ')}</Typography.Text> },
     { title: '历史状态', width: 110, render: (_, row) => row.insufficient_history === undefined ? <Tag>未记录</Tag> : row.insufficient_history ? <Tag color="warning">不足 100 根</Tag> : <Tag color="success">充足</Tag> },
   ]
   return <Card title="SR001 选股结果">
     <Descriptions column={{ xs: 1, sm: 2, lg: 4 }} items={[
       { key: 'date', label: '选股基准日', children: text(result.as_of_date) },
+      { key: 'rule-version', label: '规则版本', children: `${text(task.input.rule_id)} revision ${text(task.input.rule_revision)}` },
       { key: 'total', label: '股票总数', children: count(result.stock_count) },
       { key: 'matched', label: '命中', children: count(result.matched_stocks) },
       { key: 'not-matched', label: '未命中', children: count(result.not_matched_stocks) },
@@ -105,8 +106,9 @@ function BacktestResult({ task }: { task: Task }) {
     const sells = values<Sale>(trade.sells)
     rows.push({ key: keyPrefix, state, signalDate: trade.signal_date, buyDate: trade.buy_date, buyPrice: trade.buy_price, operations: sells, realizedReturn: trade.realized_return })
   }
-  trades.forEach((trade, index) => append(trade, '已结束', `closed-${index}`))
   if (openTrade) append(openTrade, `未平仓（剩余 ${percent(openTrade.remaining_fraction)}）`, 'open')
+  const sortedTrades = [...trades].sort((left, right) => right.signal_date.localeCompare(left.signal_date))
+  sortedTrades.forEach((trade, index) => append(trade, '已结束', `closed-${index}`))
   const columns: ColumnsType<TradeRow> = [
     { title: '状态', dataIndex: 'state', width: 170, render: value => <Tag color={String(value).startsWith('未平仓') ? 'warning' : 'success'}>{value}</Tag> },
     { title: '信号日', dataIndex: 'signalDate', width: 120 },
@@ -123,6 +125,7 @@ function BacktestResult({ task }: { task: Task }) {
   return <Card title="SR001 个股回测结果">
     <Descriptions column={{ xs: 1, sm: 2, lg: 4 }} items={[
       { key: 'stock', label: '股票', children: `${text(result.code)} ${text(result.name)}` },
+      { key: 'rule-version', label: '规则版本', children: `${text(task.input.rule_id)} revision ${text(task.input.rule_revision)}` },
       { key: 'range', label: '回测区间', children: `${text(result.start_date)} 至 ${text(result.end_date)}` },
       { key: 'data', label: '实际数据', children: `${text(result.data_start_date)} 至 ${text(result.data_end_date)}` },
       { key: 'status', label: '结果状态', children: text(result.status) },

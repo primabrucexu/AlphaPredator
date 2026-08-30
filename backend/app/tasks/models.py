@@ -115,6 +115,7 @@ class ModeScreeningStockResult(Base):
     evidence_json: Mapped[str] = mapped_column(Text, default="[]")
     metrics_json: Mapped[str] = mapped_column(Text, default="{}")
     backtest_status: Mapped[str] = mapped_column(String(32))
+    current_state: Mapped[str] = mapped_column(String(32), default="completed")
     completed_trades: Mapped[int] = mapped_column(default=0)
     winning_trades: Mapped[int] = mapped_column(default=0)
     losing_trades: Mapped[int] = mapped_column(default=0)

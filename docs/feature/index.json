@@ -73,14 +73,14 @@
     },
     {
       "id": "F006.3",
-      "summary": "接入 SR001 MACD 柱局部低点后连续三个有效日改善选股及 TP1、EX1、SL1 回测战法",
+      "summary": "接入 SR001 MACD 柱连续改善信号、当前交易生命周期筛选及 TP1、EX1、SL1 回测战法",
       "status": "部分完成",
       "mcp_status": "已实现",
       "document": "F006.3-trend-reversal-strategy.md"
     },
     {
       "id": "F006.4",
-      "summary": "扫描当前规则信号并为每只命中股票联动展示历史个股回测表现",
+      "summary": "扫描仍处于待买入或持仓生命周期的当前规则信号，并联动展示历史个股回测表现",
       "status": "WIP",
       "mcp_status": "已实现",
       "document": "F006.4-mode-screening-with-backtest-analysis.md"

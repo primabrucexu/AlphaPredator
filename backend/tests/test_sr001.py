@@ -7,7 +7,7 @@ import pytest
 
 from app.market_data.storage import StoredDailyBar
 from app.screening.backtest import run_individual_backtest
-from app.screening.executor import execute_screening_rule
+from app.screening.executor import execute_screening_rule, execute_screening_rule_with_backtest
 from app.screening.models import ScreeningOutcome, StockIdentity, valid_daily_bars
 from app.screening.registry import RuleRegistry
 from app.screening.rules import register_production_rules
@@ -15,11 +15,13 @@ from app.screening.rules.sr001 import (
     FIXED_PARAMETERS,
     MacdPoint,
     SR001Revision2Rule,
+    SR001Revision3Rule,
     SR001Rule,
     _MacdAccumulator,
     calculate_macd,
     create_sr001_backtest_session,
     create_sr001_v2_backtest_session,
+    create_sr001_v3_backtest_session,
 )
 
 
@@ -140,6 +142,8 @@ def test_sr001_production_registration_is_idempotent():
     assert registry.get_backtest_factory("SR001", 1) is create_sr001_backtest_session
     assert isinstance(registry.get("SR001", 2), SR001Revision2Rule)
     assert registry.get_backtest_factory("SR001", 2) is create_sr001_v2_backtest_session
+    assert isinstance(registry.get("SR001", 3), SR001Revision3Rule)
+    assert registry.get_backtest_factory("SR001", 3) is create_sr001_v3_backtest_session
 
 
 def test_sr001_revision_2_uses_first_three_day_improvement_signal_for_600183(monkeypatch):
@@ -256,6 +260,118 @@ def test_sr001_revision_2_backtest_buys_600183_after_august_27_signal(monkeypatc
         "remaining_fraction": "1",
         "realized_return": "0",
         "sells": [],
+    }
+
+
+def test_sr001_revision_3_keeps_600183_while_signal_trade_is_open(monkeypatch):
+    dates = [
+        date(2026, 8, 21),
+        date(2026, 8, 24),
+        date(2026, 8, 25),
+        date(2026, 8, 26),
+        date(2026, 8, 27),
+        date(2026, 8, 28),
+    ]
+    source = [StoredDailyBar(
+        trade_date=trade_date,
+        open=Decimal("140.01") if trade_date == date(2026, 8, 28) else Decimal("100"),
+        high=Decimal("151.79") if trade_date == date(2026, 8, 28) else Decimal("101"),
+        low=Decimal("138.41") if trade_date == date(2026, 8, 28) else Decimal("99"),
+        close=Decimal("145.65") if trade_date == date(2026, 8, 28) else Decimal("100"),
+        volume=100,
+        amount=Decimal("1000"),
+    ) for trade_date in dates]
+    signal_window = histograms(
+        "-1.7089013891788979",
+        "-2.4475092962587333",
+        "-2.1674758640267718",
+        "-1.6670059723071692",
+        "0.4804869159602148",
+    )
+    continued_window = (*signal_window, histograms("2.2138614939515757")[0])
+
+    monkeypatch.setattr(
+        "app.screening.rules.sr001.calculate_macd",
+        lambda _bars: continued_window,
+    )
+
+    def fake_update(_session, history):
+        if history[-1].trade_date == date(2026, 8, 27):
+            return signal_window
+        return histograms("0", "0", "0", "0", "0")
+
+    monkeypatch.setattr("app.screening.rules.sr001.SR001BacktestSession._update_macd", fake_update)
+    result, backtest = execute_screening_rule_with_backtest(
+        SR001Revision3Rule(),
+        stock=StockIdentity("600183.SH", "600183", "生益科技"),
+        source_bars=source,
+        as_of_date=date(2026, 8, 28),
+        parameters={},
+    )
+
+    assert result.outcome == ScreeningOutcome.MATCHED
+    assert result.signal_date == date(2026, 8, 27)
+    assert result.evidence[-1].condition_id == "L1"
+    assert result.evidence[-1].values["backtest_status"] == "open_position"
+    assert backtest is not None
+    assert backtest.status == "open_position"
+
+
+def test_sr001_revision_3_excludes_603468_after_signal_trade_closed():
+    prices = [
+        (date(2026, 8, 6), "39.60", "45.45", "36.89", "37.49"),
+        (date(2026, 8, 7), "31.00", "32.40", "30.67", "30.75"),
+        (date(2026, 8, 10), "29.47", "30.30", "28.61", "29.10"),
+        (date(2026, 8, 11), "28.65", "28.75", "28.00", "28.09"),
+        (date(2026, 8, 12), "27.88", "28.96", "27.60", "28.04"),
+        (date(2026, 8, 13), "27.76", "27.76", "26.78", "26.78"),
+        (date(2026, 8, 14), "26.65", "26.94", "25.93", "25.93"),
+        (date(2026, 8, 17), "25.80", "25.90", "25.42", "25.87"),
+        (date(2026, 8, 18), "25.75", "26.23", "25.71", "25.90"),
+        (date(2026, 8, 19), "25.65", "25.66", "24.24", "24.36"),
+        (date(2026, 8, 20), "24.30", "24.54", "24.12", "24.19"),
+        (date(2026, 8, 21), "24.11", "24.11", "23.71", "23.85"),
+        (date(2026, 8, 24), "23.84", "23.96", "23.21", "23.68"),
+        (date(2026, 8, 25), "23.43", "23.84", "23.35", "23.74"),
+        (date(2026, 8, 26), "23.62", "24.05", "23.59", "23.84"),
+        (date(2026, 8, 27), "23.82", "24.19", "23.61", "24.01"),
+        (date(2026, 8, 28), "23.94", "24.04", "23.81", "23.82"),
+    ]
+    source = [StoredDailyBar(
+        trade_date=trade_date,
+        open=Decimal(open_price),
+        high=Decimal(high),
+        low=Decimal(low),
+        close=Decimal(close),
+        volume=100,
+        amount=Decimal("1000"),
+    ) for trade_date, open_price, high, low, close in prices]
+    stock = StockIdentity("603468.SH", "603468", "测试股票")
+
+    revision_2 = execute_screening_rule(
+        SR001Revision2Rule(),
+        stock=stock,
+        source_bars=source,
+        as_of_date=date(2026, 8, 28),
+        parameters={},
+    )
+    revision_3 = execute_screening_rule(
+        SR001Revision3Rule(),
+        stock=stock,
+        source_bars=source,
+        as_of_date=date(2026, 8, 28),
+        parameters={},
+    )
+
+    assert revision_2.outcome == ScreeningOutcome.MATCHED
+    assert revision_2.signal_date == date(2026, 8, 14)
+    assert revision_3.outcome == ScreeningOutcome.NOT_MATCHED
+    assert revision_3.signal_date is None
+    assert revision_3.evidence[-1].condition_id == "L1"
+    assert revision_3.evidence[-1].values == {
+        "candidate_signal_date": "2026-08-14",
+        "backtest_status": "completed",
+        "active_signal": False,
     }
 
 

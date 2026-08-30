@@ -25,11 +25,13 @@ export interface TaskItem {
 }
 export interface Page<T> { items: T[]; total: number; page: number; page_size: number }
 
+export type ModeScreeningCurrentState = 'pending_entry' | 'bought_today' | 'holding' | 'take_profit' | 'pending_exit'
+
 export interface ModeScreeningStockResult {
   id: number; symbol: string; code: string; name: string; as_of_date: string
   data_start_date: string | null; data_end_date: string | null; signal_date: string | null
   insufficient_history: boolean; evidence: Array<{ condition_id: string; passed: boolean; values: Record<string, unknown> }>
-  metrics: Record<string, unknown>; backtest_status: string; completed_trades: number
+  metrics: Record<string, unknown>; backtest_status: string; current_state: ModeScreeningCurrentState | 'completed'; completed_trades: number
   winning_trades: number; losing_trades: number; flat_trades: number; win_rate: string | null
   average_return: string | null; maximum_return: string | null; minimum_return: string | null
   open_trade: Record<string, unknown> | null; pending_orders: Array<Record<string, unknown>>

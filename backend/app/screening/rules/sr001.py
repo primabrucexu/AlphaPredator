@@ -6,11 +6,14 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
+from app.market_data.storage import StoredDailyBar
 from app.screening.backtest import (
     BacktestAction,
     BacktestContext,
     BacktestInstruction,
     BacktestPendingOrder,
+    IndividualBacktestResult,
+    run_individual_backtest,
 )
 from app.screening.models import (
     JsonValue,
@@ -228,6 +231,82 @@ class SR001Revision2Rule(SR001Rule):
         )
 
 
+class SR001Revision3Rule(SR001Revision2Rule):
+    revision = 3
+
+    def validate_parameters(self, parameters: dict) -> dict[str, JsonValue]:
+        if parameters and parameters != FIXED_PARAMETERS:
+            raise ValueError("SR001 revision 3 使用固定参数，不允许覆盖")
+        return dict(FIXED_PARAMETERS)
+
+    def evaluate_with_backtest(
+        self,
+        stock: StockIdentity,
+        bars: tuple[ValidDailyBar, ...],
+        parameters: dict[str, JsonValue],
+    ) -> tuple[RuleEvaluation, IndividualBacktestResult | None]:
+        if parameters != FIXED_PARAMETERS:
+            raise ValueError("SR001 revision 3 参数与固定定义不一致")
+        candidate = super().evaluate(stock, bars, parameters)
+        if not candidate.matched or candidate.signal_date is None:
+            return candidate, None
+        source_bars = [StoredDailyBar(
+            trade_date=bar.trade_date,
+            open=bar.open,
+            high=bar.high,
+            low=bar.low,
+            close=bar.close,
+            volume=bar.volume,
+            amount=Decimal("0"),
+        ) for bar in bars]
+        backtest = run_individual_backtest(
+            rule_id=self.rule_id,
+            rule_revision=self.revision,
+            parameters=parameters,
+            stock=stock,
+            source_bars=source_bars,
+            start_date=bars[0].trade_date,
+            end_date=bars[-1].trade_date,
+            session=create_sr001_v3_backtest_session(stock, parameters),
+        )
+        signal_text = candidate.signal_date.isoformat()
+        open_signal = (
+            str(backtest.open_trade.get("signal_date"))
+            if backtest.open_trade is not None
+            else None
+        )
+        pending_entry = any(
+            order.action == BacktestAction.BUY and order.signal_date == candidate.signal_date
+            for order in backtest.pending_orders
+        )
+        active = open_signal == signal_text or pending_entry
+        lifecycle = RuleEvidence(
+            "L1",
+            active,
+            {
+                "candidate_signal_date": signal_text,
+                "backtest_status": backtest.status,
+                "active_signal": active,
+            },
+        )
+        return RuleEvaluation(
+            matched=active,
+            signal_date=candidate.signal_date if active else None,
+            evidence=(*candidate.evidence, lifecycle),
+            metrics=candidate.metrics,
+            insufficient_history=candidate.insufficient_history,
+        ), backtest
+
+    def evaluate(
+        self,
+        stock: StockIdentity,
+        bars: tuple[ValidDailyBar, ...],
+        parameters: dict[str, JsonValue],
+    ) -> RuleEvaluation:
+        evaluation, _ = self.evaluate_with_backtest(stock, bars, parameters)
+        return evaluation
+
+
 def _is_one_price_limit_up(history: tuple[ValidDailyBar, ...]) -> bool:
     if len(history) < 2:
         return False
@@ -393,12 +472,27 @@ def create_sr001_v2_backtest_session(
     )
 
 
+def create_sr001_v3_backtest_session(
+    stock: StockIdentity,
+    parameters: dict[str, JsonValue],
+) -> SR001BacktestSession:
+    if parameters != FIXED_PARAMETERS:
+        raise ValueError("SR001 revision 3 参数与固定定义不一致")
+    return SR001BacktestSession(
+        stock,
+        signal_evidence=_signal_evidence_v2,
+        signal_window=5,
+    )
+
+
 __all__ = [
     "FIXED_PARAMETERS",
     "SR001BacktestSession",
     "SR001Revision2Rule",
+    "SR001Revision3Rule",
     "SR001Rule",
     "calculate_macd",
     "create_sr001_backtest_session",
     "create_sr001_v2_backtest_session",
+    "create_sr001_v3_backtest_session",
 ]

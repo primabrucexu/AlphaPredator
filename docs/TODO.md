@@ -8,4 +8,5 @@ TODO 条目不代表需求已经确认或进入实现范围。开始实施前，
 
 | 来源 | 改进事项 | 状态 |
 |---|---|---|
-| SR001 | [IMP1：连续不下降条件的微小波动容差](screening-rules/SR001-trend-reversal.md#imp1连续不下降条件的微小波动容差) | 待全市场扫描后评估 |
+| SR001 | [IMP1：连续不下降条件的微小波动容差](screening-rules/SR001-trend-reversal.md#imp1连续不下降条件的微小波动容差) | 三态语义已确认，容差参数待全市场扫描后评估 |
+| SR001 | [IMP2：连续 MACD 改善行情的完整生命周期](screening-rules/SR001-trend-reversal.md#imp2连续-macd-改善行情的完整生命周期) | revision 3 已完成当前机会过滤，剩余交易方式待设计 |

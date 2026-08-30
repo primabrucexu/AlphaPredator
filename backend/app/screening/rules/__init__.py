@@ -4,9 +4,11 @@ from app.screening.registry import RuleRegistry, rule_registry
 
 from .sr001 import (
     SR001Revision2Rule,
+    SR001Revision3Rule,
     SR001Rule,
     create_sr001_backtest_session,
     create_sr001_v2_backtest_session,
+    create_sr001_v3_backtest_session,
 )
 
 
@@ -14,6 +16,7 @@ def register_production_rules(registry: RuleRegistry = rule_registry) -> None:
     rules = (
         (SR001Rule(), create_sr001_backtest_session),
         (SR001Revision2Rule(), create_sr001_v2_backtest_session),
+        (SR001Revision3Rule(), create_sr001_v3_backtest_session),
     )
     for rule, backtest_factory in rules:
         try:
@@ -24,8 +27,10 @@ def register_production_rules(registry: RuleRegistry = rule_registry) -> None:
 
 __all__ = [
     "SR001Revision2Rule",
+    "SR001Revision3Rule",
     "SR001Rule",
     "create_sr001_backtest_session",
     "create_sr001_v2_backtest_session",
+    "create_sr001_v3_backtest_session",
     "register_production_rules",
 ]

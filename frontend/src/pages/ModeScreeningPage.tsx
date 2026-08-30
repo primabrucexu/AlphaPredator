@@ -71,7 +71,7 @@ export default function ModeScreeningPage() {
   return <div className="stack-lg tasks-page">
     <div><Typography.Title>模式选股</Typography.Title><Typography.Text type="secondary">扫描当前出现信号的股票，并直接查看其历史回测表现。</Typography.Text></div>
     <Card title="SR001 趋势反转" extra={<RiseOutlined />}><Card type="inner" title="扫描并分析历史表现" extra={<FundOutlined />}>
-        <Typography.Paragraph type="secondary">按 SR001 revision 2 扫描指定日期；只对命中股票自动回测其本地最早行情至扫描日的历史表现。</Typography.Paragraph>
+        <Typography.Paragraph type="secondary">按 SR001 revision 3 扫描指定日期；只对当前信号仍处于待买入或持仓状态的股票展示历史表现。</Typography.Paragraph>
         <Space direction="vertical" className="w-full" size="middle">
           <DatePicker value={screeningDate} onChange={setScreeningDate} allowClear={false} format="YYYY-MM-DD" className="w-full" placeholder="选股基准日期" />
           <Radio.Group value={screeningScope} onChange={event => setScreeningScope(event.target.value)} options={[
