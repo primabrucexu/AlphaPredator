@@ -5,7 +5,7 @@ from datetime import date, datetime, time, timedelta
 from threading import Lock
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import Float, case, cast, func, select
 from sqlalchemy.orm import Session
 
 from app.database.models import Stock
@@ -16,7 +16,16 @@ from .handlers.market_daily_bars import TASK_TYPE as MARKET_DAILY_BARS_TASK_TYPE
 from .handlers.mode_screening import TASK_TYPE as MODE_SCREENING_TASK_TYPE
 from .handlers.screening import TASK_TYPE as SCREENING_RULE_TASK_TYPE
 from .handlers.stock_directory import TASK_TYPE as STOCK_DIRECTORY_TASK_TYPE
-from .models import SchedulingPolicy, Task, TaskItem, TaskItemStatus, TaskStatus
+from .models import (
+    ModeScreeningSaleResult,
+    ModeScreeningStockResult,
+    ModeScreeningTradeResult,
+    SchedulingPolicy,
+    Task,
+    TaskItem,
+    TaskItemStatus,
+    TaskStatus,
+)
 from .process import start_worker_process
 from .service import TaskPlanningError, create_task, get_active_task_by_type, load_json
 
@@ -152,6 +161,99 @@ def create_mode_screening_analysis_task(
         input=task_input,
         start_worker=start_worker,
     )
+
+
+def list_mode_screening_results(
+    db: Session,
+    task: Task,
+    *,
+    page: int,
+    page_size: int,
+    sort_by: str | None = None,
+    sort_order: str | None = None,
+) -> tuple[list[ModeScreeningStockResult], int]:
+    if task.task_type != MODE_SCREENING_TASK_TYPE:
+        raise TaskOperationError("该任务不是模式选股分析任务")
+    if (sort_by is None) != (sort_order is None):
+        raise TaskOperationError("sort_by 和 sort_order 必须同时提供")
+    if sort_by not in {None, "win_rate", "average_return", "maximum_return"}:
+        raise TaskOperationError("sort_by 必须是 win_rate、average_return 或 maximum_return")
+    if sort_order not in {None, "asc", "desc"}:
+        raise TaskOperationError("sort_order 必须是 asc 或 desc")
+    filters = [ModeScreeningStockResult.task_id == task.id]
+    total = db.scalar(
+        select(func.count()).select_from(ModeScreeningStockResult).where(*filters)
+    ) or 0
+    order_by = [ModeScreeningStockResult.symbol]
+    if sort_by is not None and sort_order is not None:
+        column = {
+            "win_rate": ModeScreeningStockResult.win_rate,
+            "average_return": ModeScreeningStockResult.average_return,
+            "maximum_return": ModeScreeningStockResult.maximum_return,
+        }[sort_by]
+        numeric_value = cast(column, Float)
+        order_by = [
+            case((column.is_(None), 1), else_=0),
+            numeric_value.desc() if sort_order == "desc" else numeric_value.asc(),
+            ModeScreeningStockResult.symbol,
+        ]
+    rows = list(db.scalars(
+        select(ModeScreeningStockResult).where(*filters)
+        .order_by(*order_by)
+        .offset((page - 1) * page_size).limit(page_size)
+    ).all())
+    return rows, total
+
+
+def get_mode_screening_result_by_symbol(
+    db: Session,
+    task: Task,
+    symbol: str,
+) -> ModeScreeningStockResult:
+    if task.task_type != MODE_SCREENING_TASK_TYPE:
+        raise TaskOperationError("该任务不是模式选股分析任务")
+    try:
+        normalized_symbol = normalize_symbol(symbol)
+    except ValueError as exc:
+        raise TaskOperationError(str(exc)) from exc
+    result = db.scalar(select(ModeScreeningStockResult).where(
+        ModeScreeningStockResult.task_id == task.id,
+        ModeScreeningStockResult.symbol == normalized_symbol,
+    ))
+    if result is None:
+        raise TaskOperationError("命中股票结果不存在")
+    return result
+
+
+def list_mode_screening_trades(
+    db: Session,
+    stock_result: ModeScreeningStockResult,
+    *,
+    page: int,
+    page_size: int,
+) -> tuple[
+    list[ModeScreeningTradeResult],
+    int,
+    dict[int, list[ModeScreeningSaleResult]],
+]:
+    filters = [ModeScreeningTradeResult.stock_result_id == stock_result.id]
+    total = db.scalar(
+        select(func.count()).select_from(ModeScreeningTradeResult).where(*filters)
+    ) or 0
+    trades = list(db.scalars(
+        select(ModeScreeningTradeResult).where(*filters)
+        .order_by(ModeScreeningTradeResult.sequence)
+        .offset((page - 1) * page_size).limit(page_size)
+    ).all())
+    sales = list(db.scalars(
+        select(ModeScreeningSaleResult).where(
+            ModeScreeningSaleResult.trade_result_id.in_([trade.id for trade in trades])
+        ).order_by(ModeScreeningSaleResult.trade_result_id, ModeScreeningSaleResult.sequence)
+    ).all()) if trades else []
+    sales_by_trade: dict[int, list[ModeScreeningSaleResult]] = {}
+    for sale in sales:
+        sales_by_trade.setdefault(sale.trade_result_id, []).append(sale)
+    return trades, total, sales_by_trade
 
 
 def market_target_end_date(now: datetime | None = None) -> date:

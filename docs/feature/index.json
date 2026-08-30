@@ -47,7 +47,7 @@
       "id": "F005.1",
       "summary": "将来源 Feature 已确认的业务能力接入为 MCP Tool",
       "status": "完成",
-      "mcp_status": "客户端已验证",
+      "mcp_status": "部分客户端已验证",
       "document": "F005.1-mcp-tools.md"
     },
     {
@@ -61,28 +61,28 @@
       "id": "F006.1",
       "summary": "按已注册规则和指定日期执行通用选股计算",
       "status": "部分完成",
-      "mcp_status": "待确认",
+      "mcp_status": "不直接接入",
       "document": "F006.1-screening-rule-executor.md"
     },
     {
       "id": "F006.2",
       "summary": "按个股和全市场组合两种模式执行历史买卖回测",
       "status": "部分完成",
-      "mcp_status": "待确认",
+      "mcp_status": "不直接接入",
       "document": "F006.2-historical-backtest-engine.md"
     },
     {
       "id": "F006.3",
       "summary": "接入 SR001 MACD 柱连续不下降选股及 TP1、EX1、SL1 回测战法",
       "status": "部分完成",
-      "mcp_status": "待确认",
+      "mcp_status": "已实现",
       "document": "F006.3-trend-reversal-strategy.md"
     },
     {
       "id": "F006.4",
       "summary": "扫描当前规则信号并为每只命中股票联动展示历史个股回测表现",
       "status": "WIP",
-      "mcp_status": "待确认",
+      "mcp_status": "已实现",
       "document": "F006.4-mode-screening-with-backtest-analysis.md"
     }
   ]

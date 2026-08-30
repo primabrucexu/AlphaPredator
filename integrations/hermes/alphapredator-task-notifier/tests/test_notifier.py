@@ -11,13 +11,14 @@ from alphapredator_task_notifier.store import NotificationStore
 class FakeContext:
     def __init__(self):
         self.status = "RUNNING"
+        self.task_type = "stock_directory_refresh"
         self.calls = []
 
     def dispatch_tool(self, name, args):
         self.calls.append((name, args))
         payload = {
             "uuid": args["task_uuid"],
-            "task_type": "stock_directory_refresh",
+            "task_type": self.task_type,
             "title": "刷新股票搜索目录",
             "status": self.status,
             "progress": 100 if self.status == "SUCCEEDED" else 20,
@@ -91,3 +92,24 @@ def test_hook_falls_back_to_task_id_for_older_hermes(tmp_path):
         task_id="legacy-session",
     )
     assert store.get("task-2").session_id == "legacy-session"
+
+
+def test_hook_tracks_sr001_mode_screening_task(tmp_path):
+    ctx = FakeContext()
+    ctx.task_type = "mode_screening_analysis"
+    ctx.status = "SUCCEEDED"
+    session_client = FakeSessionClient()
+    store = NotificationStore(tmp_path / "notifier.sqlite3")
+    notifier = TaskNotifier(ctx, config(store.path), store, session_client)
+    notifier.on_post_tool_call(
+        tool_name="mcp_ap_create_sr001_mode_screening_task",
+        result=json.dumps({"result": {"uuid": "task-sr001"}}),
+        session_id="sr001-session",
+    )
+    assert store.get("task-sr001").session_id == "sr001-session"
+    notifier.run_once()
+    notifier.run_once()
+    assert store.get("task-sr001").state == "SENT"
+    assert len(session_client.calls) == 1
+    assert "get_mode_screening_results" in session_client.calls[0][1]
+    assert "get_mode_screening_trades" in session_client.calls[0][1]

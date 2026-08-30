@@ -1,6 +1,6 @@
 # AlphaPredator Task Notifier for Hermes
 
-该包监听 Hermes 对 AlphaPredator 任务创建 MCP Tool 的调用，把任务 UUID 与发起调用的 Hermes Session 关联。插件在后台查询任务状态，并在任务终结后通过 Hermes Session API 把任务级结果注入原 Session。
+该包监听 Hermes 对 AlphaPredator 任务创建 MCP Tool 的调用，包括 SR001 模式选股任务，把任务 UUID 与发起调用的 Hermes Session 关联。插件在后台查询任务状态，并在任务终结后通过 Hermes Session API 把任务级结果注入原 Session。
 
 插件不修改 Hermes 源码或微信通道，不保证消息最终投递到微信用户。
 

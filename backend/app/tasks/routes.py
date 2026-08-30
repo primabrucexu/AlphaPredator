@@ -5,17 +5,14 @@ from datetime import date, datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import Float, case, cast, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database.session import get_session
 
 from .handlers.market_daily_bars import TASK_TYPE as MARKET_DAILY_BARS_TASK_TYPE
-from .handlers.mode_screening import TASK_TYPE as MODE_SCREENING_TASK_TYPE
 from .models import (
-    ModeScreeningSaleResult,
     ModeScreeningStockResult,
-    ModeScreeningTradeResult,
     Task,
     TaskItem,
     TaskItemStatus,
@@ -28,6 +25,8 @@ from .operations import (
     create_mode_screening_analysis_task as create_mode_screening_analysis,
     create_screening_rule_task as create_screening_rule,
     create_stock_directory_refresh_task as create_stock_directory_refresh,
+    list_mode_screening_results,
+    list_mode_screening_trades,
     market_target_end_date as _market_target_end_date,
     retry_failed_market_daily_bars_task as retry_failed_market_daily_bars,
 )
@@ -351,30 +350,17 @@ def mode_screening_results(
     task = get_task(db, task_id)
     if task is None:
         raise HTTPException(404, "任务不存在")
-    if task.task_type != MODE_SCREENING_TASK_TYPE:
-        raise HTTPException(400, "该任务不是模式选股分析任务")
-    if (sort_by is None) != (sort_order is None):
-        raise HTTPException(400, "sort_by 和 sort_order 必须同时提供")
-    filters = [ModeScreeningStockResult.task_id == task_id]
-    total = db.scalar(select(func.count()).select_from(ModeScreeningStockResult).where(*filters)) or 0
-    order_by = [ModeScreeningStockResult.symbol]
-    if sort_by is not None and sort_order is not None:
-        column = {
-            "win_rate": ModeScreeningStockResult.win_rate,
-            "average_return": ModeScreeningStockResult.average_return,
-            "maximum_return": ModeScreeningStockResult.maximum_return,
-        }[sort_by]
-        numeric_value = cast(column, Float)
-        order_by = [
-            case((column.is_(None), 1), else_=0),
-            numeric_value.desc() if sort_order == "desc" else numeric_value.asc(),
-            ModeScreeningStockResult.symbol,
-        ]
-    rows = db.scalars(
-        select(ModeScreeningStockResult).where(*filters)
-        .order_by(*order_by)
-        .offset((page - 1) * page_size).limit(page_size)
-    ).all()
+    try:
+        rows, total = list_mode_screening_results(
+            db,
+            task,
+            page=page,
+            page_size=page_size,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+    except TaskOperationError as exc:
+        _raise_operation_error(exc)
     return ModeScreeningStockResultPage(
         items=[mode_screening_stock_read(row) for row in rows],
         total=total,
@@ -397,27 +383,19 @@ def mode_screening_trades(
     stock_result = db.get(ModeScreeningStockResult, result_id)
     if stock_result is None or stock_result.task_id != task_id:
         raise HTTPException(404, "命中股票结果不存在")
-    filters = [ModeScreeningTradeResult.stock_result_id == result_id]
-    total = db.scalar(select(func.count()).select_from(ModeScreeningTradeResult).where(*filters)) or 0
-    trades = list(db.scalars(
-        select(ModeScreeningTradeResult).where(*filters)
-        .order_by(ModeScreeningTradeResult.sequence)
-        .offset((page - 1) * page_size).limit(page_size)
-    ).all())
-    sales = list(db.scalars(
-        select(ModeScreeningSaleResult).where(
-            ModeScreeningSaleResult.trade_result_id.in_([trade.id for trade in trades])
-        ).order_by(ModeScreeningSaleResult.trade_result_id, ModeScreeningSaleResult.sequence)
-    ).all()) if trades else []
-    sales_by_trade: dict[int, list[ModeScreeningSaleResultRead]] = {}
-    for sale in sales:
-        sales_by_trade.setdefault(sale.trade_result_id, []).append(ModeScreeningSaleResultRead(
+    trades, total, raw_sales_by_trade = list_mode_screening_trades(
+        db, stock_result, page=page, page_size=page_size,
+    )
+    sales_by_trade = {
+        trade_id: [ModeScreeningSaleResultRead(
             date=sale.trade_date,
             reason_id=sale.reason_id,
             price=sale.price,
             fraction_of_original=sale.fraction_of_original,
             return_rate=sale.return_rate,
-        ))
+        ) for sale in sales]
+        for trade_id, sales in raw_sales_by_trade.items()
+    }
     return ModeScreeningTradeResultPage(
         items=[ModeScreeningTradeResultRead(
             id=trade.id,

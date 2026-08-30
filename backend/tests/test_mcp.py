@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import contextmanager
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from fastmcp import Client
@@ -12,7 +13,15 @@ from starlette.routing import Mount
 from app.database.models import Stock
 from app.mcp_server import mcp
 from app.tasks.handlers.production import register_production_handlers
-from app.tasks.models import Task, TaskItem, TaskItemStatus, TaskStatus
+from app.tasks.models import (
+    ModeScreeningSaleResult,
+    ModeScreeningStockResult,
+    ModeScreeningTradeResult,
+    Task,
+    TaskItem,
+    TaskItemStatus,
+    TaskStatus,
+)
 from app.tasks import operations
 
 
@@ -43,8 +52,11 @@ EXPECTED_TOOLS = {
     "create_stock_directory_refresh_task",
     "create_market_daily_bars_update_task",
     "retry_failed_market_daily_bars_task",
+    "create_sr001_mode_screening_task",
     "get_task",
     "get_task_output",
+    "get_mode_screening_results",
+    "get_mode_screening_trades",
 }
 
 
@@ -164,6 +176,149 @@ def test_mcp_task_create_query_output_and_retry_use_public_uuid(db, monkeypatch)
             assert retried["uuid"] != task_uuid
             assert retried["input"]["retry_of_task_uuid"] == task_uuid
             assert "retry_of_task_id" not in retried["input"]
+
+    asyncio.run(verify())
+
+
+def test_mcp_sr001_mode_screening_uses_fixed_rule_and_public_results(db, monkeypatch) -> None:
+    _use_test_database(monkeypatch, db)
+    register_production_handlers()
+    db.add(Stock(symbol="000021.SZ", code="000021", name="深科技"))
+    db.commit()
+    monkeypatch.setattr(
+        "app.mcp_tools.create_mode_screening_analysis",
+        lambda session, **kwargs: operations.create_mode_screening_analysis_task(
+            session, **kwargs, start_worker=lambda: None,
+        ),
+    )
+
+    async def verify() -> None:
+        async with Client(mcp) as client:
+            created = (await client.call_tool("create_sr001_mode_screening_task", {
+                "as_of_date": "2026-07-22",
+                "symbols": ["000021"],
+            })).data
+            assert created["task_type"] == "mode_screening_analysis"
+            assert created["input"]["rule_id"] == "SR001"
+            assert created["input"]["rule_revision"] == 1
+            assert created["input"]["parameters"] == {
+                "macd_fast": 8,
+                "macd_slow": 17,
+                "macd_signal": 6,
+                "warmup_bars": 100,
+                "take_profit_rate": "0.05",
+                "take_profit_fraction": "0.5",
+                "stop_loss_rate": "0.05",
+            }
+            assert created["input"]["symbols"] == ["000021.SZ"]
+
+            task = db.scalar(select(Task).where(Task.uuid == created["uuid"]))
+            item = db.scalar(select(TaskItem).where(TaskItem.task_id == task.id))
+            stock_result = ModeScreeningStockResult(
+                task_id=task.id,
+                task_item_id=item.id,
+                symbol="000021.SZ",
+                code="000021",
+                name="深科技",
+                as_of_date="2026-07-22",
+                data_start_date="2024-06-03",
+                data_end_date="2026-07-22",
+                signal_date="2026-07-22",
+                evidence_json='[{"condition_id":"C1","passed":true}]',
+                metrics_json='{"histogram":"-2.8756"}',
+                backtest_status="open",
+                completed_trades=1,
+                winning_trades=1,
+                win_rate="1",
+                average_return="0.1",
+                maximum_return="0.1",
+                minimum_return="0.1",
+            )
+            db.add(stock_result)
+            db.flush()
+            trade = ModeScreeningTradeResult(
+                stock_result_id=stock_result.id,
+                sequence=0,
+                signal_date="2026-01-02",
+                buy_date="2026-01-05",
+                buy_price="10",
+                realized_return="0.1",
+            )
+            db.add(trade)
+            db.flush()
+            db.add(ModeScreeningSaleResult(
+                trade_result_id=trade.id,
+                sequence=0,
+                trade_date="2026-01-06",
+                reason_id="EX1",
+                price="11",
+                fraction_of_original="1",
+                return_rate="0.1",
+            ))
+            db.commit()
+
+            results = (await client.call_tool("get_mode_screening_results", {
+                "task_uuid": task.uuid,
+                "page": 1,
+                "page_size": 20,
+                "sort_by": "win_rate",
+                "sort_order": "desc",
+            })).data
+            assert results["total"] == 1
+            assert results["items"][0]["symbol"] == "000021.SZ"
+            assert results["items"][0]["evidence"][0]["condition_id"] == "C1"
+            assert "id" not in results["items"][0]
+            assert "task_id" not in results["items"][0]
+
+            trades = (await client.call_tool("get_mode_screening_trades", {
+                "task_uuid": task.uuid,
+                "symbol": "000021",
+                "page": 1,
+                "page_size": 20,
+            })).data
+            assert trades["symbol"] == "000021.SZ"
+            assert trades["items"][0]["sells"][0]["reason_id"] == "EX1"
+            assert "id" not in trades["items"][0]
+            assert "stock_result_id" not in trades["items"][0]
+
+            wrong_type = Task(
+                task_type="stock_directory_refresh",
+                scheduling_policy="EXCLUSIVE_UPDATE",
+                title="wrong type",
+            )
+            db.add(wrong_type)
+            db.commit()
+            wrong_type_result = await client.call_tool(
+                "get_mode_screening_results",
+                {"task_uuid": wrong_type.uuid},
+                raise_on_error=False,
+            )
+            assert wrong_type_result.is_error
+            assert "不是模式选股分析任务" in wrong_type_result.content[0].text
+
+            missing_stock = await client.call_tool(
+                "get_mode_screening_trades",
+                {"task_uuid": task.uuid, "symbol": "600519"},
+                raise_on_error=False,
+            )
+            assert missing_stock.is_error
+            assert "命中股票结果不存在" in missing_stock.content[0].text
+
+            missing_task = await client.call_tool(
+                "get_mode_screening_results",
+                {"task_uuid": str(uuid4())},
+                raise_on_error=False,
+            )
+            assert missing_task.is_error
+            assert "任务不存在" in missing_task.content[0].text
+
+            invalid_sort = await client.call_tool(
+                "get_mode_screening_results",
+                {"task_uuid": task.uuid, "sort_by": "win_rate"},
+                raise_on_error=False,
+            )
+            assert invalid_sort.is_error
+            assert "必须同时提供" in invalid_sort.content[0].text
 
     asyncio.run(verify())
 

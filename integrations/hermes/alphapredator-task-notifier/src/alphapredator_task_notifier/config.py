@@ -31,6 +31,7 @@ class Config:
             f"{prefix}create_stock_directory_refresh_task",
             f"{prefix}create_market_daily_bars_update_task",
             f"{prefix}retry_failed_market_daily_bars_task",
+            f"{prefix}create_sr001_mode_screening_task",
         })
 
     @property

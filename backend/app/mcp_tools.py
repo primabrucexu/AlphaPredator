@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+import json
+from datetime import date, datetime
 from typing import Literal
 
 from fastmcp import FastMCP
@@ -9,12 +10,17 @@ from sqlalchemy.orm import Session
 
 from app.database.session import SessionLocal
 from app.market_data.provider.base import normalize_symbol
+from app.screening.rules.sr001 import FIXED_PARAMETERS
 from app.tasks.models import Task, TaskItem
 from app.tasks.operations import (
     TaskOperationConflict,
     TaskOperationError,
     create_market_daily_bars_update_task,
+    create_mode_screening_analysis_task as create_mode_screening_analysis,
     create_stock_directory_refresh_task,
+    get_mode_screening_result_by_symbol,
+    list_mode_screening_results as query_mode_screening_results,
+    list_mode_screening_trades as query_mode_screening_trades,
     retry_failed_market_daily_bars_task,
 )
 from app.tasks.service import get_task_by_uuid, list_task_items, load_json
@@ -72,6 +78,60 @@ def _task_item_dict(item: TaskItem) -> dict:
         "started_at": _timestamp(item.started_at),
         "finished_at": _timestamp(item.finished_at),
         "updated_at": _timestamp(item.updated_at),
+    }
+
+
+def _load_json_value(value: str, fallback):
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return fallback
+
+
+def _mode_screening_result_dict(result) -> dict:
+    evidence = _load_json_value(result.evidence_json, [])
+    metrics = _load_json_value(result.metrics_json, {})
+    open_trade = _load_json_value(result.open_trade_json, None)
+    pending_orders = _load_json_value(result.pending_orders_json, [])
+    return {
+        "symbol": result.symbol,
+        "code": result.code,
+        "name": result.name,
+        "as_of_date": result.as_of_date,
+        "data_start_date": result.data_start_date,
+        "data_end_date": result.data_end_date,
+        "signal_date": result.signal_date,
+        "insufficient_history": result.insufficient_history,
+        "evidence": evidence if isinstance(evidence, list) else [],
+        "metrics": metrics if isinstance(metrics, dict) else {},
+        "backtest_status": result.backtest_status,
+        "completed_trades": result.completed_trades,
+        "winning_trades": result.winning_trades,
+        "losing_trades": result.losing_trades,
+        "flat_trades": result.flat_trades,
+        "win_rate": result.win_rate,
+        "average_return": result.average_return,
+        "maximum_return": result.maximum_return,
+        "minimum_return": result.minimum_return,
+        "open_trade": open_trade if isinstance(open_trade, dict) else None,
+        "pending_orders": pending_orders if isinstance(pending_orders, list) else [],
+    }
+
+
+def _mode_screening_trade_dict(trade, sales) -> dict:
+    return {
+        "sequence": trade.sequence,
+        "signal_date": trade.signal_date,
+        "buy_date": trade.buy_date,
+        "buy_price": trade.buy_price,
+        "realized_return": trade.realized_return,
+        "sells": [{
+            "date": sale.trade_date,
+            "reason_id": sale.reason_id,
+            "price": sale.price,
+            "fraction_of_original": sale.fraction_of_original,
+            "return_rate": sale.return_rate,
+        } for sale in sales],
     }
 
 
@@ -225,6 +285,28 @@ def register_mcp_tools(mcp: FastMCP) -> None:
                 raise _task_error(exc) from exc
             return _task_dict(db, task)
 
+    @mcp.tool(
+        name="create_sr001_mode_screening_task",
+        description="创建固定使用 SR001 revision 1 的模式选股与命中股票历史回测任务，立即返回公开 UUID。",
+    )
+    def create_sr001_mode_screening_task_tool(
+        as_of_date: date,
+        symbols: list[str] | None = None,
+    ) -> dict:
+        with SessionLocal() as db:
+            try:
+                task = create_mode_screening_analysis(
+                    db,
+                    rule_id="SR001",
+                    rule_revision=1,
+                    parameters=dict(FIXED_PARAMETERS),
+                    as_of_date=as_of_date,
+                    symbols=symbols,
+                )
+            except TaskOperationError as exc:
+                raise _task_error(exc) from exc
+            return _task_dict(db, task)
+
     @mcp.tool(description="根据公开 UUID 查询任务状态、进度和任务级结果。")
     def get_task(task_uuid: str) -> dict:
         with SessionLocal() as db:
@@ -242,6 +324,71 @@ def register_mcp_tools(mcp: FastMCP) -> None:
             return {
                 "task_uuid": task.uuid,
                 "items": [_task_item_dict(item) for item in items],
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+            }
+
+    @mcp.tool(description="按任务 UUID 分页查询模式选股命中股票、信号依据和历史回测统计。")
+    def get_mode_screening_results(
+        task_uuid: str,
+        page: int = 1,
+        page_size: int = 20,
+        sort_by: Literal["win_rate", "average_return", "maximum_return"] | None = None,
+        sort_order: Literal["asc", "desc"] | None = None,
+    ) -> dict:
+        if page < 1:
+            raise ToolError("page 必须大于等于 1")
+        if page_size < 1 or page_size > 100:
+            raise ToolError("page_size 必须在 1 到 100 之间")
+        with SessionLocal() as db:
+            task = _task_by_uuid(db, task_uuid)
+            try:
+                rows, total = query_mode_screening_results(
+                    db,
+                    task,
+                    page=page,
+                    page_size=page_size,
+                    sort_by=sort_by,
+                    sort_order=sort_order,
+                )
+            except TaskOperationError as exc:
+                raise _task_error(exc) from exc
+            return {
+                "task_uuid": task.uuid,
+                "items": [_mode_screening_result_dict(row) for row in rows],
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+            }
+
+    @mcp.tool(description="按任务 UUID 和股票代码分页查询模式选股命中股票的交易及分次卖出明细。")
+    def get_mode_screening_trades(
+        task_uuid: str,
+        symbol: str,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict:
+        if page < 1:
+            raise ToolError("page 必须大于等于 1")
+        if page_size < 1 or page_size > 100:
+            raise ToolError("page_size 必须在 1 到 100 之间")
+        with SessionLocal() as db:
+            task = _task_by_uuid(db, task_uuid)
+            try:
+                stock_result = get_mode_screening_result_by_symbol(db, task, symbol)
+                trades, total, sales_by_trade = query_mode_screening_trades(
+                    db, stock_result, page=page, page_size=page_size,
+                )
+            except TaskOperationError as exc:
+                raise _task_error(exc) from exc
+            return {
+                "task_uuid": task.uuid,
+                "symbol": stock_result.symbol,
+                "items": [
+                    _mode_screening_trade_dict(trade, sales_by_trade.get(trade.id, []))
+                    for trade in trades
+                ],
                 "total": total,
                 "page": page,
                 "page_size": page_size,
