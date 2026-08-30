@@ -84,6 +84,13 @@
       "status": "WIP",
       "mcp_status": "已实现",
       "document": "F006.4-mode-screening-with-backtest-analysis.md"
+    },
+    {
+      "id": "F007",
+      "summary": "由 Agent 每日定时推送外围与公告早报、市场与短线情绪复盘晚报",
+      "status": "设计",
+      "mcp_status": "待确认",
+      "document": "F007-investment-morning-and-review-evening-reports.md"
     }
   ]
 }
