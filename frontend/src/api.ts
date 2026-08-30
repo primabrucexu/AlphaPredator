@@ -44,13 +44,13 @@ export const api = {
   createStockDirectoryTask: () => request<Task>('/api/tasks/stock-directory-refresh', { method: 'POST' }),
   createMarketDailyBarsTask: (mode: 'incremental' | 'full') => request<Task>('/api/tasks/market-daily-bars-update', { method: 'POST', body: JSON.stringify({ mode }) }),
   createSR001ScreeningTask: (asOfDate: string, symbols?: string[]) => request<Task>('/api/tasks/screening-rule-execute', {
-    method: 'POST', body: JSON.stringify({ rule_id: 'SR001', rule_revision: 1, parameters: {}, as_of_date: asOfDate, ...(symbols?.length ? { symbols } : {}) }),
+    method: 'POST', body: JSON.stringify({ rule_id: 'SR001', rule_revision: 2, parameters: {}, as_of_date: asOfDate, ...(symbols?.length ? { symbols } : {}) }),
   }),
   createSR001ModeScreeningTask: (asOfDate: string, symbols?: string[]) => request<Task>('/api/tasks/mode-screening-analysis', {
-    method: 'POST', body: JSON.stringify({ rule_id: 'SR001', rule_revision: 1, parameters: {}, as_of_date: asOfDate, ...(symbols?.length ? { symbols } : {}) }),
+    method: 'POST', body: JSON.stringify({ rule_id: 'SR001', rule_revision: 2, parameters: {}, as_of_date: asOfDate, ...(symbols?.length ? { symbols } : {}) }),
   }),
   createSR001IndividualBacktestTask: (symbol: string, startDate: string, endDate: string) => request<Task>('/api/tasks/individual-backtest', {
-    method: 'POST', body: JSON.stringify({ rule_id: 'SR001', rule_revision: 1, parameters: {}, symbol, start_date: startDate, end_date: endDate }),
+    method: 'POST', body: JSON.stringify({ rule_id: 'SR001', rule_revision: 2, parameters: {}, symbol, start_date: startDate, end_date: endDate }),
   }),
   marketDailyBarsCoverage: () => request<{ start_date: string | null; end_date: string | null }>('/api/tasks/market-daily-bars-coverage'),
   tasks: (page = 1, pageSize = 20, status = '', taskType = '', schedulingPolicy = '') => {

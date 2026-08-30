@@ -21,11 +21,7 @@ interface TradeRow {
   signalDate: string
   buyDate: string
   buyPrice: string
-  sellDate: string | null
-  reason: string | null
-  sellPrice: string | null
-  fraction: string | null
-  sellReturn: string | null
+  operations: ModeScreeningSaleResult[]
   realizedReturn: string
 }
 
@@ -40,6 +36,13 @@ const decimal3 = (value: unknown) => {
   return Number.isFinite(number) ? number.toFixed(3) : '—'
 }
 const evidence = (row: ModeScreeningStockResult, conditionId: string) => row.evidence.find(item => item.condition_id === conditionId)
+const macdWindow = (row: ModeScreeningStockResult) => {
+  const values = evidence(row, 'C1')?.values ?? {}
+  const keys = values.h_s_minus_4 === undefined
+    ? ['h_s_minus_2', 'h_s_minus_1', 'h_s']
+    : ['h_s_minus_4', 'h_s_minus_3', 'h_s_minus_2', 'h_s_minus_1', 'h_s']
+  return keys.map(key => values[key])
+}
 type ResultSortField = 'win_rate' | 'average_return' | 'maximum_return'
 type ResultSortOrder = 'asc' | 'desc'
 
@@ -51,12 +54,15 @@ function TradeDetails({ taskId, result }: { taskId: number; result: ModeScreenin
   })
   const rows: TradeRow[] = []
   const append = (trade: Pick<ModeScreeningTradeResult, 'signal_date' | 'buy_date' | 'buy_price' | 'realized_return' | 'sells'>, state: string, prefix: string) => {
-    if (!trade.sells.length) rows.push({ key: `${prefix}-empty`, state, signalDate: trade.signal_date, buyDate: trade.buy_date, buyPrice: trade.buy_price, sellDate: null, reason: null, sellPrice: null, fraction: null, sellReturn: null, realizedReturn: trade.realized_return })
-    trade.sells.forEach((sale, index) => rows.push({
-      key: `${prefix}-${index}`, state, signalDate: trade.signal_date, buyDate: trade.buy_date, buyPrice: trade.buy_price,
-      sellDate: sale.date, reason: sale.reason_id, sellPrice: sale.price, fraction: sale.fraction_of_original,
-      sellReturn: sale.return_rate, realizedReturn: trade.realized_return,
-    }))
+    rows.push({
+      key: prefix,
+      state,
+      signalDate: trade.signal_date,
+      buyDate: trade.buy_date,
+      buyPrice: trade.buy_price,
+      operations: trade.sells,
+      realizedReturn: trade.realized_return,
+    })
   }
   trades.data?.items.forEach(trade => append(trade, '已结束', `trade-${trade.id}`))
   const openTrade = result.open_trade as unknown as OpenTrade | null
@@ -66,18 +72,18 @@ function TradeDetails({ taskId, result }: { taskId: number; result: ModeScreenin
     { title: '信号日', dataIndex: 'signalDate', width: 120 },
     { title: '买入日', dataIndex: 'buyDate', width: 120 },
     { title: '买入价', dataIndex: 'buyPrice', width: 90 },
-    { title: '卖出日', dataIndex: 'sellDate', width: 120, render: text },
-    { title: '原因', dataIndex: 'reason', width: 80, render: text },
-    { title: '卖出价', dataIndex: 'sellPrice', width: 90, render: text },
-    { title: '原始仓位', dataIndex: 'fraction', width: 110, render: percent },
-    { title: '本次收益', dataIndex: 'sellReturn', width: 110, render: percent },
+    { title: '操作明细', dataIndex: 'operations', width: 440, render: (operations: ModeScreeningSaleResult[]) => operations.length
+      ? <Space direction="vertical" size={2}>{operations.map((sale, index) => <Typography.Text key={`${sale.date}-${index}`}>
+        {sale.date} {sale.reason_id}｜卖出 {percent(sale.fraction_of_original)}｜{sale.price}｜收益 {percent(sale.return_rate)}
+      </Typography.Text>)}</Space>
+      : <Typography.Text type="secondary">暂无卖出操作</Typography.Text> },
     { title: '整笔已实现', dataIndex: 'realizedReturn', width: 120, render: percent },
   ]
   return <div className="stack-lg">
     {trades.error && <Alert type="error" showIcon message="交易明细读取失败" description={(trades.error as Error).message} />}
     {result.pending_orders.length > 0 && <Alert type="warning" showIcon message="扫描日仍有待成交订单"
       description={result.pending_orders.map(order => `${text(order.reason_id)}（${text(order.action)}，信号日 ${text(order.signal_date)}）`).join('；')} />}
-    <Table<TradeRow> rowKey="key" size="small" loading={trades.isLoading} dataSource={rows} columns={columns} scroll={{ x: 1120 }} pagination={false}
+    <Table<TradeRow> rowKey="key" size="small" loading={trades.isLoading} dataSource={rows} columns={columns} scroll={{ x: 1060 }} pagination={false}
       locale={{ emptyText: result.backtest_status === 'pending_entry' ? '存在等待买入信号，尚未成交' : '历史区间内没有产生交易' }} />
     {(trades.data?.total ?? 0) > 10 && <Pagination current={page} pageSize={10} total={trades.data?.total} showSizeChanger={false} onChange={setPage} />}
   </div>
@@ -96,10 +102,7 @@ export default function ModeScreeningAnalysisResult({ task }: { task: Task }) {
   const columns: ColumnsType<ModeScreeningStockResult> = [
     { title: '股票', fixed: 'left', width: 150, render: (_, row) => <><Typography.Text strong>{row.code}</Typography.Text><br /><Typography.Text type="secondary">{row.name}</Typography.Text></> },
     { title: '信号日', dataIndex: 'signal_date', width: 115, render: text },
-    { title: '三根 MACD 柱', width: 270, render: (_, row) => {
-      const values = evidence(row, 'C1')?.values ?? {}
-      return <Typography.Text code>{[values.h_s_minus_2, values.h_s_minus_1, values.h_s].map(decimal3).join(' → ')}</Typography.Text>
-    } },
+    { title: 'MACD 柱窗口', width: 410, render: (_, row) => <Typography.Text code>{macdWindow(row).map(decimal3).join(' → ')}</Typography.Text> },
     { title: '条件', width: 180, render: (_, row) => <Space size={4}>{['U1', 'U2', 'C1'].map(id => {
       const item = evidence(row, id); return <Tag key={id} color={item?.passed ? 'success' : 'error'}>{id}</Tag>
     })}</Space> },

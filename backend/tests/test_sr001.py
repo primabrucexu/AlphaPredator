@@ -14,10 +14,12 @@ from app.screening.rules import register_production_rules
 from app.screening.rules.sr001 import (
     FIXED_PARAMETERS,
     MacdPoint,
+    SR001Revision2Rule,
     SR001Rule,
     _MacdAccumulator,
     calculate_macd,
     create_sr001_backtest_session,
+    create_sr001_v2_backtest_session,
 )
 
 
@@ -136,6 +138,125 @@ def test_sr001_production_registration_is_idempotent():
     register_production_rules(registry)
     assert isinstance(registry.get("SR001", 1), SR001Rule)
     assert registry.get_backtest_factory("SR001", 1) is create_sr001_backtest_session
+    assert isinstance(registry.get("SR001", 2), SR001Revision2Rule)
+    assert registry.get_backtest_factory("SR001", 2) is create_sr001_v2_backtest_session
+
+
+def test_sr001_revision_2_uses_first_three_day_improvement_signal_for_600183(monkeypatch):
+    dates = [
+        date(2026, 8, 21),
+        date(2026, 8, 24),
+        date(2026, 8, 25),
+        date(2026, 8, 26),
+        date(2026, 8, 27),
+        date(2026, 8, 28),
+    ]
+    source = [StoredDailyBar(
+        trade_date=trade_date,
+        open=Decimal("100"),
+        high=Decimal("101"),
+        low=Decimal("99"),
+        close=Decimal("100"),
+        volume=100,
+        amount=Decimal("1000"),
+    ) for trade_date in dates]
+    windows = {
+        date(2026, 8, 27): histograms(
+            "-1.7089013891788979",
+            "-2.4475092962587333",
+            "-2.1674758640267718",
+            "-1.6670059723071692",
+            "0.4804869159602148",
+        ),
+        date(2026, 8, 28): histograms(
+            "-1.7089013891788979",
+            "-2.4475092962587333",
+            "-2.1674758640267718",
+            "-1.6670059723071692",
+            "0.4804869159602148",
+            "2.2138614939515757",
+        ),
+    }
+
+    def fake_macd(bars):
+        return windows[bars[-1].trade_date]
+
+    monkeypatch.setattr("app.screening.rules.sr001.calculate_macd", fake_macd)
+    on_signal_day = execute_screening_rule(
+        SR001Revision2Rule(),
+        stock=StockIdentity("600183.SH", "600183", "生益科技"),
+        source_bars=source,
+        as_of_date=date(2026, 8, 27),
+        parameters={},
+    )
+    after_signal_day = execute_screening_rule(
+        SR001Revision2Rule(),
+        stock=StockIdentity("600183.SH", "600183", "生益科技"),
+        source_bars=source,
+        as_of_date=date(2026, 8, 28),
+        parameters={},
+    )
+
+    assert on_signal_day.outcome == ScreeningOutcome.MATCHED
+    assert on_signal_day.signal_date == date(2026, 8, 27)
+    assert after_signal_day.outcome == ScreeningOutcome.MATCHED
+    assert after_signal_day.signal_date == date(2026, 8, 27)
+    assert on_signal_day.evidence[-1].values["h_s_minus_3"] == "-2.4475092962587333"
+
+
+def test_sr001_revision_2_backtest_buys_600183_after_august_27_signal(monkeypatch):
+    dates = [
+        date(2026, 8, 21),
+        date(2026, 8, 24),
+        date(2026, 8, 25),
+        date(2026, 8, 26),
+        date(2026, 8, 27),
+        date(2026, 8, 28),
+    ]
+    source = [StoredDailyBar(
+        trade_date=trade_date,
+        open=Decimal("140.01") if trade_date == date(2026, 8, 28) else Decimal("100"),
+        high=Decimal("151.79") if trade_date == date(2026, 8, 28) else Decimal("101"),
+        low=Decimal("138.41") if trade_date == date(2026, 8, 28) else Decimal("99"),
+        close=Decimal("145.65") if trade_date == date(2026, 8, 28) else Decimal("100"),
+        volume=100,
+        amount=Decimal("1000"),
+    ) for trade_date in dates]
+    signal_window = histograms(
+        "-1.7089013891788979",
+        "-2.4475092962587333",
+        "-2.1674758640267718",
+        "-1.6670059723071692",
+        "0.4804869159602148",
+    )
+
+    def fake_update(_session, history):
+        if history[-1].trade_date == date(2026, 8, 27):
+            return signal_window
+        return histograms("0", "0", "0", "0", "0")
+
+    monkeypatch.setattr("app.screening.rules.sr001.SR001BacktestSession._update_macd", fake_update)
+    stock = StockIdentity("600183.SH", "600183", "生益科技")
+    result = run_individual_backtest(
+        rule_id="SR001",
+        rule_revision=2,
+        parameters=FIXED_PARAMETERS,
+        stock=stock,
+        source_bars=source,
+        start_date=dates[0],
+        end_date=dates[-1],
+        session=create_sr001_v2_backtest_session(stock, FIXED_PARAMETERS),
+    )
+
+    assert result.status == "open_position"
+    assert result.open_trade == {
+        "signal_date": "2026-08-27",
+        "buy_date": "2026-08-28",
+        "buy_price": "140.01",
+        "remaining_fraction": "1",
+        "realized_return": "0",
+        "sells": [],
+    }
 
 
 def test_sr001_incremental_macd_matches_reference_for_every_prefix():

@@ -73,7 +73,7 @@
     },
     {
       "id": "F006.3",
-      "summary": "接入 SR001 MACD 柱连续不下降选股及 TP1、EX1、SL1 回测战法",
+      "summary": "接入 SR001 MACD 柱局部低点后连续三个有效日改善选股及 TP1、EX1、SL1 回测战法",
       "status": "部分完成",
       "mcp_status": "已实现",
       "document": "F006.3-trend-reversal-strategy.md"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -117,6 +118,45 @@ def _signal_evidence(points: tuple[MacdPoint, ...]) -> RuleEvidence:
     )
 
 
+def _signal_evidence_v2(points: tuple[MacdPoint, ...]) -> RuleEvidence:
+    if len(points) < 5:
+        return RuleEvidence("C1", False, {"available_bars": len(points), "required_bars": 5})
+    previous, trough, first, second, third = (
+        point.histogram for point in points[-5:]
+    )
+    passed = (
+        trough < 0
+        and previous > trough
+        and trough <= first <= second <= third
+        and trough < third
+    )
+    return RuleEvidence(
+        "C1",
+        passed,
+        {
+            "h_s_minus_4": _decimal_text(previous),
+            "h_s_minus_3": _decimal_text(trough),
+            "h_s_minus_2": _decimal_text(first),
+            "h_s_minus_1": _decimal_text(second),
+            "h_s": _decimal_text(third),
+        },
+    )
+
+
+def _current_signal_v2(points: tuple[MacdPoint, ...]) -> tuple[RuleEvidence, int | None]:
+    for signal_index in range(len(points) - 1, 3, -1):
+        evidence = _signal_evidence_v2(points[signal_index - 4:signal_index + 1])
+        if evidence.passed:
+            continues = all(
+                points[index - 1].histogram <= points[index].histogram
+                for index in range(signal_index + 1, len(points))
+            )
+            if continues:
+                return evidence, signal_index
+            break
+    return _signal_evidence_v2(points), None
+
+
 class SR001Rule:
     rule_id = "SR001"
     revision = 1
@@ -153,6 +193,41 @@ class SR001Rule:
         )
 
 
+class SR001Revision2Rule(SR001Rule):
+    revision = 2
+
+    def validate_parameters(self, parameters: dict) -> dict[str, JsonValue]:
+        if parameters and parameters != FIXED_PARAMETERS:
+            raise ValueError("SR001 revision 2 使用固定参数，不允许覆盖")
+        return dict(FIXED_PARAMETERS)
+
+    def evaluate(
+        self,
+        stock: StockIdentity,
+        bars: tuple[ValidDailyBar, ...],
+        parameters: dict[str, JsonValue],
+    ) -> RuleEvaluation:
+        if parameters != FIXED_PARAMETERS:
+            raise ValueError("SR001 revision 2 参数与固定定义不一致")
+        u1, u2 = _scope_evidence(stock)
+        points = calculate_macd(bars)
+        c1, signal_index = _current_signal_v2(points)
+        matched = u1.passed and u2.passed and c1.passed
+        latest = points[-1]
+        return RuleEvaluation(
+            matched=matched,
+            signal_date=bars[signal_index].trade_date if matched and signal_index is not None else None,
+            evidence=(u1, u2, c1),
+            metrics={
+                "dif": _decimal_text(latest.dif),
+                "dea": _decimal_text(latest.dea),
+                "histogram": _decimal_text(latest.histogram),
+                "valid_bar_count": len(bars),
+            },
+            insufficient_history=len(bars) < WARMUP_BARS,
+        )
+
+
 def _is_one_price_limit_up(history: tuple[ValidDailyBar, ...]) -> bool:
     if len(history) < 2:
         return False
@@ -167,11 +242,6 @@ def _is_one_price_limit_down(history: tuple[ValidDailyBar, ...]) -> bool:
     return bar.open == bar.high == bar.low == bar.close and bar.close < history[-2].close
 
 
-def _has_entry_signal(stock: StockIdentity, points: tuple[MacdPoint, ...]) -> bool:
-    u1, u2 = _scope_evidence(stock)
-    return u1.passed and u2.passed and _signal_evidence(points).passed
-
-
 def _has_ex1(points: tuple[MacdPoint, ...]) -> bool:
     if len(points) < 2:
         return False
@@ -180,14 +250,21 @@ def _has_ex1(points: tuple[MacdPoint, ...]) -> bool:
 
 
 class SR001BacktestSession:
-    def __init__(self, stock: StockIdentity):
+    def __init__(
+        self,
+        stock: StockIdentity,
+        *,
+        signal_evidence: Callable[[tuple[MacdPoint, ...]], RuleEvidence] = _signal_evidence,
+        signal_window: int = 3,
+    ):
         self.stock = stock
+        self._signal_evidence = signal_evidence
         self.entry_signal_date: date | None = None
         self.exit_order: BacktestPendingOrder | None = None
         self.take_profit_executed = False
         self._macd = _MacdAccumulator()
         self._processed_bars = 0
-        self._recent_points: deque[MacdPoint] = deque(maxlen=3)
+        self._recent_points: deque[MacdPoint] = deque(maxlen=signal_window)
 
     def _update_macd(self, history: tuple[ValidDailyBar, ...]) -> tuple[MacdPoint, ...]:
         for bar in history[self._processed_bars:]:
@@ -200,7 +277,8 @@ class SR001BacktestSession:
         history: tuple[ValidDailyBar, ...],
         points: tuple[MacdPoint, ...],
     ) -> None:
-        if _has_entry_signal(self.stock, points):
+        u1, u2 = _scope_evidence(self.stock)
+        if u1.passed and u2.passed and self._signal_evidence(points).passed:
             self.entry_signal_date = history[-1].trade_date
 
     def _close_position_and_capture_signal(
@@ -302,10 +380,25 @@ def create_sr001_backtest_session(
     return SR001BacktestSession(stock)
 
 
+def create_sr001_v2_backtest_session(
+    stock: StockIdentity,
+    parameters: dict[str, JsonValue],
+) -> SR001BacktestSession:
+    if parameters != FIXED_PARAMETERS:
+        raise ValueError("SR001 revision 2 参数与固定定义不一致")
+    return SR001BacktestSession(
+        stock,
+        signal_evidence=_signal_evidence_v2,
+        signal_window=5,
+    )
+
+
 __all__ = [
     "FIXED_PARAMETERS",
     "SR001BacktestSession",
+    "SR001Revision2Rule",
     "SR001Rule",
     "calculate_macd",
     "create_sr001_backtest_session",
+    "create_sr001_v2_backtest_session",
 ]
