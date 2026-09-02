@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from alphapredator_task_notifier.config import Config
-from alphapredator_task_notifier.notifier import TaskNotifier
+from alphapredator_task_notifier.notifier import TaskNotifier, task_message
 from alphapredator_task_notifier.store import NotificationStore
 
 
@@ -113,3 +113,14 @@ def test_hook_tracks_sr001_mode_screening_task(tmp_path):
     assert len(session_client.calls) == 1
     assert "get_mode_screening_results" in session_client.calls[0][1]
     assert "get_mode_screening_trades" in session_client.calls[0][1]
+    assert "get_sr001_screening_report" in session_client.calls[0][1]
+
+
+def test_non_succeeded_sr001_notification_does_not_offer_report():
+    message = task_message({
+        "uuid": "task-partial",
+        "task_type": "mode_screening_analysis",
+        "status": "PARTIALLY_SUCCEEDED",
+    })
+    assert "get_mode_screening_results" in message
+    assert "get_sr001_screening_report" not in message

@@ -5,10 +5,16 @@ from datetime import date, datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database.session import get_session
+from app.screening.sr001_report import SR001ReportError, build_sr001_screening_report
+from app.screening.sr001_report_pdf import (
+    SR001ReportPdfError,
+    render_sr001_screening_report_pdf,
+)
 
 from .handlers.market_daily_bars import TASK_TYPE as MARKET_DAILY_BARS_TASK_TYPE
 from .models import (
@@ -434,6 +440,28 @@ def retry_failed_market_daily_bars_task(task_id: int, db: Session = Depends(get_
         ))
     except TaskOperationError as exc:
         _raise_operation_error(exc)
+
+
+@router.get("/{task_uuid}/sr001-report.pdf")
+def download_sr001_report(task_uuid: str, db: Session = Depends(get_session)):
+    task = db.scalar(select(Task).where(Task.uuid == task_uuid))
+    if task is None:
+        raise HTTPException(404, "任务不存在")
+    try:
+        report = build_sr001_screening_report(db, task)
+        pdf = render_sr001_screening_report_pdf(report)
+    except SR001ReportError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except SR001ReportPdfError as exc:
+        raise HTTPException(500, str(exc)) from exc
+    filename = (
+        f"SR001-revision-{report.rule_revision}-{report.as_of_date}-{task.uuid}.pdf"
+    )
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/{task_id}", response_model=TaskRead)

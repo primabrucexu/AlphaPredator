@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import contextmanager
 from uuid import uuid4
 
@@ -57,6 +58,7 @@ EXPECTED_TOOLS = {
     "get_task_output",
     "get_mode_screening_results",
     "get_mode_screening_trades",
+    "get_sr001_screening_report",
 }
 
 
@@ -200,7 +202,7 @@ def test_mcp_sr001_mode_screening_uses_fixed_rule_and_public_results(db, monkeyp
             })).data
             assert created["task_type"] == "mode_screening_analysis"
             assert created["input"]["rule_id"] == "SR001"
-            assert created["input"]["rule_revision"] == 1
+            assert created["input"]["rule_revision"] == 3
             assert created["input"]["parameters"] == {
                 "macd_fast": 8,
                 "macd_slow": 17,
@@ -227,6 +229,7 @@ def test_mcp_sr001_mode_screening_uses_fixed_rule_and_public_results(db, monkeyp
                 evidence_json='[{"condition_id":"C1","passed":true}]',
                 metrics_json='{"histogram":"-2.8756"}',
                 backtest_status="open",
+                current_state="pending_entry",
                 completed_trades=1,
                 winning_trades=1,
                 win_rate="1",
@@ -280,6 +283,25 @@ def test_mcp_sr001_mode_screening_uses_fixed_rule_and_public_results(db, monkeyp
             assert trades["items"][0]["sells"][0]["reason_id"] == "EX1"
             assert "id" not in trades["items"][0]
             assert "stock_result_id" not in trades["items"][0]
+
+            task.status = TaskStatus.SUCCEEDED.value
+            task.result_json = json.dumps({
+                "stock_count": 1,
+                "matched_stocks": 1,
+                "skipped_stocks": 0,
+                "failed_stocks": 0,
+            })
+            db.commit()
+            report_result = await client.call_tool(
+                "get_sr001_screening_report",
+                {"task_uuid": task.uuid},
+            )
+            report = report_result.data
+            assert report["rule_revision"] == 3
+            assert report["execution_summary"]["pending_entry_stocks"] == 1
+            assert report_result.content[0].type == "resource"
+            assert report_result.content[0].resource.mimeType == "application/pdf"
+            assert report_result.content[0].resource.blob.startswith("JVBER")
 
             wrong_type = Task(
                 task_type="stock_directory_refresh",

@@ -91,6 +91,13 @@
       "status": "设计",
       "mcp_status": "待确认",
       "document": "F007-investment-morning-and-review-evening-reports.md"
+    },
+    {
+      "id": "F008",
+      "summary": "为 Agent 生成 SR001 T/B 精简执行报告，并支持从模式选股任务详情直接下载同源 PDF",
+      "status": "已实现",
+      "mcp_status": "已实现",
+      "document": "F008-sr001-agent-report.md"
     }
   ]
 }

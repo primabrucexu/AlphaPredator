@@ -1,5 +1,6 @@
-import { useQuery } from '@tanstack/react-query'
-import { Alert, Card, Descriptions, Pagination, Select, Space, Table, Tag, Typography } from 'antd'
+import { DownloadOutlined } from '@ant-design/icons'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { Alert, Button, Card, Descriptions, Pagination, Select, Space, Table, Tag, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useState } from 'react'
 import { api } from '../api'
@@ -109,6 +110,23 @@ export default function ModeScreeningAnalysisResult({ task }: { task: Task }) {
     queryFn: () => api.modeScreeningResults(task.id, page, 20, sortBy, sortOrder, currentStates),
     refetchInterval: activeTaskStatuses.has(task.status) ? 2000 : false,
   })
+  const reportAvailable = task.status === 'SUCCEEDED'
+    && task.input.rule_id === 'SR001'
+    && task.input.rule_revision === 3
+  const downloadReport = useMutation({
+    mutationFn: () => api.downloadSR001Report(task.uuid),
+    onSuccess: ({ blob, filename }) => {
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 0)
+    },
+    onError: error => message.error(error.message),
+  })
   const summary = task.result
   const columns: ColumnsType<ModeScreeningStockResult> = [
     { title: '股票', fixed: 'left', width: 150, render: (_, row) => <><Typography.Text strong>{row.code}</Typography.Text><br /><Typography.Text type="secondary">{row.name}</Typography.Text></> },
@@ -122,7 +140,9 @@ export default function ModeScreeningAnalysisResult({ task }: { task: Task }) {
     { title: '最大收益', dataIndex: 'maximum_return', width: 100, render: percent, sorter: true, sortDirections: ['descend', 'ascend'], sortOrder: sortBy === 'maximum_return' ? sortOrder === 'desc' ? 'descend' : 'ascend' : null },
     { title: '最小收益', dataIndex: 'minimum_return', width: 100, render: percent },
   ]
-  return <Card title="SR001 模式选股分析结果">
+  return <Card title="SR001 模式选股分析结果" extra={reportAvailable
+    ? <Button icon={<DownloadOutlined />} loading={downloadReport.isPending} onClick={() => downloadReport.mutate()}>下载报告</Button>
+    : null}>
     <Descriptions column={{ xs: 1, sm: 2, lg: 4 }} items={[
       { key: 'date', label: '扫描日期', children: text(summary.as_of_date) },
       { key: 'rule-version', label: '规则版本', children: `${text(task.input.rule_id)} revision ${text(task.input.rule_revision)}` },

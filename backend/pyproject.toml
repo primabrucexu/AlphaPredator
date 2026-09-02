@@ -10,13 +10,14 @@ dependencies = [
   "pydantic>=2.10,<3",
   "pypinyin>=0.54,<1",
   "playwright>=1.54,<2",
+  "reportlab>=4.2,<5",
   "sqlalchemy>=2.0,<3",
   "thsdk==1.7.18",
   "uvicorn[standard]>=0.34,<1",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.3,<9"]
+dev = ["pypdf>=5,<7", "pytest>=8.3,<9"]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -25,6 +26,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["app*"]
+
+[tool.setuptools.package-data]
+"app.screening.rule_summaries" = ["SR001/*.json"]
 
 [tool.pytest.ini_options]
 addopts = "--basetemp=tmp"

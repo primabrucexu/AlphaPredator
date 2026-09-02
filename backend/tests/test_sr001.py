@@ -144,6 +144,7 @@ def test_sr001_production_registration_is_idempotent():
     assert registry.get_backtest_factory("SR001", 2) is create_sr001_v2_backtest_session
     assert isinstance(registry.get("SR001", 3), SR001Revision3Rule)
     assert registry.get_backtest_factory("SR001", 3) is create_sr001_v3_backtest_session
+    assert registry.get_latest("SR001").revision == 3
 
 
 def test_sr001_revision_2_uses_first_three_day_improvement_signal_for_600183(monkeypatch):

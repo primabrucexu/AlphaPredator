@@ -53,6 +53,8 @@ API_SERVER_KEY=替换为至少8字符的本机随机密钥
 
 插件状态保存在 `$HERMES_HOME/plugin-data/alphapredator-task-notifier.sqlite3`，不写入项目仓库。Hermes 重启后会恢复尚未完成或尚未注入的任务。
 
+SR001 模式选股任务状态为 `SUCCEEDED` 时，完成通知会提示 Agent 按需调用 `get_sr001_screening_report` 获取结构化报告和 PDF。插件不会自动调用报告 Tool，也不会生成或保存 PDF；其他终态不提供该提示。
+
 ## 升级与卸载
 
 ```powershell

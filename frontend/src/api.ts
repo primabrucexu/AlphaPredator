@@ -24,6 +24,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.status === 204 ? undefined as T : response.json()
 }
 
+async function requestDownload(path: string): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(path)
+  if (!response.ok) {
+    let message = `请求失败 (${response.status})`
+    try {
+      const data = await response.json() as ApiErrorBody
+      message = typeof data.detail === 'string' ? data.detail : data.detail?.message || message
+    } catch { /* no JSON body */ }
+    throw new ApiError(message, response.status, null)
+  }
+  const disposition = response.headers.get('Content-Disposition') ?? ''
+  const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] ?? 'SR001-report.pdf'
+  return { blob: await response.blob(), filename }
+}
+
 export const api = {
   searchStocks: (q: string) => request<StockSummary[]>(`/api/stocks/search?q=${encodeURIComponent(q)}`),
   quote: (symbol: string) => request<Quote>(`/api/market/stocks/${encodeURIComponent(symbol)}/quote`),
@@ -52,6 +67,7 @@ export const api = {
   createSR001IndividualBacktestTask: (symbol: string, startDate: string, endDate: string) => request<Task>('/api/tasks/individual-backtest', {
     method: 'POST', body: JSON.stringify({ rule_id: 'SR001', rule_revision: 3, parameters: {}, symbol, start_date: startDate, end_date: endDate }),
   }),
+  downloadSR001Report: (taskUuid: string) => requestDownload(`/api/tasks/${encodeURIComponent(taskUuid)}/sr001-report.pdf`),
   marketDailyBarsCoverage: () => request<{ start_date: string | null; end_date: string | null }>('/api/tasks/market-daily-bars-coverage'),
   tasks: (page = 1, pageSize = 20, status = '', taskType = '', schedulingPolicy = '') => {
     const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) })

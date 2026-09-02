@@ -56,6 +56,15 @@ class RuleRegistry:
         except KeyError as exc:
             raise ValueError(f"未注册规则：{rule_id} v{revision}") from exc
 
+    def get_latest(self, rule_id: str) -> ScreeningRule:
+        revisions = [
+            revision for registered_rule_id, revision in self._rules
+            if registered_rule_id == rule_id
+        ]
+        if not revisions:
+            raise ValueError(f"未注册规则：{rule_id}")
+        return self._rules[(rule_id, max(revisions))]
+
     def get_backtest_factory(self, rule_id: str, revision: int) -> BacktestFactory:
         self.get(rule_id, revision)
         try:

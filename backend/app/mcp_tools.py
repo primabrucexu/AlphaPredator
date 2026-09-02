@@ -6,11 +6,21 @@ from typing import Literal
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import ToolResult
+from fastmcp.utilities.types import File
 from sqlalchemy.orm import Session
 
 from app.database.session import SessionLocal
 from app.market_data.provider.base import normalize_symbol
-from app.screening.rules.sr001 import FIXED_PARAMETERS
+from app.screening.registry import rule_registry
+from app.screening.sr001_report import (
+    SR001ReportError,
+    build_sr001_screening_report,
+)
+from app.screening.sr001_report_pdf import (
+    SR001ReportPdfError,
+    render_sr001_screening_report_pdf,
+)
 from app.tasks.models import Task, TaskItem
 from app.tasks.operations import (
     TaskOperationConflict,
@@ -295,15 +305,16 @@ def register_mcp_tools(mcp: FastMCP) -> None:
     ) -> dict:
         with SessionLocal() as db:
             try:
+                rule = rule_registry.get_latest("SR001")
                 task = create_mode_screening_analysis(
                     db,
                     rule_id="SR001",
-                    rule_revision=1,
-                    parameters=dict(FIXED_PARAMETERS),
+                    rule_revision=rule.revision,
+                    parameters=rule.validate_parameters({}),
                     as_of_date=as_of_date,
                     symbols=symbols,
                 )
-            except TaskOperationError as exc:
+            except (TaskOperationError, ValueError) as exc:
                 raise _task_error(exc) from exc
             return _task_dict(db, task)
 
@@ -393,3 +404,23 @@ def register_mcp_tools(mcp: FastMCP) -> None:
                 "page": page,
                 "page_size": page_size,
             }
+
+    @mcp.tool(
+        description="根据成功完成的 SR001 模式选股任务 UUID，一次返回精简结构化报告和可供用户阅读的 PDF。",
+    )
+    def get_sr001_screening_report(task_uuid: str) -> ToolResult:
+        with SessionLocal() as db:
+            task = _task_by_uuid(db, task_uuid)
+            try:
+                report = build_sr001_screening_report(db, task)
+                pdf = render_sr001_screening_report_pdf(report)
+            except (SR001ReportError, SR001ReportPdfError) as exc:
+                raise ToolError(str(exc)) from exc
+            filename = f"sr001-revision-{report.rule_revision}-{report.as_of_date}.pdf"
+            return ToolResult(
+                content=[
+                    File(data=pdf, format="pdf", name=filename.removesuffix(".pdf"))
+                    .to_resource_content()
+                ],
+                structured_content=report.model_dump(mode="json"),
+            )
