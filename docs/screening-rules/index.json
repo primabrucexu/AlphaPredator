@@ -9,6 +9,26 @@
       "revision": 3,
       "feature": "F006.3",
       "document": "SR001-trend-reversal.md"
+    },
+    {
+      "id": "SR002",
+      "name": "爆量重置",
+      "summary": "规则名称占位，具体选股与交易语义待讨论",
+      "definition_status": "设计",
+      "implementation_status": "未实现",
+      "revision": "待确认",
+      "feature": "待确认",
+      "document": "SR002-volume-reset.md"
+    },
+    {
+      "id": "SR003",
+      "name": "量窒息",
+      "summary": "规则名称占位，具体选股与交易语义待讨论",
+      "definition_status": "设计",
+      "implementation_status": "未实现",
+      "revision": "待确认",
+      "feature": "待确认",
+      "document": "SR003-volume-suffocation.md"
     }
   ]
 }
