@@ -80,7 +80,7 @@ class ReportStock(_StrictModel):
     maximum_return: str | None
     minimum_return: str | None
     macd_signal_window: dict[str, Any]
-    ranks: dict[str, int] = Field(default_factory=dict)
+    rank: int | None = Field(default=None, ge=1)
 
 
 class InsufficientHistorySection(_StrictModel):
@@ -90,13 +90,18 @@ class InsufficientHistorySection(_StrictModel):
     items: list[ReportStock]
 
 
+class OpportunityLeaderboards(_StrictModel):
+    win_rate: list[ReportStock]
+    average_return: list[ReportStock]
+    maximum_return: list[ReportStock]
+
+
 class OpportunitySection(_StrictModel):
     state: str
     label: str
     total: int
     ranked_candidates: int
-    leaderboards: dict[str, list[str]]
-    items: list[ReportStock]
+    leaderboards: OpportunityLeaderboards
     insufficient_history: InsufficientHistorySection
 
 
@@ -170,7 +175,7 @@ def _macd_signal_window(row: ModeScreeningStockResult) -> dict[str, Any]:
 def _report_stock(
     row: ModeScreeningStockResult,
     *,
-    ranks: dict[str, int] | None = None,
+    rank: int | None = None,
 ) -> ReportStock:
     return ReportStock(
         symbol=row.symbol,
@@ -190,7 +195,7 @@ def _report_stock(
         maximum_return=row.maximum_return,
         minimum_return=row.minimum_return,
         macd_signal_window=_macd_signal_window(row),
-        ranks=ranks or {},
+        rank=rank,
     )
 
 
@@ -210,23 +215,15 @@ def _state_section(
 ) -> OpportunitySection:
     state_rows = [row for row in rows if row.current_state == state]
     ranked_rows = [row for row in state_rows if not row.insufficient_history]
-    leaderboards: dict[str, list[str]] = {}
-    ranks_by_symbol: dict[str, dict[str, int]] = {}
-    rows_by_symbol = {row.symbol: row for row in state_rows}
+    leaderboards: dict[str, list[ReportStock]] = {}
     for field in RANKING_FIELDS:
         eligible = [row for row in ranked_rows if _metric_value(row, field) is not None]
         eligible.sort(key=lambda row: (-_metric_value(row, field), row.symbol))
         top = eligible[:REPORT_LIMIT]
-        leaderboards[field] = [row.symbol for row in top]
-        for rank, row in enumerate(top, start=1):
-            ranks_by_symbol.setdefault(row.symbol, {})[field] = rank
-    ranked_items = [
-        _report_stock(rows_by_symbol[symbol], ranks=ranks)
-        for symbol, ranks in sorted(
-            ranks_by_symbol.items(),
-            key=lambda item: (min(item[1].values()), item[0]),
-        )
-    ]
+        leaderboards[field] = [
+            _report_stock(row, rank=rank)
+            for rank, row in enumerate(top, start=1)
+        ]
     insufficient_rows = sorted(
         (row for row in state_rows if row.insufficient_history),
         key=lambda row: row.symbol,
@@ -239,8 +236,7 @@ def _state_section(
         label=STATE_LABELS[state],
         total=len(state_rows),
         ranked_candidates=len(ranked_rows),
-        leaderboards=leaderboards,
-        items=ranked_items,
+        leaderboards=OpportunityLeaderboards(**leaderboards),
         insufficient_history=InsufficientHistorySection(
             total=len(insufficient_rows),
             returned=len(insufficient_items),

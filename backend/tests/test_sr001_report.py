@@ -86,7 +86,13 @@ def _result(
         evidence_json=json.dumps([{
             "condition_id": "C1",
             "passed": True,
-            "values": {"h_s_minus_1": "-0.2", "h_s": "-0.1"},
+            "values": {
+                "h_s_minus_4": "-0.45678",
+                "h_s_minus_3": "-0.34567",
+                "h_s_minus_2": "-0.23456",
+                "h_s_minus_1": "-0.2",
+                "h_s": "-0.1",
+            },
         }]),
         metrics_json="{}",
         backtest_status="open",
@@ -146,12 +152,17 @@ def test_report_separates_states_deduplicates_rankings_and_filters_other_states(
     assert summary.bought_today_stocks == 1
     assert summary.filtered_other_states == 1
     pending = report.opportunities["pending_entry"]
-    assert pending.leaderboards["win_rate"] == ["000001.SZ", "000002.SZ"]
-    assert pending.leaderboards["average_return"] == ["000002.SZ", "000001.SZ"]
-    assert len(pending.items) == 2
-    first = next(item for item in pending.items if item.symbol == "000001.SZ")
-    assert first.ranks == {"win_rate": 1, "average_return": 2, "maximum_return": 1}
+    assert [item.symbol for item in pending.leaderboards.win_rate] == [
+        "000001.SZ", "000002.SZ",
+    ]
+    assert [item.symbol for item in pending.leaderboards.average_return] == [
+        "000002.SZ", "000001.SZ",
+    ]
+    first = pending.leaderboards.win_rate[0]
+    assert first.rank == 1
     assert first.macd_signal_window["h_s"] == "-0.1"
+    assert pending.leaderboards.average_return[1].symbol == first.symbol
+    assert pending.leaderboards.average_return[1].rank == 2
     assert pending.insufficient_history.total == 1
     assert pending.insufficient_history.items[0].symbol == "000003.SZ"
 
@@ -173,7 +184,7 @@ def test_report_limits_tied_rankings_and_insufficient_history_to_ten(db):
     report = build_sr001_screening_report(db, task)
 
     pending = report.opportunities["pending_entry"]
-    assert pending.leaderboards["win_rate"] == [
+    assert [item.symbol for item in pending.leaderboards.win_rate] == [
         f"{sequence:06d}.SZ" for sequence in range(1, 11)
     ]
     insufficient = report.opportunities["bought_today"].insufficient_history
@@ -207,11 +218,23 @@ def test_report_pdf_is_readable_and_contains_same_task(db):
     assert pdf.startswith(b"%PDF-")
     reader = PdfReader(BytesIO(pdf))
     assert len(reader.pages) >= 2
+    first_page = reader.pages[0]
+    assert float(first_page.mediabox.height) > float(first_page.mediabox.width)
     text = "\n".join(page.extract_text() for page in reader.pages)
     assert "SR001 规则执行报告" in text
     assert task.uuid in text
     assert "T点待买入" in text
     assert "规则口径摘要" in text
+    assert text.index("1. 报告基本信息") < text.index("2. 规则口径摘要")
+    assert text.index("2. 规则口径摘要") < text.index("3. 执行摘要")
+    assert text.index("3. 执行摘要") < text.index("4. 命中情况")
+    assert text.index("4. 命中情况") < text.index("5. 声明")
+    assert text.count("历史胜率前 10") == 2
+    assert text.count("平均收益前 10") == 2
+    assert text.count("最大收益前 10") == 2
+    assert "T-4: -0.457" in text
+    assert "T-1: -0.200" in text
+    assert "T: -0.100" in text
 
 
 def _client(db) -> TestClient:

@@ -299,6 +299,10 @@ def test_mcp_sr001_mode_screening_uses_fixed_rule_and_public_results(db, monkeyp
             report = report_result.data
             assert report["rule_revision"] == 3
             assert report["execution_summary"]["pending_entry_stocks"] == 1
+            pending = report["opportunities"]["pending_entry"]
+            assert pending["leaderboards"]["win_rate"][0]["symbol"] == "000021.SZ"
+            assert pending["leaderboards"]["win_rate"][0]["rank"] == 1
+            assert "items" not in pending
             assert report_result.content[0].type == "resource"
             assert report_result.content[0].resource.mimeType == "application/pdf"
             assert report_result.content[0].resource.blob.startswith("JVBER")

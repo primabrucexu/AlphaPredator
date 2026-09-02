@@ -6,13 +6,14 @@ from pathlib import Path
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
-from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
     KeepTogether,
+    PageBreak,
     Paragraph,
     SimpleDocTemplate,
     Spacer,
@@ -35,6 +36,11 @@ MACD_LABELS = {
     "h_s_minus_2": "T-2",
     "h_s_minus_1": "T-1",
     "h_s": "T",
+}
+RANKING_LABELS = {
+    "win_rate": "历史胜率前 10",
+    "average_return": "平均收益前 10",
+    "maximum_return": "最大收益前 10",
 }
 
 
@@ -65,11 +71,20 @@ def _percent(value: str | None) -> str:
         raise SR001ReportPdfError(f"收益统计值无效：{value}") from exc
 
 
-def _macd_window(stock: ReportStock) -> str:
-    return " / ".join(
-        f"{MACD_LABELS.get(key, key)}={value}"
-        for key, value in stock.macd_signal_window.items()
-    ) or "-"
+def _decimal3(value: object) -> str:
+    if value is None:
+        return "—"
+    try:
+        return f"{Decimal(str(value)):.3f}"
+    except (InvalidOperation, ValueError) as exc:
+        raise SR001ReportPdfError(f"MACD 信号值无效：{value}") from exc
+
+
+def _macd_lines(stock: ReportStock) -> list[str]:
+    return [
+        f"{label}: {_decimal3(stock.macd_signal_window.get(key))}"
+        for key, label in MACD_LABELS.items()
+    ]
 
 
 def _paragraph(text: object, style: ParagraphStyle) -> Paragraph:
@@ -77,6 +92,14 @@ def _paragraph(text: object, style: ParagraphStyle) -> Paragraph:
         str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     )
     return Paragraph(escaped, style)
+
+
+def _multiline(lines: list[str], style: ParagraphStyle) -> Paragraph:
+    escaped = [
+        line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        for line in lines
+    ]
+    return Paragraph("<br/>".join(escaped), style)
 
 
 def _table(data, widths, font_name: str, *, header_rows: int = 1) -> Table:
@@ -97,44 +120,47 @@ def _table(data, widths, font_name: str, *, header_rows: int = 1) -> Table:
     return table
 
 
-def _stock_rows(section: OpportunitySection, body: ParagraphStyle) -> list[list[object]]:
+def _stock_rows(stocks: list[ReportStock], body: ParagraphStyle) -> list[list[object]]:
     rows: list[list[object]] = [[
-        "代码", "名称", "T日", "MACD信号窗口", "完成交易", "盈/亏/平",
-        "胜率", "平均收益", "最大收益", "最小收益", "胜率名次", "平均名次", "最大名次",
+        "排名", "股票", "T日", "MACD信号窗口", "历史交易", "历史收益",
     ]]
-    for stock in section.items:
+    for stock in stocks:
         rows.append([
-            stock.code,
-            _paragraph(stock.name, body),
+            str(stock.rank or "—"),
+            _multiline([stock.code, stock.name], body),
             stock.signal_date or "-",
-            _paragraph(_macd_window(stock), body),
-            str(stock.completed_trades),
-            f"{stock.winning_trades}/{stock.losing_trades}/{stock.flat_trades}",
-            _percent(stock.win_rate),
-            _percent(stock.average_return),
-            _percent(stock.maximum_return),
-            _percent(stock.minimum_return),
-            str(stock.ranks.get("win_rate", "-")),
-            str(stock.ranks.get("average_return", "-")),
-            str(stock.ranks.get("maximum_return", "-")),
+            _multiline(_macd_lines(stock), body),
+            _multiline([
+                f"完成: {stock.completed_trades}",
+                f"盈/亏/平: {stock.winning_trades}/{stock.losing_trades}/{stock.flat_trades}",
+            ], body),
+            _multiline([
+                f"胜率: {_percent(stock.win_rate)}",
+                f"平均: {_percent(stock.average_return)}",
+                f"最大: {_percent(stock.maximum_return)}",
+                f"最小: {_percent(stock.minimum_return)}",
+            ], body),
         ])
     return rows
 
 
 def _insufficient_rows(section: OpportunitySection, body: ParagraphStyle) -> list[list[object]]:
     rows: list[list[object]] = [[
-        "代码", "名称", "T日", "历史区间", "完成交易", "盈/亏/平", "胜率", "平均收益",
+        "股票", "T日", "历史区间", "历史交易", "已有统计",
     ]]
     for stock in section.insufficient_history.items:
         rows.append([
-            stock.code,
-            _paragraph(stock.name, body),
+            _multiline([stock.code, stock.name], body),
             stock.signal_date or "-",
             f"{stock.data_start_date or '-'} ~ {stock.data_end_date or '-'}",
-            str(stock.completed_trades),
-            f"{stock.winning_trades}/{stock.losing_trades}/{stock.flat_trades}",
-            _percent(stock.win_rate),
-            _percent(stock.average_return),
+            _multiline([
+                f"完成: {stock.completed_trades}",
+                f"盈/亏/平: {stock.winning_trades}/{stock.losing_trades}/{stock.flat_trades}",
+            ], body),
+            _multiline([
+                f"胜率: {_percent(stock.win_rate)}",
+                f"平均: {_percent(stock.average_return)}",
+            ], body),
         ])
     return rows
 
@@ -163,7 +189,7 @@ def render_sr001_screening_report_pdf(report: SR001ScreeningReport) -> bytes:
         fontSize=7.5, leading=10, textColor=colors.HexColor("#263238"),
     )
     small = ParagraphStyle(
-        "ReportSmall", parent=body, fontSize=6.5, leading=8.5,
+        "ReportSmall", parent=body, fontSize=7, leading=9,
         textColor=colors.HexColor("#52606D"),
     )
 
@@ -171,12 +197,12 @@ def render_sr001_screening_report_pdf(report: SR001ScreeningReport) -> bytes:
         canvas.saveState()
         canvas.setFont(font_name, 7)
         canvas.setFillColor(colors.HexColor("#667085"))
-        canvas.drawCentredString(landscape(A4)[0] / 2, 8 * mm, f"第 {document.page} 页")
+        canvas.drawCentredString(A4[0] / 2, 8 * mm, f"第 {document.page} 页")
         canvas.restoreState()
 
     document = SimpleDocTemplate(
         output,
-        pagesize=landscape(A4),
+        pagesize=A4,
         leftMargin=12 * mm,
         rightMargin=12 * mm,
         topMargin=11 * mm,
@@ -186,65 +212,17 @@ def render_sr001_screening_report_pdf(report: SR001ScreeningReport) -> bytes:
     )
     story: list[object] = [
         _paragraph("SR001 规则执行报告", title),
+        _paragraph("1. 报告基本信息", heading),
         _table([
             ["来源任务", report.task_uuid, "规则版本", f"{report.rule_id} revision {report.rule_revision}"],
             ["扫描日期", report.as_of_date, "扫描范围", "全市场" if report.scope.type == "all_market" else f"指定股票 {report.scope.symbol_count} 只"],
             ["任务状态", report.task_status, "榜单上限", f"每项 {report.report_limit} 只"],
-        ], [28 * mm, 90 * mm, 28 * mm, 90 * mm], font_name),
+        ], [27 * mm, 63 * mm, 27 * mm, 63 * mm], font_name),
         Spacer(1, 5 * mm),
-        _paragraph("执行摘要", heading),
     ]
-    summary = report.execution_summary
-    story.append(_table([
-        ["扫描", "全部命中", "T点", "B点", "其他状态已过滤", "跳过", "失败"],
-        [summary.scanned_stocks, summary.matched_stocks, summary.pending_entry_stocks,
-         summary.bought_today_stocks, summary.filtered_other_states,
-         summary.skipped_stocks, summary.failed_stocks],
-    ], [30 * mm] * 7, font_name))
-
-    for state in ("pending_entry", "bought_today"):
-        section = report.opportunities[state]
-        story.extend([
-            _paragraph(section.label, heading),
-            _paragraph(
-                f"共 {section.total} 只；历史数据完整候选 {section.ranked_candidates} 只。"
-                "下表为三个前十榜单的去重合集，名次列保留各榜单独立排名。",
-                body,
-            ),
-        ])
-        if section.items:
-            story.append(_table(
-                _stock_rows(section, small),
-                [16 * mm, 18 * mm, 18 * mm, 32 * mm, 14 * mm, 16 * mm,
-                 15 * mm, 17 * mm, 17 * mm, 17 * mm, 14 * mm, 14 * mm, 14 * mm],
-                font_name,
-            ))
-        else:
-            story.append(_paragraph("三项榜单均无符合项。", body))
-        insufficient = section.insufficient_history
-        if insufficient.items:
-            story.append(KeepTogether([
-                _paragraph("历史数据不足", subheading),
-                _paragraph(
-                    f"共 {insufficient.total} 只，展示 {insufficient.returned} 只，"
-                    f"截断：{'是' if insufficient.truncated else '否'}。这些股票不参与榜单。",
-                    small,
-                ),
-                _table(
-                    _insufficient_rows(section, small),
-                    [18 * mm, 25 * mm, 22 * mm, 48 * mm, 22 * mm, 24 * mm, 22 * mm, 25 * mm],
-                    font_name,
-                ),
-            ]))
-        else:
-            story.append(KeepTogether([
-                _paragraph("历史数据不足", subheading),
-                _paragraph("无历史数据不足股票。", body),
-            ]))
-
     summary_data = report.rule_summary.summary_data
     story.extend([
-        _paragraph("规则口径摘要", heading),
+        _paragraph("2. 规则口径摘要", heading),
         _paragraph(f"用途：{summary_data.purpose}", body),
         _paragraph(f"适用范围：{summary_data.applicable_scope}", body),
     ])
@@ -271,9 +249,70 @@ def render_sr001_screening_report_pdf(report: SR001ScreeningReport) -> bytes:
     ])
     for item in summary_data.interpretation_limits:
         story.append(_paragraph(f"• {item}", body))
+
+    summary = report.execution_summary
+    story.extend([
+        _paragraph("3. 执行摘要", heading),
+        _table([
+            ["扫描", "全部命中", "T点", "B点", "其他过滤", "跳过", "失败"],
+            [summary.scanned_stocks, summary.matched_stocks, summary.pending_entry_stocks,
+             summary.bought_today_stocks, summary.filtered_other_states,
+             summary.skipped_stocks, summary.failed_stocks],
+        ], [25.7 * mm] * 7, font_name),
+        _paragraph("4. 命中情况", heading),
+    ])
+
+    for state in ("pending_entry", "bought_today"):
+        section = report.opportunities[state]
+        story.extend([
+            _paragraph(section.label, subheading),
+            _paragraph(
+                f"共 {section.total} 只；历史数据完整候选 {section.ranked_candidates} 只。"
+                "以下三个榜单独立排序，同一股票可以跨榜重复。",
+                body,
+            ),
+        ])
+        for field, label in RANKING_LABELS.items():
+            stocks = getattr(section.leaderboards, field)
+            if stocks:
+                story.extend([
+                    PageBreak(),
+                    _paragraph(label, subheading),
+                    _table(
+                        _stock_rows(stocks, small),
+                        [10 * mm, 29 * mm, 21 * mm, 30 * mm, 38 * mm, 52 * mm],
+                        font_name,
+                    ),
+                ])
+            else:
+                story.append(KeepTogether([
+                    _paragraph(label, subheading),
+                    _paragraph("无符合项。", body),
+                ]))
+        insufficient = section.insufficient_history
+        if insufficient.items:
+            story.append(KeepTogether([
+                _paragraph("历史数据不足", subheading),
+                _paragraph(
+                    f"共 {insufficient.total} 只，展示 {insufficient.returned} 只，"
+                    f"截断：{'是' if insufficient.truncated else '否'}。这些股票不参与榜单。",
+                    small,
+                ),
+                _table(
+                    _insufficient_rows(section, small),
+                    [32 * mm, 23 * mm, 43 * mm, 39 * mm, 43 * mm],
+                    font_name,
+                ),
+            ]))
+        else:
+            story.append(KeepTogether([
+                _paragraph("历史数据不足", subheading),
+                _paragraph("无历史数据不足股票。", body),
+            ]))
+
     story.append(Spacer(1, 4 * mm))
     story.append(KeepTogether([
-        _paragraph("声明", subheading),
+        _paragraph("5. 声明", heading),
         *[_paragraph(f"• {item}", body) for item in report.disclaimers],
     ]))
 
